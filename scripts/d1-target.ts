@@ -31,12 +31,12 @@ export function databaseLabel(
  */
 export function ownerDatabase(databases: ReadonlyArray<D1BindingConfig>): D1BindingConfig {
   const matches = databases.filter((db) => db.binding === "DB" || db.database_name === "DB");
-  const [first] = matches;
-  if (!first || first.binding !== "DB")
-    throw new Error("The configuration has no D1 binding named DB.");
   if (matches.length > 1)
     throw new Error(
       "The configuration names more than one D1 database DB (as a binding or a database_name); rename one so the reset cannot change the wrong database.",
     );
-  return first;
+  const [only] = matches;
+  if (!only || only.binding !== "DB")
+    throw new Error("The configuration has no D1 binding named DB.");
+  return only;
 }

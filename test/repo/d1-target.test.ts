@@ -47,6 +47,7 @@ describe("the configuration's DB database", () => {
 
   it("is refused when the configuration has no DB binding", () => {
     expect(() => ownerDatabase([{ binding: "CACHE" }])).toThrow();
+    expect(() => ownerDatabase([other])).toThrow();
     expect(() => ownerDatabase([])).toThrow();
   });
 });

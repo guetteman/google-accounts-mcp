@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
 import { unstable_readConfig } from "wrangler";
 import { resetOutcome, resetPlan, type OwnerState } from "../src/owner/reset.ts";
 import { databaseLabel, ownerDatabase, type D1BindingConfig } from "./d1-target.ts";
@@ -16,9 +19,9 @@ interface StoredOwner {
 
 async function main() {
   const args = process.argv.slice(2);
-  const passThrough: string[] = [];
   let configPath = "wrangler.jsonc";
-  let environment: string | undefined;
+  let environmentArg: string | undefined;
+  let persistTo: string | undefined;
   let local = false;
   let yes = false;
   for (let i = 0; i < args.length; i++) {
@@ -27,29 +30,65 @@ async function main() {
     else if (arg === "--local") local = true;
     else if (arg === "--persist-to" || arg === "--config" || arg === "--env") {
       const value = args[++i];
-      if (!value || value.startsWith("--")) throw new Error(`Missing value for ${arg}`);
+      // `--env ""` selects the top level, as in wrangler.
+      if (value === undefined || value.startsWith("--") || (value === "" && arg !== "--env"))
+        throw new Error(`Missing value for ${arg}`);
       if (arg === "--config") configPath = value;
-      else {
-        passThrough.push(arg, value);
-        if (arg === "--env") environment = value;
-      }
+      else if (arg === "--env") environmentArg = value;
+      else persistTo = value;
     } else throw new Error(`Unknown argument: ${arg}`);
   }
-  // Wrangler takes the environment from --env, then from CLOUDFLARE_ENV; pass it explicitly so
-  // what this script shows and what wrangler changes are the same.
-  if (environment === undefined && process.env.CLOUDFLARE_ENV) {
-    environment = process.env.CLOUDFLARE_ENV;
-    passThrough.push("--env", environment);
-  }
-  const config: {
-    name?: string;
-    d1_databases: D1BindingConfig[];
-  } = unstable_readConfig({ config: configPath, env: environment }, { hideWarnings: true });
-  const binding = ownerDatabase(config.d1_databases);
-  console.log(`Database: ${databaseLabel(config.name, binding, local ? "local" : "remote")}`);
+  if (persistTo !== undefined && !local) throw new Error("--persist-to needs --local.");
+
+  const environment = environmentArg ?? cloudflareEnv();
+  const config: { name?: string; account_id?: string; d1_databases: D1BindingConfig[] } =
+    unstable_readConfig({ config: configPath, env: environment }, { hideWarnings: true });
+  const database = ownerDatabase(config.d1_databases);
+  console.log(`Database: ${databaseLabel(config.name, database, local ? "local" : "remote")}`);
   console.log(`Configuration: ${configPath}`);
   console.log(environment ? `Environment: ${environment}` : "Environment: top level");
 
+  // Wrangler reads its configuration and environment again on every call. To change only the
+  // database shown above, every call gets this one resolved database, frozen in a file next to
+  // the configuration (so local state, .env files, and profiles resolve as before), and
+  // `--env ""`, which stops CLOUDFLARE_ENV from choosing another environment.
+  const frozenPath = join(dirname(resolve(configPath)), `.owner-reset-${process.pid}.json`);
+  writeFileSync(
+    frozenPath,
+    JSON.stringify({
+      name: config.name,
+      ...(config.account_id ? { account_id: config.account_id } : {}),
+      compatibility_date: "2026-10-20",
+      d1_databases: [database],
+    }),
+    { flag: "wx" },
+  );
+  try {
+    await run({ frozenPath, local, persistTo, yes });
+  } finally {
+    rmSync(frozenPath, { force: true });
+  }
+}
+
+/** CLOUDFLARE_ENV as wrangler reads it: the process environment, then .env.local, then .env. */
+function cloudflareEnv(): string | undefined {
+  if (process.env.CLOUDFLARE_ENV !== undefined) return process.env.CLOUDFLARE_ENV;
+  let value: string | undefined;
+  for (const file of [".env", ".env.local"]) {
+    if (!existsSync(file)) continue;
+    const parsed = parseEnv(readFileSync(file, "utf8"));
+    if (parsed.CLOUDFLARE_ENV !== undefined) value = parsed.CLOUDFLARE_ENV;
+  }
+  return value;
+}
+
+async function run(options: {
+  readonly frozenPath: string;
+  readonly local: boolean;
+  readonly persistTo: string | undefined;
+  readonly yes: boolean;
+}) {
+  const { frozenPath, local, persistTo, yes } = options;
   function execute(command: string): StatementResult[] {
     const result = spawnSync(
       fileURLToPath(new URL("../node_modules/.bin/wrangler", import.meta.url)),
@@ -61,9 +100,11 @@ async function main() {
         "--command",
         command,
         local ? "--local" : "--remote",
+        ...(persistTo === undefined ? [] : ["--persist-to", persistTo]),
         "--config",
-        configPath,
-        ...passThrough,
+        frozenPath,
+        "--env",
+        "",
       ],
       { encoding: "utf8", env: { ...process.env, WRANGLER_SEND_METRICS: "false" } },
     );
