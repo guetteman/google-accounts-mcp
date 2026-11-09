@@ -90,6 +90,7 @@ describe("Access owner check", () => {
   >)("rejects %s without writing or exposing the owner", async (_label, claims, header) => {
     const watched = writeRecordingDb();
     const before = await dump();
+    if (header.alg === "RS512") access.keyAlgorithm = "RS512";
     const token = header.malformed
       ? "not.a.jwt"
       : await signAccessJwt(

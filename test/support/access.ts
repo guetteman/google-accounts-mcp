@@ -18,15 +18,16 @@ function testKeys() {
   }))());
 }
 
-export async function accessJwks(rotated = false) {
+export async function accessJwks(rotated = false, alg = "RS256") {
   const { pair, foreign } = await testKeys();
   const jwk = await crypto.subtle.exportKey("jwk", (rotated ? foreign : pair).publicKey);
-  return { keys: [{ ...jwk, kid: rotated ? ROTATED_KEY_ID : KEY_ID, alg: "RS256", use: "sig" }] };
+  return { keys: [{ ...jwk, kid: rotated ? ROTATED_KEY_ID : KEY_ID, alg, use: "sig" }] };
 }
 
 export const access = {
   mode: "ok" as "ok" | "slow" | "fail" | "junk" | "invalid-key" | "invalid-json" | "redirect",
   rotated: false,
+  keyAlgorithm: "RS256",
   requests: [] as Array<Pick<Request, "url" | "signal">>,
   releases: [] as Array<() => void>,
   release() {
@@ -37,6 +38,7 @@ export const access = {
     this.release();
     this.mode = "ok";
     this.rotated = false;
+    this.keyAlgorithm = "RS256";
     this.requests.length = 0;
   },
   handlers() {
@@ -57,7 +59,7 @@ export const access = {
               status: 302,
               headers: { Location: "https://untrusted.example/certs" },
             });
-          return HttpResponse.json(await accessJwks(this.rotated));
+          return HttpResponse.json(await accessJwks(this.rotated, this.keyAlgorithm));
         },
       ),
     ];
@@ -92,7 +94,7 @@ export async function signAccessJwt(
   const alg = header.alg ?? "RS256";
   const partial = `${encode({ alg, kid: header.kid ?? KEY_ID, typ: "JWT" })}.${encode(payload)}`;
   if (alg === "none") return `${partial}.`;
-  const key =
+  let key =
     alg === "HS256"
       ? await crypto.subtle.importKey(
           "raw",
@@ -102,6 +104,15 @@ export async function signAccessJwt(
           ["sign"],
         )
       : (header.foreign ? foreign : pair).privateKey;
+  if (alg === "RS512") {
+    key = await crypto.subtle.importKey(
+      "pkcs8",
+      await crypto.subtle.exportKey("pkcs8", key),
+      { name: algorithm.name, hash: "SHA-512" },
+      false,
+      ["sign"],
+    );
+  }
   const signature = await crypto.subtle.sign(
     alg === "HS256" ? "HMAC" : algorithm.name,
     key,
