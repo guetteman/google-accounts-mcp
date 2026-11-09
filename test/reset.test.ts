@@ -1,3 +1,4 @@
+import { seedAccount, accounts } from "./support/accounts";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vite-plus/test";
 import { RESET_CLEANUP, resetOutcome, resetPlan } from "../src/owner/reset";
@@ -217,10 +218,10 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
   it("deletes connections with exactly this reset's guard", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
-    expect(RESET_CLEANUP).toHaveLength(1);
-    for (const cleanup of RESET_CLEANUP) {
-      expect(cleanup({ guard, now: NOW })).toBe(`DELETE FROM connections WHERE ${guard}`);
-    }
+    expect(RESET_CLEANUP.map((cleanup) => cleanup({ guard, now: NOW }))).toEqual([
+      `DELETE FROM connections WHERE ${guard}`,
+      `DELETE FROM accounts WHERE ${guard}`,
+    ]);
   });
 
   it("refuses a generation that is not a safe integer", () => {
@@ -279,4 +280,18 @@ it("continues connection cleanup after an interrupted reset", async () => {
   await runAll(resumed.statements);
   expect(await rows()).toEqual([]);
   expect(await ownerRow()).toEqual(unpinnedAt(2));
+});
+
+it("deletes live and removed accounts only under the confirmed reset guard", async () => {
+  await pinnedOwner(1);
+  await seedAccount();
+  await seedAccount({ state: "removed", refresh_token: null, access_token: null });
+  const row = await readForPlan();
+  const before = await dump();
+  await runAll(
+    resetPlan({ ...row, instance: row.instance === 1 ? 2 : row.instance - 1 }, NOW).statements,
+  );
+  expect(await dump()).toEqual(before);
+  await runAll(resetPlan(row, NOW).statements);
+  expect(await accounts()).toEqual([]);
 });

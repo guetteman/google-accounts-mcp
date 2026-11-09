@@ -14,6 +14,9 @@ const testConfig = {
   OWNER_EMAIL: "alex.personal@example.com",
   ACCESS_ISSUER: "https://example-team.cloudflareaccess.com",
   ACCESS_AUDIENCE: "a".repeat(64),
+  GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
+  GOOGLE_CLIENT_SECRET: "fake",
+  TOKEN_KEY: "b".repeat(64),
 };
 
 export default defineConfig({

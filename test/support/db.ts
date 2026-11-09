@@ -73,7 +73,7 @@ export function watchedDb(): { db: D1Database; calls: string[] } {
 const WRITE = /^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i;
 
 /** Wrap real statements without passing their proxies into D1's native batch implementation. */
-function observeStatements(
+export function observeStatements(
   real: D1Database,
   before: (sql: string) => void | Promise<void>,
   after: (sql: string) => void = () => {},
