@@ -1,16 +1,16 @@
 import { applyD1Migrations, reset } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vite-plus/test";
+import { afterEach, beforeEach, expect, vi } from "vite-plus/test";
 import type { TestEnv } from "./env";
-import { access } from "./support/access";
-import { freshAccessIssuer } from "./support/worker";
-import { network, unhandledFrames } from "./support/network";
-
-beforeAll(() => network.enable());
 
 beforeEach(async () => {
+  // Resolve fixtures after a test's hoisted module reset, so mocked SSR components and
+  // the JWKS handler still use the same test keys and environment as the request helper.
+  const { network, unhandledFrames } = await import("./support/network");
+  const { access } = await import("./support/access");
+  const { freshAccessIssuer } = await import("./support/worker");
+  network.enable();
   unhandledFrames.length = 0;
-  // This plugin version shares bindings until explicitly reset between examples.
   await reset();
   await applyD1Migrations(env.DB, (env as TestEnv).TEST_MIGRATIONS);
   freshAccessIssuer();
@@ -18,11 +18,12 @@ beforeEach(async () => {
   network.use(...access.handlers());
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const { access } = await import("./support/access");
+  const { network, unhandledFrames } = await import("./support/network");
   access.release();
   vi.useRealTimers();
   network.resetHandlers();
+  network.disable();
   expect(unhandledFrames).toEqual([]);
 });
-
-afterAll(() => network.disable());

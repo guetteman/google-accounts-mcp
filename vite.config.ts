@@ -1,7 +1,6 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import tailwindcss from "@tailwindcss/vite";
-import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
 
@@ -13,8 +12,8 @@ const alias = { "@": fileURLToPath(new URL("./src", import.meta.url)) };
 // The owner's address is a reserved example address.
 const testConfig = {
   OWNER_EMAIL: "alex.personal@example.com",
-  GOOGLE_CLIENT_ID: "test-client-id.apps.googleusercontent.com",
-  GOOGLE_CLIENT_SECRET: `test-${randomBytes(16).toString("hex")}`,
+  ACCESS_ISSUER: "https://example-team.cloudflareaccess.com",
+  ACCESS_AUDIENCE: "a".repeat(64),
 };
 
 export default defineConfig({

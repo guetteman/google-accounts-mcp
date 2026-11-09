@@ -48,7 +48,7 @@ describe("Access owner check", () => {
     "refuses %s without fetching keys or changing data",
     async (kind) => {
       const token = await signAccessJwt();
-      const headers =
+      const headers: Record<string, string> =
         kind === "a bearer token"
           ? { Authorization: `Bearer ${token}` }
           : kind === "an Access cookie"
@@ -85,7 +85,7 @@ describe("Access owner check", () => {
     ["an invalid email", { email: "not-an-email" }, {}],
     ["no expiration", { exp: undefined }, {}],
     ["no not-before claim", { nbf: undefined }, {}],
-  ] satisfies Array<
+  ] as Array<
     [string, Claims, { malformed?: boolean; foreign?: boolean; kid?: string; alg?: string }]
   >)("rejects %s without writing or exposing the owner", async (_label, claims, header) => {
     const watched = writeRecordingDb();
@@ -165,7 +165,7 @@ describe("Access owner check", () => {
       const before = await dump();
       for (const path of ["/", "/accounts", "/connections", "/authorize", WRITE_PATH]) {
         const response = path === WRITE_PATH ? await browser.post(path) : await browser.get(path);
-        expect(response.status, path).toBe(kind === "another address" ? 403 : 403);
+        expect(response.status, path).toBe(403);
         expect(`${await response.text()}${location(response) ?? ""}`, path).not.toContain(
           OWNER_EMAIL,
         );

@@ -8,7 +8,6 @@ import { MISMATCH, SETUP_INCOMPLETE, UNAVAILABLE } from "./support/copy";
 import {
   brokenDb,
   dump,
-  ownerRow,
   setOwner,
   watchedDb,
   writeFailingDb,

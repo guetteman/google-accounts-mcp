@@ -27,7 +27,7 @@ export async function accessJwks(rotated = false) {
 export const access = {
   mode: "ok" as "ok" | "slow" | "fail" | "junk" | "invalid-key" | "invalid-json" | "redirect",
   rotated: false,
-  requests: [] as Request[],
+  requests: [] as Array<Pick<Request, "url" | "signal">>,
   releases: [] as Array<() => void>,
   release() {
     for (const release of this.releases) release();

@@ -1,15 +1,13 @@
 import type { Page } from "./page";
 
 const host = "accounts-mcp.example.com";
-const next = "/accounts";
 export const previews: Readonly<Record<string, Page>> = {
-  "sign-in": { _tag: "SignIn", host, next },
-  "sign-in-failed": { _tag: "SignIn", host, next, problem: "failed" },
-  "sign-in-google-down": { _tag: "SignIn", host, next, problem: "google-down" },
-  "not-owner": { _tag: "NotOwner", host, next, address: "someone.else@example.com" },
+  "access-refused": { _tag: "AccessRefused", host },
+  "access-unavailable": { _tag: "AccessUnavailable" },
+  "not-owner": { _tag: "NotOwner", host, address: "someone.else@example.net" },
   mismatch: { _tag: "Mismatch" },
-  "setup-incomplete": { _tag: "SetupIncomplete", names: ["GOOGLE_CLIENT_SECRET"] },
-  "setup-incomplete-two": { _tag: "SetupIncomplete", names: ["OWNER_EMAIL", "GOOGLE_CLIENT_ID"] },
+  "setup-incomplete": { _tag: "SetupIncomplete", names: ["ACCESS_AUDIENCE"] },
+  "setup-incomplete-two": { _tag: "SetupIncomplete", names: ["OWNER_EMAIL", "ACCESS_ISSUER"] },
   unavailable: { _tag: "Unavailable" },
   accounts: {
     _tag: "Accounts",

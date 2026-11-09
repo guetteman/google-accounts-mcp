@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import type { Page } from "./page";
 import { StandalonePage } from "./standalone";
 
-export function NotOwnerPage({ address, next }: Extract<Page, { _tag: "NotOwner" }>) {
+export function NotOwnerPage({ address }: Extract<Page, { _tag: "NotOwner" }>) {
   return (
     <StandalonePage>
       <Card className="shadow-none">
@@ -12,27 +12,14 @@ export function NotOwnerPage({ address, next }: Extract<Page, { _tag: "NotOwner"
             <h1>This server belongs to someone else</h1>
           </CardTitle>
           <CardDescription>
-            {address ? (
-              <>
-                You signed in to Google as{" "}
-                <span className="font-medium text-foreground">{address}</span>, which doesn't own
-                this server. Nothing changed.
-              </>
-            ) : (
-              <>
-                You signed in to Google with an account that doesn't own this server. Nothing
-                changed.
-              </>
-            )}
+            You signed in as <span className="font-medium text-foreground">{address}</span>, which
+            doesn't own this server. Nothing changed.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form method="post" action="/signin">
-            <input type="hidden" name="next" value={next} />
-            <Button type="submit" variant="outline" className="w-full">
-              Use a different Google account
-            </Button>
-          </form>
+          <Button asChild variant="outline" className="w-full">
+            <a href="/cdn-cgi/access/logout">Use a different account</a>
+          </Button>
         </CardContent>
       </Card>
     </StandalonePage>

@@ -39,21 +39,6 @@ export async function ownerInstance(): Promise<number> {
 }
 
 export async function setOwner(row: OwnerRowValues): Promise<void> {
-  // Fixture compatibility while the acceptance tests run against the previous migration.
-  const columns = await env.DB.prepare("PRAGMA table_info(owner)").all<{ name: string }>();
-  if (columns.results.some((c) => c.name === "google_sub")) {
-    await env.DB.prepare(
-      "UPDATE owner SET state = ?, generation = ?, email = ?, google_sub = ? WHERE id = 1",
-    )
-      .bind(
-        row.state,
-        row.generation,
-        row.email,
-        row.state === "unpinned" ? null : "legacy-fixture",
-      )
-      .run();
-    return;
-  }
   await env.DB.prepare("UPDATE owner SET state = ?, generation = ?, email = ? WHERE id = 1")
     .bind(row.state, row.generation, row.email)
     .run();

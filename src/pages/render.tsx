@@ -1,7 +1,8 @@
 import { renderToString } from "react-dom/server";
 import { isFramePage, PRODUCT, type Page } from "./page";
 import { frameElement } from "./registry";
-import { SignInPage } from "./sign-in";
+import { AccessRefusedPage } from "./access-refused";
+import { AccessUnavailablePage } from "./access-unavailable";
 import { NotOwnerPage } from "./not-owner";
 import { MismatchPage } from "./mismatch";
 import { SetupIncompletePage } from "./setup-incomplete";
@@ -12,13 +13,15 @@ const assets = import.meta.env.DEV
   : { scripts: ["/assets/client.js"], styles: "/assets/styles.css" };
 
 const CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'";
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 function pageElement(page: Page) {
   if (isFramePage(page)) return frameElement(page);
   switch (page._tag) {
-    case "SignIn":
-      return <SignInPage {...page} />;
+    case "AccessRefused":
+      return <AccessRefusedPage />;
+    case "AccessUnavailable":
+      return <AccessUnavailablePage />;
     case "NotOwner":
       return <NotOwnerPage {...page} />;
     case "Mismatch":

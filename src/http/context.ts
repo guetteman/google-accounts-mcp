@@ -1,7 +1,7 @@
 import type { Config } from "../config";
-import type { OwnerSession } from "../owner/session";
+import type { Owner } from "../owner/owner";
 
 export interface PageEnv {
   Bindings: Env;
-  Variables: { config: Config; owner: OwnerSession };
+  Variables: { config: Config; owner: Owner };
 }

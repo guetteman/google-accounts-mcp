@@ -2,7 +2,6 @@ import { Result } from "effect";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { readConfig } from "../config";
-import { callbackRoutes } from "../google/callback";
 import { ownerRoutes } from "../owner/routes";
 import { renderPage } from "../pages/render";
 import type { PageEnv } from "./context";
@@ -19,7 +18,7 @@ app.use("*", (c, next) => {
 app.use(
   "*",
   bodyLimit({
-    maxSize: 16 * 1024, // Room for the 1024-character return path after form encoding.
+    maxSize: 16 * 1024, // Cap every page action before handlers read the body.
     onError: (c) => c.text("Payload too large", 413),
   }),
 );
@@ -31,7 +30,6 @@ app.use("*", async (c, next) => {
   await next();
 });
 app.route("/", ownerRoutes);
-app.route("/", callbackRoutes);
 if (import.meta.env.DEV) {
   const { previews } = await import("../pages/previews");
   app.get("/__pages/:id", (c) => {

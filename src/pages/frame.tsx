@@ -33,9 +33,6 @@ export function OwnerFrame({
   return (
     <SidebarProvider>
       <AppSidebar frame={frame} />
-      {/* Forms stay mounted outside Radix portals, including on phones with a closed sheet. */}
-      <form id="signout" method="post" action="/signout" />
-      <form id="signout-all" method="post" action="/signout/all" />
       <SidebarInset className="min-w-0">
         <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4 md:hidden">
           <SidebarTrigger />
@@ -94,14 +91,7 @@ function OwnerMenu({ email }: { readonly email: string }) {
           </DropdownMenuTrigger>
           <DropdownMenuContent side={isMobile ? "bottom" : "top"} align="start" className="w-56">
             <DropdownMenuItem asChild>
-              <button type="submit" form="signout" className="w-full">
-                Sign out
-              </button>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <button type="submit" form="signout-all" className="w-full">
-                Sign out of all devices
-              </button>
+              <a href="/cdn-cgi/access/logout">Sign out</a>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

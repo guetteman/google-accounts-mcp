@@ -1,13 +1,10 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import worker from "../../src/index";
 
 export const HOST = "accounts-mcp.example.com";
 export const ORIGIN = `https://${HOST}`;
 export const OWNER_EMAIL = "alex.personal@example.com";
 
-// During the test-first transition these include the new bindings before type generation.
-export type AccessTestEnv = Env & { ACCESS_ISSUER: string; ACCESS_AUDIENCE: string };
 let issuer = "https://example-team.cloudflareaccess.com";
 export function freshAccessIssuer(): void {
   issuer = `https://test-${crypto.randomUUID()}.cloudflareaccess.com`;
@@ -18,27 +15,24 @@ export function freshAccessIssuer(): void {
  * OWNER_EMAIL, a missing secret, a broken DB) without touching the shared bindings.
  * A value of `undefined` removes the setting, as if it were never set.
  */
-export function testEnv(
-  overrides: { [K in keyof AccessTestEnv]?: AccessTestEnv[K] | undefined } = {},
-): AccessTestEnv {
+export function testEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}): Env {
   const base: Record<string, unknown> = {
     DB: env.DB,
     OWNER_EMAIL: env.OWNER_EMAIL,
     ACCESS_ISSUER: issuer,
     ACCESS_AUDIENCE: "a".repeat(64),
-    GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID,
-    GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET,
   };
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete base[key];
     else base[key] = value;
   }
-  return base as unknown as AccessTestEnv;
+  return base as unknown as Env;
 }
 
 /** Calls the Worker module's default export, as Cloudflare would. */
 export async function callWorker(request: Request, workerEnv: Env = testEnv()): Promise<Response> {
   const ctx = createExecutionContext();
+  const { default: worker } = await import("../../src/index");
   const response = await worker.fetch(request, workerEnv, ctx);
   await waitOnExecutionContext(ctx);
   return response;

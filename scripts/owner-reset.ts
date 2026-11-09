@@ -156,7 +156,7 @@ async function main() {
   console.log(environment ? `Environment: ${environment}` : "Environment: top level");
   const read = readOwner();
   describe(read);
-  console.log("Reset ends every session and removes all data from the previous owner.");
+  console.log("Reset removes all data from the previous owner.");
   if (!yes) {
     const readline = createInterface({ input: process.stdin, output: process.stdout });
     let answer: string;
@@ -194,7 +194,7 @@ async function main() {
       );
       break;
     case "done":
-      console.log("Done. The next sign-in as OWNER_EMAIL becomes the owner.");
+      console.log("Done. The next owner request for OWNER_EMAIL becomes the owner.");
       break;
     case "unknown":
       console.log("The reset did not finish here. Current database state:");

@@ -45,8 +45,7 @@ function ownerReset(args: string[], input?: string, extraEnv: Record<string, str
   );
 }
 
-const owner = () => sql("SELECT state, generation, email, google_sub FROM owner WHERE id = 1")[0];
-const sessionCount = () => sql("SELECT COUNT(*) AS n FROM owner_sessions")[0]?.n;
+const owner = () => sql("SELECT state, generation, email FROM owner WHERE id = 1")[0];
 
 beforeEach(() => {
   persistTo = mkdtempSync(join(tmpdir(), "owner-reset-"));
@@ -61,10 +60,7 @@ describe("pnpm owner:reset", () => {
   it(
     "shows which deploy and owner it will change, and changes nothing until the deployer types reset",
     () => {
-      sql(
-        `UPDATE owner SET state = 'pinned', generation = 3, email = '${OWNER}', google_sub = 'sub-a' WHERE id = 1; ` +
-          "INSERT INTO owner_sessions (token_hash, generation, created_at, last_used_at) VALUES ('h1', 3, 1, 1), ('h2', 3, 1, 1)",
-      );
+      sql(`UPDATE owner SET state = 'pinned', generation = 3, email = '${OWNER}' WHERE id = 1; `);
 
       const declined = ownerReset([], "no\n");
       const shown = declined.stdout;
@@ -77,15 +73,12 @@ describe("pnpm owner:reset", () => {
         state: "pinned",
         generation: 3,
         email: OWNER,
-        google_sub: "sub-a",
       });
-      expect(sessionCount()).toBe(2);
 
       const confirmed = ownerReset([], "reset\n");
       expect(confirmed.status, confirmed.stderr).toBe(0);
-      expect(confirmed.stdout).toMatch(/next sign-in as OWNER_EMAIL becomes the owner/i);
-      expect(owner()).toEqual({ state: "unpinned", generation: 4, email: null, google_sub: null });
-      expect(sessionCount()).toBe(0);
+      expect(confirmed.stdout).toMatch(/next owner request for OWNER_EMAIL becomes the owner/i);
+      expect(owner()).toEqual({ state: "unpinned", generation: 4, email: null });
     },
     TIMEOUT,
   );
@@ -96,8 +89,8 @@ describe("pnpm owner:reset", () => {
       const run = ownerReset(["--yes"]);
       expect(run.status, run.stderr).toBe(0);
       expect(run.stdout).toMatch(/no owner/i);
-      expect(run.stdout).toMatch(/next sign-in as OWNER_EMAIL becomes the owner/i);
-      expect(owner()).toEqual({ state: "unpinned", generation: 2, email: null, google_sub: null });
+      expect(run.stdout).toMatch(/next owner request for OWNER_EMAIL becomes the owner/i);
+      expect(owner()).toEqual({ state: "unpinned", generation: 2, email: null });
     },
     TIMEOUT,
   );
@@ -106,16 +99,14 @@ describe("pnpm owner:reset", () => {
     "continues a reset that stopped halfway",
     () => {
       sql(
-        `UPDATE owner SET state = 'resetting', generation = 5, email = '${OWNER}', google_sub = 'sub-a' WHERE id = 1; ` +
-          "INSERT INTO owner_sessions (token_hash, generation, created_at, last_used_at) VALUES ('h1', 4, 1, 1)",
+        `UPDATE owner SET state = 'resetting', generation = 5, email = '${OWNER}' WHERE id = 1; `,
       );
 
       const run = ownerReset(["--yes"]);
 
       expect(run.status, run.stderr).toBe(0);
       expect(run.stdout).toMatch(/reset is in progress/i);
-      expect(owner()).toEqual({ state: "unpinned", generation: 5, email: null, google_sub: null });
-      expect(sessionCount()).toBe(0);
+      expect(owner()).toEqual({ state: "unpinned", generation: 5, email: null });
     },
     TIMEOUT,
   );
@@ -202,7 +193,7 @@ it.each([
       const email = environment ? stagingEmail : topEmail;
       const generation = environment ? 3 : 7;
       selectedSql(
-        `UPDATE owner SET state = 'pinned', generation = ${generation}, email = '${email}', google_sub = 'sub-${generation}' WHERE id = 1`,
+        `UPDATE owner SET state = 'pinned', generation = ${generation}, email = '${email}' WHERE id = 1`,
         environment,
       );
     }
@@ -214,13 +205,12 @@ it.each([
     expect(run.stdout).toContain(`Configuration: ${configPath}`);
     expect(run.stdout).toContain(stagingId);
     expect(run.stdout).toContain(stagingEmail);
-    const read = "SELECT state, generation, email, google_sub FROM owner WHERE id = 1";
+    const read = "SELECT state, generation, email FROM owner WHERE id = 1";
     expect(selectedSql(read, "staging")).toEqual([
       {
         state: "unpinned",
         generation: 4,
         email: null,
-        google_sub: null,
       },
     ]);
     expect(selectedSql(read)).toEqual([
@@ -228,7 +218,6 @@ it.each([
         state: "pinned",
         generation: 7,
         email: topEmail,
-        google_sub: "sub-7",
       },
     ]);
   },

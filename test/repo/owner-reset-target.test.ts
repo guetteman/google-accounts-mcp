@@ -65,7 +65,7 @@ function seed(id: string, generation: number) {
     "DB",
     "--json",
     "--command",
-    `UPDATE owner SET state = 'pinned', generation = ${generation}, email = 'owner-${generation}@example.com', google_sub = 's' WHERE id = 1`,
+    `UPDATE owner SET state = 'pinned', generation = ${generation}, email = 'owner-${generation}@example.com' WHERE id = 1`,
   );
 }
 

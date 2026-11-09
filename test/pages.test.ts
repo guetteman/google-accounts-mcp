@@ -14,12 +14,14 @@ import { brokenDb, setOwner } from "./support/db";
 import { formsOf, HOST, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
 
 // Radix portals have no document in SSR. Expose only their children so the Worker's actual
-// owner menu can be inspected here; Playwright also checks the real hydrated portal in captures.
-vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
+// owner menu links can be inspected here; Playwright also checks the real hydrated portal in captures.
+vi.hoisted(() => vi.resetModules());
+vi.mock("../src/components/ui/dropdown-menu", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/ui/dropdown-menu")>();
   return {
     ...actual,
     DropdownMenuContent: ({ children }: { children: import("react").ReactNode }) => children,
+    DropdownMenuItem: ({ children }: { children: import("react").ReactNode }) => children,
   };
 });
 

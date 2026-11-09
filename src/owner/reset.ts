@@ -8,9 +8,7 @@ export interface ResetPlan {
 
 export type ResetOutcome = "done" | "overtaken" | "unknown";
 
-export const RESET_CLEANUP: ReadonlyArray<(c: { guard: string; now: number }) => string> = [
-  ({ guard }) => `DELETE FROM owner_sessions WHERE ${guard}`,
-];
+export const RESET_CLEANUP: ReadonlyArray<(c: { guard: string; now: number }) => string> = [];
 
 /**
  * The statements of a reset of the database whose owner row was read as `row`. Every statement
@@ -48,7 +46,7 @@ export const resetPlan = (
             `UPDATE owner SET state = 'resetting', generation = ${generation} WHERE id = 1 AND instance = ${instance} AND generation = ${row.generation} AND state <> 'resetting' RETURNING generation`,
           ]),
       ...RESET_CLEANUP.map((cleanup) => cleanup({ guard, now })),
-      `UPDATE owner SET state = 'unpinned', email = NULL, google_sub = NULL WHERE id = 1 AND instance = ${instance} AND state = 'resetting' AND generation = ${generation} RETURNING generation`,
+      `UPDATE owner SET state = 'unpinned', email = NULL WHERE id = 1 AND instance = ${instance} AND state = 'resetting' AND generation = ${generation} RETURNING generation`,
     ],
   };
 };
