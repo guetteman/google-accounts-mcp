@@ -15,3 +15,10 @@ When you design or prototype a page, start from shadcn components and apply Refa
 - Agents must never deploy.
 - Keep `.gitignore` in place before you run `vp check --fix`; otherwise it can rewrite `node_modules` and corrupt the pnpm store.
 - When you stop `pnpm dev`, stop its entire process group so that Vite and workerd do not keep running.
+
+## Local development and verification
+
+- Install dependencies with `vp install`. Run `vp check`, `pnpm exec wrangler types --check`, `vp test run`, and `vp build` before handing off a change. Tests include Worker tests in workerd and Node tests for the reset command, with a fake Google token endpoint.
+- Run `vp dev` for page previews at `/__pages/:id`: `sign-in`, `sign-in-failed`, `sign-in-google-down`, `not-owner`, `mismatch`, `setup-incomplete`, `setup-incomplete-two`, `unavailable`, `accounts`, and `connections`. Previews pass through the owner gate, so they need a `.dev.vars` with the three settings (example values such as `OWNER_EMAIL=alex.personal@example.com` are enough) and the migration applied with `pnpm exec wrangler d1 migrations apply DB --local`. They exist only in development builds.
+- Use `pnpm owner:reset --local` to reset local D1. The command defaults to remote D1 when `--local` is omitted. It reports the database, configuration, environment, stored owner, and generation before asking for confirmation. Pass `--persist-to`, `--env`, or `--config` to select the same database as the local Worker.
+- Until `wrangler.jsonc` has a `database_id`, local D1 state is keyed by the `DB` binding. Adding an ID switches to a different local database; apply migrations to that database before using it.

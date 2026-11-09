@@ -1,3 +1,6 @@
+import { withOwnerGate } from "./owner/gate";
+import { app } from "./http/app";
+
 export default {
-  fetch: () => new Response("Not found", { status: 404 }),
+  fetch: withOwnerGate(app.fetch),
 } satisfies ExportedHandler<Env>;

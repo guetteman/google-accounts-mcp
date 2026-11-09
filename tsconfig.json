@@ -9,9 +9,10 @@
     "noUncheckedIndexedAccess": true,
     "isolatedModules": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "types": ["node", "@cloudflare/vitest-plugin/types"],
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["src", "test", "worker-configuration.d.ts", "vite.config.ts"]
+  "include": ["src", "test", "scripts", "worker-configuration.d.ts", "vite.config.ts"]
 }
