@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vite-plus/test";
 import { RESET_CLEANUP, resetOutcome, resetPlan } from "../src/owner/reset";
+import { seedConnection, rows } from "./support/connections";
 import { Browser } from "./support/browser";
 import { MISMATCH } from "./support/copy";
 import { dump, ownerInstance, ownerRow, setOwner } from "./support/db";
@@ -213,12 +214,12 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
     }
   });
 
-  it("has no cleanup yet, and any cleanup added later carries this reset's guard", () => {
+  it.fails("deletes connections with exactly this reset's guard", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
-    expect(RESET_CLEANUP).toEqual([]);
+    expect(RESET_CLEANUP).toHaveLength(1);
     for (const cleanup of RESET_CLEANUP) {
-      expect(cleanup({ guard, now: NOW })).toContain(guard);
+      expect(cleanup({ guard, now: NOW })).toBe(`DELETE FROM connections WHERE ${guard}`);
     }
   });
 
@@ -242,4 +243,40 @@ describe("two owner requests racing to pin", () => {
     expect(await ownerRow()).toEqual({ state: "pinned", generation: 1, email: OWNER_EMAIL });
     expect(responses.flatMap((r) => r.headers.getSetCookie())).toEqual([]);
   });
+});
+
+it.fails("deletes every connection while resetting and leaves another database or newer generation intact", async () => {
+  await pinnedOwner(2);
+  await seedConnection({ generation: 1 });
+  await seedConnection({ generation: 2, state: "revoked", revoked_at: NOW });
+  const row = await readForPlan();
+  const wrongDatabase = resetPlan(
+    { ...row, instance: row.instance === 1 ? 2 : row.instance - 1 },
+    NOW,
+  );
+  const before = await dump();
+  await runEach(wrongDatabase.statements);
+  expect(await dump()).toEqual(before);
+  const plan = resetPlan(row, NOW);
+  await runEach(plan.statements.slice(0, 1));
+  expect(await rows()).toHaveLength(2);
+  await runEach(plan.statements.slice(1));
+  expect(await rows()).toEqual([]);
+  await pinnedOwner(3);
+  await seedConnection({ generation: 3 });
+  const repinned = await dump();
+  await runEach(plan.statements.slice(1));
+  expect(await dump()).toEqual(repinned);
+});
+
+it.fails("continues connection cleanup after an interrupted reset", async () => {
+  await pinnedOwner(1);
+  await seedConnection();
+  const plan = resetPlan(await readForPlan(), NOW);
+  await runEach(plan.statements.slice(0, 1));
+  const resumed = resetPlan(await readForPlan(), NOW);
+  expect(resumed.resuming).toBe(true);
+  await runAll(resumed.statements);
+  expect(await rows()).toEqual([]);
+  expect(await ownerRow()).toEqual(unpinnedAt(2));
 });

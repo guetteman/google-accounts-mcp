@@ -74,6 +74,7 @@ export default defineConfig({
     ignorePatterns: ["worker-configuration.d.ts", "dist/**"],
   },
   fmt: {
-    ignorePatterns: ["worker-configuration.d.ts", "dist/**"],
+    // Public client metadata is kept byte-for-byte as fetched.
+    ignorePatterns: ["worker-configuration.d.ts", "dist/**", "test/fixtures/cimd/*.json"],
   },
 });

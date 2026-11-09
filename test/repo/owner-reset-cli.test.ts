@@ -223,3 +223,22 @@ it.each([
   },
   TIMEOUT,
 );
+
+it.fails(
+  "deletes active and revoked connections only after a local reset is confirmed",
+  () => {
+    sql(`UPDATE owner SET state = 'pinned', generation = 3, email = '${OWNER}' WHERE id = 1;
+      INSERT INTO connections (id, generation, grant_id, app, name, state, created_at, expires_at, revoked_at) VALUES
+      ('00000000-0000-4000-8000-000000000001', 3, 'test-grant-one', 'claude-code', 'Work laptop', 'active', 1, 9999999999999, NULL),
+      ('00000000-0000-4000-8000-000000000002', 2, 'test-grant-two', 'chatgpt', 'Ended connection', 'revoked', 1, 2, 2)`);
+    const before = sql("SELECT * FROM connections ORDER BY id");
+    expect(before).toHaveLength(2);
+    expect(ownerReset([], "no\n").status).toBe(0);
+    expect(sql("SELECT * FROM connections ORDER BY id")).toEqual(before);
+    const confirmed = ownerReset([], "reset\n");
+    expect(confirmed.status, confirmed.stderr).toBe(0);
+    expect(owner()).toEqual({ state: "unpinned", generation: 4, email: null });
+    expect(sql("SELECT * FROM connections")).toEqual([]);
+  },
+  TIMEOUT,
+);

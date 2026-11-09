@@ -123,17 +123,26 @@ describe("owner pages", () => {
 });
 
 describe("unimplemented and removed routes", () => {
-  it("returns 404 for unknown paths, MCP endpoints, and the removed Google sign-in and session endpoints", async () => {
+  it("returns 404 for unknown paths and the removed Google sign-in and session endpoints", async () => {
     const browser = new Browser();
-    for (const path of [
-      "/nothing-here",
-      "/assets/missing.js",
-      "/mcp",
-      "/signin",
-      "/google/callback",
-    ])
+    for (const path of ["/nothing-here", "/assets/missing.js", "/signin", "/google/callback"])
       expect((await browser.get(path)).status, path).toBe(404);
-    for (const path of ["/oauth/token", "/signin", "/signout", "/signout/all"])
+    for (const path of ["/signin", "/signout", "/signout/all"])
       expect((await browser.post(path)).status, path).toBe(404);
   });
+});
+
+it.fails("challenges an unauthenticated MCP request instead of serving a page", async () => {
+  const response = await new Browser().get("/mcp");
+  expect(response.status).toBe(401);
+  expect(response.headers.get("WWW-Authenticate")).toContain('Bearer realm="OAuth"');
+  expect(response.headers.get("WWW-Authenticate")).toContain(
+    `resource_metadata="https://accounts-mcp.example.com/.well-known/oauth-protected-resource/mcp"`,
+  );
+  expect(response.headers.get("Cache-Control")).toBe("no-store");
+});
+it.fails("refuses an unidentified token client instead of serving a page", async () => {
+  const response = await new Browser().post("/oauth/token");
+  expect(response.status).toBe(401);
+  expect(await response.json()).toMatchObject({ error: "invalid_client" });
 });
