@@ -14,13 +14,14 @@ const CERTS_TIMEOUT = 5_000;
 const CACHE_MAX_AGE = 10 * 60_000;
 // Access signs with 2048-bit RSA keys. jose refuses a shorter key only after the key resolver
 // returns, where a bad key would read as a bad assertion, so the key set is checked on fetch.
-const MIN_MODULUS_BYTES = 256;
+const MIN_MODULUS_BITS = 2048;
 type Keys = ReturnType<typeof createLocalJWKSet>;
 let cached: { issuer: string; keys: Keys; fetchedAt: number } | undefined;
 
-function modulusBytes(n: string): number {
-  const binary = atob(n.replaceAll("-", "+").replaceAll("_", "/"));
-  return binary.replace(/^\0+/, "").length;
+function modulusBits(n: string): number {
+  const significant = atob(n.replaceAll("-", "+").replaceAll("_", "/")).replace(/^\0+/, "");
+  if (!significant) return 0;
+  return (significant.length - 1) * 8 + (32 - Math.clz32(significant.charCodeAt(0)));
 }
 
 /** Every key must be one jose can verify an RS256 assertion with, or the whole set is unusable. */
@@ -33,7 +34,7 @@ function usableKeySet(body: unknown): JSONWebKeySet {
       typeof key.kid !== "string" ||
       typeof key.n !== "string" ||
       typeof key.e !== "string" ||
-      modulusBytes(key.n) < MIN_MODULUS_BYTES
+      modulusBits(key.n) < MIN_MODULUS_BITS
     )
       throw new AccessUnavailable();
   }
