@@ -301,7 +301,7 @@ describe("owner consent", () => {
       /name="name"/.test(m[1]!),
     )?.[1];
     expect(field).toMatch(/(?:^|\s)required(?:=""|(?=\s|\/|$))/i);
-    expect(field).toMatch(/maxlength="100"/i);
+    expect(field).not.toMatch(/maxlength=/i);
     expect((await mcp.consent(name)).status).toBe(400);
     expect(await rows()).toEqual([]);
     await mcp.approve("Work laptop");

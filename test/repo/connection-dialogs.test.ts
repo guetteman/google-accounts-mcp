@@ -40,7 +40,7 @@ beforeAll(async () => {
   const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">${styles.map((asset) => `<link rel="stylesheet" href="/${asset.fileName}">`).join("")}</head><body><div id="root"></div><script type="module" src="/${entry.fileName}"></script></body></html>`;
   server = createServer((request, response) => {
     const path = request.url!;
-    if (path === "/") {
+    if (path === "/" || path === "/consent") {
       response.setHeader("Content-Type", "text/html");
       response.end(html);
     } else if (assets.has(path)) {
@@ -103,4 +103,32 @@ it.each([390, 1280])(
     }
   },
   15_000,
+);
+
+it.each(["consent", "rename"])(
+  "lets the owner type one hundred emoji into the %s name field",
+  async (kind) => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${origin}${kind === "consent" ? "/consent" : "/"}`);
+      if (kind === "rename") {
+        await page
+          .getByRole("button", { name: "Actions for Work laptop", exact: true })
+          .filter({ visible: true })
+          .click();
+        await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+      }
+      const field = page.getByRole("textbox", {
+        name: kind === "consent" ? "Connection name" : "Name",
+        exact: true,
+      });
+      await field.fill("");
+      await field.pressSequentially("😀".repeat(100));
+      expect(await field.inputValue()).toBe("😀".repeat(100));
+      expect(await field.getAttribute("required")).not.toBeNull();
+      expect(await field.getAttribute("maxlength")).toBeNull();
+    } finally {
+      await page.close();
+    }
+  },
 );

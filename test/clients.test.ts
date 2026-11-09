@@ -1,3 +1,5 @@
+import { createExecutionContext } from "cloudflare:test";
+import { withClientFilter } from "../src/oauth/clients";
 import { describe, expect, it } from "vite-plus/test";
 import { http, HttpResponse } from "msw";
 import { signAccessJwt } from "./support/access";
@@ -10,8 +12,9 @@ import {
   expectOAuthError,
   McpClient,
   unsignedAssertion,
+  signClientAssertion,
 } from "./support/oauth";
-import { callWorker, ORIGIN, textOf } from "./support/worker";
+import { callWorker, ORIGIN, testEnv, textOf } from "./support/worker";
 
 const refused = async (response: Response) => {
   expect(response.status).toBe(400);
@@ -264,4 +267,86 @@ it("treats removed registration as a page when the owner gate refuses it", async
   expect(response.status).toBe(503);
   expect(response.headers.get("Content-Type")).toContain("text/html");
   expect(textOf(await response.text())).toContain("The server can't reach its database");
+});
+
+describe("token request body limits", () => {
+  it.each(["absent", "false", "correct"])(
+    "stops an oversized unauthenticated stream with %s Content-Length before fetching or storing",
+    async (length) => {
+      const bytes = new TextEncoder().encode(
+        `client_id=${encodeURIComponent(codeClient.id)}&padding=${"a".repeat(1024 * 1024)}`,
+      );
+      const before = await dump();
+      let sent = 0;
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (sent === bytes.byteLength) return controller.close();
+            // One byte beyond the boundary is enough to detect overflow. Do not drain it.
+            const end =
+              sent < 16 * 1024
+                ? Math.min(sent + 1024, 16 * 1024)
+                : Math.min(sent + (sent === 16 * 1024 ? 1 : 1024), bytes.byteLength);
+            controller.enqueue(bytes.subarray(sent, end));
+            sent = end;
+          },
+          cancel() {
+            cancelled = true;
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      const headers = new Headers({ "Content-Type": "application/x-www-form-urlencoded" });
+      if (length !== "absent")
+        headers.set("Content-Length", length === "false" ? "1" : String(bytes.byteLength));
+      const response = await callWorker(
+        new Request(`${ORIGIN}/oauth/token`, { method: "POST", headers, body }),
+      );
+      expect(response.status).toBe(413);
+      expect(sent).toBeLessThanOrEqual(16 * 1024 + 1);
+      expect(cancelled).toBe(true);
+      expect(requests).toEqual([]);
+      expect(await dump()).toEqual(before);
+    },
+  );
+
+  it.each(clients)(
+    "passes byte-identical bounded $label bodies to the provider",
+    async (client) => {
+      const auth =
+        client.app === "chatgpt"
+          ? `client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer&client_assertion=${await signClientAssertion()}`
+          : `client_id=${encodeURIComponent(client.id)}`;
+      for (const operation of [
+        "grant_type=authorization_code&code=test",
+        "grant_type=refresh_token&refresh_token=test",
+        "token=test&token_type_hint=refresh_token",
+      ]) {
+        for (const size of [16 * 1024 - 1, 16 * 1024]) {
+          const prefix = `${auth}&${operation}&extra=%f0%9f%98%80+%20&extra=&padding=`;
+          const bytes = new TextEncoder().encode(prefix + "a".repeat(size - prefix.length));
+          let received: Uint8Array | undefined;
+          const filtered = withClientFilter(async (request) => {
+            received = new Uint8Array(await request.arrayBuffer());
+            return new Response(null, { status: 204 });
+          });
+          const response = await filtered(
+            new Request(`${ORIGIN}/oauth/token`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Content-Length": "1",
+              },
+              body: bytes,
+            }),
+            { ...testEnv(), ownerGeneration: 1 as import("../src/owner/owner").Generation },
+            createExecutionContext(),
+          );
+          expect(response.status).toBe(204);
+          expect(received).toEqual(bytes);
+        }
+      }
+    },
+  );
 });
