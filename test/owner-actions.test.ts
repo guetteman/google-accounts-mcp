@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { resetPlan } from "../src/owner/reset";
 import { access, signAccessJwt } from "./support/access";
 import { Browser } from "./support/browser";
@@ -112,6 +112,41 @@ describe("owner page actions", () => {
     expect(textOf(await response.text())).toContain(MISMATCH.title);
     expect(await dump()).toEqual(before);
   });
+
+  it.each([false, true])(
+    "refuses an old request after a reset finishes before verification, with the same owner pinned again: %s",
+    async (repinned) => {
+      await prepareWrites();
+      await setOwner({ state: "pinned", generation: 7, email: OWNER_EMAIL });
+      const owner = new Browser();
+      await owner.authenticate();
+      access.mode = "slow";
+      const pending = owner.post(WRITE_PATH);
+      await vi.waitFor(() => expect(access.requests).toHaveLength(1));
+
+      const plan = resetPlan(
+        { state: "pinned", generation: 7, instance: await ownerInstance() },
+        Date.now(),
+      );
+      await env.DB.batch(plan.statements.map((sql) => env.DB.prepare(sql)));
+      expect(await ownerRow()).toEqual({ state: "unpinned", generation: 8, email: null });
+      if (repinned) {
+        access.mode = "ok";
+        const currentOwner = new Browser();
+        await currentOwner.authenticate();
+        expect((await currentOwner.get("/accounts")).status).toBe(200);
+        expect(await ownerRow()).toEqual({ state: "pinned", generation: 8, email: OWNER_EMAIL });
+      }
+      const before = await dump();
+      access.release();
+
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(textOf(await response.text())).toContain(MISMATCH.title);
+      expect(await dump()).toEqual(before);
+      expect((await env.DB.prepare("SELECT * FROM test_writes").all()).results).toEqual([]);
+    },
+  );
 });
 
 it("refuses a pin if another address is pinned after the gate's read and before verification completes", async () => {

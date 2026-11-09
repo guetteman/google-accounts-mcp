@@ -62,13 +62,14 @@ export function standing(row: OwnerRow, config: Config): Standing {
   return { _tag: "Open", row };
 }
 
-export const pinOwner = (db: D1Database, email: OwnerEmail) =>
+export const pinOwner = (db: D1Database, email: OwnerEmail, observedGeneration: Generation) =>
   Effect.gen(function* () {
     const row = yield* first<{ generation: unknown }>(
       db,
       `UPDATE owner SET state = 'pinned', email = ?1
-      WHERE id = 1 AND (state = 'unpinned' OR (state = 'pinned' AND email = ?1)) RETURNING generation`,
-      [email],
+      WHERE id = 1 AND generation = ?2
+        AND (state = 'unpinned' OR (state = 'pinned' AND email = ?1)) RETURNING generation`,
+      [email, observedGeneration],
     );
     if (!row) return yield* Effect.fail(new Locked());
     return yield* Schema.decodeUnknownEffect(GenerationSchema)(row.generation).pipe(
@@ -76,11 +77,17 @@ export const pinOwner = (db: D1Database, email: OwnerEmail) =>
     );
   });
 
-export const requireOwner = (db: D1Database, config: Config, request: Request, now: number) =>
+export const requireOwner = (
+  db: D1Database,
+  config: Config,
+  observedGeneration: Generation,
+  request: Request,
+  now: number,
+) =>
   Effect.gen(function* () {
     const identity = yield* verifyAccess(request, config.access, now);
     if (identity.email !== config.ownerEmail)
       return yield* Effect.fail(new NotOwner({ email: identity.email }));
-    const generation = yield* pinOwner(db, config.ownerEmail);
+    const generation = yield* pinOwner(db, config.ownerEmail, observedGeneration);
     return { generation, email: config.ownerEmail } satisfies Owner;
   });

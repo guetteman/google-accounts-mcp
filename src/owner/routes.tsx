@@ -6,7 +6,9 @@ import { requireOwner } from "./owner";
 
 export const ownerOnly: MiddlewareHandler<PageEnv> = async (c, next) => {
   const owner = await Effect.runPromise(
-    Effect.result(requireOwner(c.env.DB, c.get("config"), c.req.raw, Date.now())),
+    Effect.result(
+      requireOwner(c.env.DB, c.get("config"), c.env.ownerGeneration, c.req.raw, Date.now()),
+    ),
   );
   if (Result.isFailure(owner)) {
     const host = new URL(c.req.url).host;

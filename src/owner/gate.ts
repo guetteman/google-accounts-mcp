@@ -2,9 +2,15 @@ import { Effect, Result } from "effect";
 import { readConfig } from "../config";
 import type { Page } from "../pages/page";
 import { renderPage } from "../pages/render";
-import { readOwner, standing } from "./owner";
+import { readOwner, standing, type Generation } from "./owner";
 
-type Fetch = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
+export type GatedEnv = Env & { readonly ownerGeneration: Generation };
+
+type Fetch = (
+  request: Request,
+  env: GatedEnv,
+  ctx: ExecutionContext,
+) => Response | Promise<Response>;
 
 function refuse(request: Request, page: Page): Response {
   const path = new URL(request.url).pathname;
@@ -25,5 +31,5 @@ export const withOwnerGate =
     if (Result.isFailure(owner)) return refuse(request, { _tag: "Unavailable" });
     if (standing(owner.success, config.success)._tag === "Locked")
       return refuse(request, { _tag: "Mismatch" });
-    return inner(request, env, ctx);
+    return inner(request, { ...env, ownerGeneration: owner.success.generation }, ctx);
   };
