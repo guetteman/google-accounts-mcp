@@ -31,9 +31,14 @@ function usableKeySet(body: unknown): JSONWebKeySet {
   for (const key of keys as Array<Record<string, unknown> | null>) {
     if (
       key?.kty !== "RSA" ||
+      (key.use !== undefined && key.use !== "sig") ||
+      (key.alg !== undefined && key.alg !== "RS256") ||
       typeof key.kid !== "string" ||
+      !key.kid ||
       typeof key.n !== "string" ||
+      !key.n ||
       typeof key.e !== "string" ||
+      !key.e ||
       modulusBits(key.n) < MIN_MODULUS_BITS
     )
       throw new AccessUnavailable();

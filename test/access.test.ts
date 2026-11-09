@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { access, ROTATED_KEY_ID, signAccessJwt, type Claims } from "./support/access";
+import { http, HttpResponse } from "msw";
+import { access, accessJwks, ROTATED_KEY_ID, signAccessJwt, type Claims } from "./support/access";
 import { Browser } from "./support/browser";
 import { ACCESS_REFUSED, ACCESS_UNAVAILABLE, NOT_OWNER, PRODUCT } from "./support/copy";
 import { dump, ownerRow, setOwner, writeRecordingDb } from "./support/db";
 import { prepareWrites, WRITE_PATH } from "./support/page-app";
+import { network } from "./support/network";
 import { HOST, location, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
 
 const STRANGER = "someone.else@example.net";
@@ -178,6 +180,54 @@ describe("Access owner check", () => {
 });
 
 describe("Access signing keys", () => {
+  it.each([
+    ["a non-RSA key", { kty: "EC" }],
+    ["an encryption key", { use: "enc" }],
+    ["an incompatible algorithm", { alg: "RS512" }],
+    ["an empty key ID", { kid: "" }],
+    ["a missing key ID", { kid: undefined }],
+    ["an empty modulus", { n: "" }],
+    ["a missing modulus", { n: undefined }],
+    ["an empty exponent", { e: "" }],
+    ["a missing exponent", { e: undefined }],
+  ])("refuses %s alone or beside a valid key and recovers after repair", async (_label, fields) => {
+    const { keys } = await accessJwks();
+    const invalid = { ...keys[0], ...fields };
+    let body = { keys: [invalid] };
+    const certs = vi.fn(() => HttpResponse.json(body));
+    network.use(http.get(`${testEnv().ACCESS_ISSUER}/cdn-cgi/access/certs`, certs));
+    const owner = new Browser();
+    await owner.authenticate();
+    const before = await dump();
+
+    const alone = await owner.get("/accounts");
+    expect(alone.status).toBe(503);
+    expect(textOf(await alone.text())).toContain(ACCESS_UNAVAILABLE.title);
+    expect(await dump()).toEqual(before);
+
+    body = { keys: [...keys, { ...invalid, kid: "unusable-spare", ...fields }] };
+    const besideValid = await owner.get("/accounts");
+    expect(besideValid.status).toBe(503);
+    expect(textOf(await besideValid.text())).toContain(ACCESS_UNAVAILABLE.title);
+    expect(await dump()).toEqual(before);
+
+    body = { keys };
+    expect((await owner.get("/accounts")).status).toBe(200);
+    expect(certs).toHaveBeenCalledTimes(3);
+  });
+
+  it("accepts signing RSA keys without optional use or alg metadata", async () => {
+    const { keys } = await accessJwks();
+    network.use(
+      http.get(`${testEnv().ACCESS_ISSUER}/cdn-cgi/access/certs`, () =>
+        HttpResponse.json({ keys: keys.map(({ use: _use, alg: _alg, ...key }) => key) }),
+      ),
+    );
+    const owner = new Browser();
+    await owner.authenticate();
+    expect((await owner.get("/accounts")).status).toBe(200);
+  });
+
   it.each([
     "fail",
     "junk",
