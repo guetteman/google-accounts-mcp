@@ -54,16 +54,28 @@ export interface WranglerTarget {
  * is the key of the local state; remotely it is the database's UUID.
  */
 export function wranglerTarget(output: string): WranglerTarget | null {
-  const match =
-    /Executing on (local|remote|preview) database \S+ \(([^)]+)\)(?: from (.+))?:\s*$/m.exec(
-      output,
-    );
-  if (!match?.[1] || !match[2]) return null;
-  return {
-    mode: match[1] as WranglerTarget["mode"],
-    id: match[2],
-    ...(match[3] ? { path: match[3] } : {}),
-  };
+  // Only the lines before the JSON results, each matched whole, so text inside the results or a
+  // line that merely contains the phrase cannot pose as wrangler's own line.
+  const json = output.indexOf("\n[");
+  const header = json < 0 ? output : output.slice(0, json);
+  for (const line of header.split("\n")) {
+    const match =
+      /^\u{1F300} Executing on (local|remote|preview) database [^\s()]+ \(([^()\s]+)\)(?: from ([^\n]+))?:$/u.exec(
+        line.replace(/\r$/, ""),
+      );
+    if (match?.[1] && match[2])
+      return {
+        mode: match[1] as WranglerTarget["mode"],
+        id: match[2],
+        ...(match[3] ? { path: match[3] } : {}),
+      };
+  }
+  return null;
+}
+
+/** How the reset names the database wrangler used, in the mode it asked for. */
+export function describeTarget(target: WranglerTarget, mode: "local" | "remote"): string {
+  return `${mode} database ${target.id}`;
 }
 
 /**

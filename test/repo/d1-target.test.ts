@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   databaseLabel,
+  describeTarget,
   expectedTargetId,
   ownerDatabase,
   sameTarget,
@@ -114,5 +115,31 @@ describe("whether wrangler used the configured database", () => {
     expect(targetMatches({ mode: "local", id: AA }, WITH_PREVIEW, "local")).toBe(false);
     expect(targetMatches({ mode: "remote", id: "x" }, BOTH, "remote")).toBe(false);
     expect(targetMatches({ mode: "remote", id: "x" }, NAME_ONLY, "remote")).toBe(true);
+  });
+});
+
+describe("wrangler's own line, and nothing that only looks like it", () => {
+  const line = "\u{1F300} Executing on local database DB (DB) from .wrangler/state/v3/d1:";
+
+  it("is not found inside the JSON results", () => {
+    expect(wranglerTarget(`[\n  {"results": [{"email": "${line}"}]}\n]`)).toBeNull();
+    expect(
+      wranglerTarget(
+        `header\n[\n  {"results": [{"email": "Executing on local database DB (DB):"}]}\n]`,
+      ),
+    ).toBeNull();
+  });
+
+  it("is not a line that merely contains the phrase or ends with a Unicode line separator", () => {
+    expect(wranglerTarget("\u25b2 [WARNING] Executing on local database DB (DB):\n[]")).toBeNull();
+    expect(wranglerTarget(`${line}\u2028\n[]`)).toBeNull();
+    expect(wranglerTarget(`${line} trailing\n[]`)).toBeNull();
+    expect(wranglerTarget(`note: ${line}\n[]`)).toBeNull();
+  });
+
+  it("names a remote database as remote even when wrangler labels it preview", () => {
+    expect(
+      describeTarget({ mode: "preview", id: "00000000-0000-4000-8000-0000000000aa" }, "remote"),
+    ).toBe("remote database 00000000-0000-4000-8000-0000000000aa");
   });
 });

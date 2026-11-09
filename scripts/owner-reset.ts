@@ -5,6 +5,7 @@ import { unstable_readConfig } from "wrangler";
 import { resetOutcome, resetPlan, type OwnerState } from "../src/owner/reset.ts";
 import {
   databaseLabel,
+  describeTarget,
   ownerDatabase,
   sameTarget,
   targetMatches,
@@ -139,7 +140,7 @@ async function main() {
   }
 
   function describe({ row, target }: { row: StoredOwner; target: WranglerTarget }) {
-    console.log(`Wrangler used: ${target.mode} database ${target.id}, instance ${row.instance}`);
+    console.log(`Wrangler used: ${describeTarget(target, mode)}, instance ${row.instance}`);
     console.log(`Stored owner: ${row.email ?? "no owner"}`);
     const state =
       row.state === "resetting"
