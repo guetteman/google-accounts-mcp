@@ -442,3 +442,79 @@ it("does not replace needs-reconnect health with a late admin-block result", asy
     await pending;
   }
 });
+
+it.each(["ok", "invalid_grant"] as const)(
+  "refreshes the effective reconnect credential after a reloaded token gets 401: %s",
+  async (answer) => {
+    const row = await seedAccount({
+      sub: "personal",
+      health: "blocked_by_admin",
+      blocked_until: NOW - 1,
+      access_token: null,
+      access_expires_at: null,
+    });
+    const snapshot = await credential(row.id);
+    const b = await ownerBrowser();
+    await finish(b, (await start(b, row.id)).url);
+    const reconnected = (await accounts())[0]!;
+    const access = await fixtureOpen(`${row.id}:access`, reconnected.access_token!);
+    const refresh = await fixtureOpen(`${row.id}:refresh`, reconnected.refresh_token!);
+    let reads = 0;
+    const db = observeStatements(env.DB, (sql) => {
+      if (/SELECT a.id, a.email, a.version/.test(sql)) reads++;
+    });
+    google.gmailAnswers = [401, answer === "ok" ? 200 : 401];
+    google.refreshAnswers = [answer];
+    const result = await call(row.id, db, snapshot);
+    if (answer === "invalid_grant") {
+      expect(result).toMatchObject({ error: "NeedsReconnect", detail: { email: row.email } });
+      expect((await accounts())[0]).toMatchObject({
+        health: "needs_reconnect",
+        refresh_token: null,
+        access_token: null,
+      });
+      expect(google.gmailTokens).toEqual([`Bearer ${access}`]);
+      expect(google.events).toEqual(["exchange", "gmail", "refresh"]);
+    } else {
+      expect(result).toMatchObject({ status: 200 });
+      expect(google.gmailTokens).toEqual([
+        `Bearer ${access}`,
+        `Bearer ${google.issuedAccess.at(-1)}`,
+      ]);
+      expect(google.gmailTokens[1]).not.toBe(google.gmailTokens[0]);
+      expect(google.events).toEqual(["exchange", "gmail", "refresh", "gmail"]);
+    }
+    expect(google.refreshTokens).toEqual([refresh]);
+    expect(reads).toBe(1);
+  },
+);
+
+it("keeps the reload budget spent when a forced refresh loses to another reconnect", async () => {
+  const row = await seedAccount({
+    sub: "personal",
+    health: "blocked_by_admin",
+    blocked_until: NOW - 1,
+    access_token: null,
+    access_expires_at: null,
+  });
+  const snapshot = await credential(row.id);
+  const b = await ownerBrowser();
+  await finish(b, (await start(b, row.id)).url);
+  const access = google.issuedAccess.at(-1)!;
+  google.gmailAnswers = [401, 200];
+  let reads = 0;
+  let latest: Awaited<ReturnType<typeof accounts>> = [];
+  const db = observeStatements(env.DB, async (sql) => {
+    if (/SELECT a.id, a.email, a.version/.test(sql)) reads++;
+    if (/UPDATE accounts AS a SET access_token =/.test(sql)) {
+      await finish(b, (await start(b, row.id)).url);
+      latest = await accounts();
+    }
+  });
+  expect(await call(row.id, db, snapshot)).toMatchObject({ error: "AccountGone" });
+  expect(reads).toBe(1);
+  expect(await accounts()).toEqual(latest);
+  expect(latest[0]).toMatchObject({ health: "ready", version: row.version + 2 });
+  expect(google.gmailTokens).toEqual([`Bearer ${access}`]);
+  expect(google.events).toEqual(["exchange", "gmail", "refresh", "exchange"]);
+});

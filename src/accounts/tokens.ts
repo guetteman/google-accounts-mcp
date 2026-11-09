@@ -30,6 +30,8 @@ type Deps = { db: D1Database; config: Config; owner: Owner; now: () => number };
 interface Access {
   token: string;
   refreshed: boolean;
+  snapshot: Credential;
+  reloaded: boolean;
 }
 
 /** The caller supplies its authorized snapshot; a fresh token needs no additional D1 read. */
@@ -74,7 +76,7 @@ export const withGoogle = (
         const token = yield* Effect.promise(() =>
           open(deps.config.tokenKey, `${snapshot.id}:access`, snapshot.accessToken!),
         );
-        return token === null ? yield* damaged() : { token, refreshed: false };
+        return token === null ? yield* damaged() : { token, refreshed: false, snapshot, reloaded };
       }
       const refreshToken = snapshot.refreshToken
         ? yield* Effect.promise(() =>
@@ -97,7 +99,7 @@ export const withGoogle = (
         const current = yield* reload();
         return { ...current, refreshed: true };
       }
-      return { token: result.success.accessToken, refreshed: true };
+      return { token: result.success.accessToken, refreshed: true, snapshot, reloaded };
     });
   const send = (token: string) =>
     Effect.tryPromise({ try: () => fetch(build(token)), catch: () => new RequestLost() });
@@ -105,7 +107,7 @@ export const withGoogle = (
     const access = yield* acquire(account, false, false);
     const response = yield* send(access.token);
     if (response.status !== 401 || access.refreshed) return response;
-    const next = yield* acquire(account, true, false);
+    const next = yield* acquire(access.snapshot, true, access.reloaded);
     return yield* send(next.token);
   });
 };
