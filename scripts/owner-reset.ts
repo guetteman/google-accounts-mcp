@@ -3,6 +3,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { unstable_readConfig } from "wrangler";
 import { resetOutcome, resetPlan, type OwnerState } from "../src/owner/reset.ts";
+import { databaseLabel, type D1BindingConfig } from "./d1-target.ts";
 
 interface StatementResult {
   readonly results: unknown[];
@@ -11,22 +12,6 @@ interface StoredOwner {
   readonly state: OwnerState;
   readonly generation: number;
   readonly email: string | null;
-}
-
-/**
- * The database wrangler will change, named the way wrangler finds it: by `database_id` when the
- * configuration has one, otherwise by `database_name`, otherwise by the name it gives a database
- * it provisioned, `<worker name>-<binding>`.
- */
-function databaseLabel(
-  worker: string | undefined,
-  db: { binding: string; database_name?: string; database_id?: string },
-): string {
-  if (db.database_id)
-    return db.database_name ? `${db.database_name}, id ${db.database_id}` : `id ${db.database_id}`;
-  if (db.database_name) return db.database_name;
-  if (!worker) throw new Error("The configuration names no D1 database for DB and no Worker name.");
-  return `${worker}-${db.binding.toLowerCase().replaceAll("_", "-")}`;
 }
 
 async function main() {
@@ -52,11 +37,11 @@ async function main() {
   }
   const config: {
     name?: string;
-    d1_databases: { binding: string; database_name?: string; database_id?: string }[];
+    d1_databases: D1BindingConfig[];
   } = unstable_readConfig({ config: configPath, env: environment }, { hideWarnings: true });
   const binding = config.d1_databases.find((db) => db.binding === "DB");
   if (!binding) throw new Error("The configuration has no D1 binding named DB.");
-  console.log(`Database: ${databaseLabel(config.name, binding)} (${local ? "local" : "remote"})`);
+  console.log(`Database: ${databaseLabel(config.name, binding, local ? "local" : "remote")}`);
   console.log(`Configuration: ${configPath}`);
   console.log(environment ? `Environment: ${environment}` : "Environment: top level");
 

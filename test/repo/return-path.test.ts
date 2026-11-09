@@ -16,3 +16,9 @@ it("falls back to /accounts for a path too long to fit in the sign-in's state co
     `/accounts?x=${"a".repeat(900)}`,
   );
 });
+
+it("falls back to /accounts when URL encoding makes a short path too long for the cookie", () => {
+  const raw = `/accounts?x=${"\u754c".repeat(900)}`;
+  expect(raw.length).toBeLessThan(1024);
+  expect(returnPath(raw, "https://accounts-mcp.example.com")).toBe("/accounts");
+});
