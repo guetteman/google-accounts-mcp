@@ -9,7 +9,7 @@ import { renderPage } from "../pages/render";
 import { readOwner } from "./owner";
 import { requireOwner, sessionCookie, signOut, signOutEverywhere } from "./session";
 
-const ownerOnly: MiddlewareHandler<PageEnv> = async (c, next) => {
+export const ownerOnly: MiddlewareHandler<PageEnv> = async (c, next) => {
   const session = await Effect.runPromise(
     Effect.result(requireOwner(c.env.DB, c.get("config"), c.req.raw, Date.now())),
   );

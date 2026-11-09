@@ -6,14 +6,6 @@ export interface OwnerRowValues {
   readonly state: OwnerState;
   readonly generation: number;
   readonly email: string | null;
-  readonly google_sub: string | null;
-}
-
-export interface SessionRow {
-  readonly token_hash: string;
-  readonly generation: number;
-  readonly created_at: number;
-  readonly last_used_at: number;
 }
 
 /** Every row of every table the Worker owns, so "D1 unchanged" is a plain equality. */
@@ -33,7 +25,7 @@ export async function dump(db: D1Database = env.DB): Promise<Record<string, unkn
 
 export async function ownerRow(): Promise<OwnerRowValues | null> {
   return env.DB.prepare(
-    "SELECT state, generation, email, google_sub FROM owner WHERE id = 1",
+    "SELECT state, generation, email FROM owner WHERE id = 1",
   ).first<OwnerRowValues>();
 }
 
@@ -47,32 +39,24 @@ export async function ownerInstance(): Promise<number> {
 }
 
 export async function setOwner(row: OwnerRowValues): Promise<void> {
-  await env.DB.prepare(
-    "UPDATE owner SET state = ?, generation = ?, email = ?, google_sub = ? WHERE id = 1",
-  )
-    .bind(row.state, row.generation, row.email, row.google_sub)
+  // Fixture compatibility while the acceptance tests run against the previous migration.
+  const columns = await env.DB.prepare("PRAGMA table_info(owner)").all<{ name: string }>();
+  if (columns.results.some((c) => c.name === "google_sub")) {
+    await env.DB.prepare(
+      "UPDATE owner SET state = ?, generation = ?, email = ?, google_sub = ? WHERE id = 1",
+    )
+      .bind(
+        row.state,
+        row.generation,
+        row.email,
+        row.state === "unpinned" ? null : "legacy-fixture",
+      )
+      .run();
+    return;
+  }
+  await env.DB.prepare("UPDATE owner SET state = ?, generation = ?, email = ? WHERE id = 1")
+    .bind(row.state, row.generation, row.email)
     .run();
-}
-
-export async function sessions(): Promise<SessionRow[]> {
-  const rows = await env.DB.prepare(
-    "SELECT * FROM owner_sessions ORDER BY created_at, token_hash",
-  ).all<SessionRow>();
-  return rows.results;
-}
-
-export async function insertSession(row: SessionRow): Promise<void> {
-  await env.DB.prepare(
-    "INSERT INTO owner_sessions (token_hash, generation, created_at, last_used_at) VALUES (?, ?, ?, ?)",
-  )
-    .bind(row.token_hash, row.generation, row.created_at, row.last_used_at)
-    .run();
-}
-
-/** Lower-case hex SHA-256 of a string's UTF-8 bytes: the form the session table stores. */
-export async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** A D1 binding whose every call throws, as when D1 is down. */
@@ -166,7 +150,7 @@ export function statementFailingDb(pattern: RegExp, real: D1Database = env.DB): 
   });
 }
 
-/** The real D1, except that every write fails: reads work, so Google is reached first. */
+/** The real D1, except that every write fails: reads work, so Access verification runs first. */
 export function writeFailingDb(real: D1Database = env.DB): D1Database {
   return statementFailingDb(WRITE, real);
 }

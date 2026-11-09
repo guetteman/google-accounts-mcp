@@ -6,17 +6,26 @@ export const HOST = "accounts-mcp.example.com";
 export const ORIGIN = `https://${HOST}`;
 export const OWNER_EMAIL = "alex.personal@example.com";
 
-export type WorkerEnv = Env;
+// During the test-first transition these include the new bindings before type generation.
+export type AccessTestEnv = Env & { ACCESS_ISSUER: string; ACCESS_AUDIENCE: string };
+let issuer = "https://example-team.cloudflareaccess.com";
+export function freshAccessIssuer(): void {
+  issuer = `https://test-${crypto.randomUUID()}.cloudflareaccess.com`;
+}
 
 /**
  * The environment the Worker's fetch receives. Tests change it between requests (a new
  * OWNER_EMAIL, a missing secret, a broken DB) without touching the shared bindings.
  * A value of `undefined` removes the setting, as if it were never set.
  */
-export function testEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}): Env {
+export function testEnv(
+  overrides: { [K in keyof AccessTestEnv]?: AccessTestEnv[K] | undefined } = {},
+): AccessTestEnv {
   const base: Record<string, unknown> = {
     DB: env.DB,
     OWNER_EMAIL: env.OWNER_EMAIL,
+    ACCESS_ISSUER: issuer,
+    ACCESS_AUDIENCE: "a".repeat(64),
     GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET,
   };
@@ -24,7 +33,7 @@ export function testEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {
     if (value === undefined) delete base[key];
     else base[key] = value;
   }
-  return base as unknown as Env;
+  return base as unknown as AccessTestEnv;
 }
 
 /** Calls the Worker module's default export, as Cloudflare would. */

@@ -2,17 +2,9 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vite-plus/test";
 import { RESET_CLEANUP, resetOutcome, resetPlan } from "../src/owner/reset";
 import { Browser } from "./support/browser";
-import { DIDNT_FINISH, MISMATCH, NOT_OWNER } from "./support/copy";
-import {
-  dump,
-  insertSession,
-  ownerInstance,
-  ownerRow,
-  sessions,
-  setOwner,
-  sha256Hex,
-} from "./support/db";
-import { location, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
+import { MISMATCH } from "./support/copy";
+import { dump, ownerInstance, ownerRow, setOwner } from "./support/db";
+import { OWNER_EMAIL, testEnv, textOf } from "./support/worker";
 
 const NOW = 1_800_000_000_000;
 
@@ -34,28 +26,19 @@ async function runEach(statements: ReadonlyArray<string>) {
   return results;
 }
 
-async function pinnedOwnerWithSessions(generation: number) {
-  await setOwner({ state: "pinned", generation, email: OWNER_EMAIL, google_sub: "sub-a" });
-  for (const name of ["phone", "laptop"]) {
-    await insertSession({
-      token_hash: await sha256Hex(name),
-      generation,
-      created_at: NOW,
-      last_used_at: NOW,
-    });
-  }
+async function pinnedOwner(generation: number) {
+  await setOwner({ state: "pinned", generation, email: OWNER_EMAIL });
 }
 
 const unpinnedAt = (generation: number) => ({
   state: "unpinned",
   generation,
   email: null,
-  google_sub: null,
 });
 
 describe("a reset", () => {
-  it("moves a pinned owner through resetting to unpinned at the next generation and ends every session", async () => {
-    await pinnedOwnerWithSessions(3);
+  it("moves a pinned owner through resetting to unpinned at the next generation", async () => {
+    await pinnedOwner(3);
     const plan = resetPlan(await readForPlan(), NOW);
     expect(plan.resuming).toBe(false);
     expect(plan.generation).toBe(4);
@@ -67,7 +50,6 @@ describe("a reset", () => {
     const results = [entry!, ...(await runAll(plan.statements.slice(1)))];
 
     expect(await ownerRow()).toEqual(unpinnedAt(4));
-    expect(await sessions()).toEqual([]);
     expect(resetOutcome(plan, results)).toBe("done");
   });
 
@@ -80,9 +62,9 @@ describe("a reset", () => {
   });
 
   it("makes every request answer as during a mismatch while it runs, whatever OWNER_EMAIL is", async () => {
-    await pinnedOwnerWithSessions(1);
+    await pinnedOwner(1);
     const owner = new Browser();
-    await owner.signInAsOwner();
+    await owner.authenticate();
     const plan = resetPlan(await readForPlan(), NOW);
     await runEach(plan.statements.slice(0, 1));
     expect(await ownerRow()).toMatchObject({ state: "resetting" });
@@ -92,9 +74,9 @@ describe("a reset", () => {
       const workerEnv = testEnv({ OWNER_EMAIL: ownerEmail });
       for (const response of [
         await owner.get("/accounts", { env: workerEnv }),
-        await owner.get("/signin", { env: workerEnv }),
-        await owner.post("/signin", {}, { env: workerEnv }),
-        await owner.post("/signout", {}, { env: workerEnv }),
+        await owner.get("/connections", { env: workerEnv }),
+        await owner.post("/accounts", {}, { env: workerEnv }),
+        await owner.post("/connections", {}, { env: workerEnv }),
       ]) {
         expect(response.status).toBe(503);
         expect(textOf(await response.text())).toContain(MISMATCH.title);
@@ -107,13 +89,12 @@ describe("a reset", () => {
 
 describe("a reset that is interrupted, repeated, raced, or delayed", () => {
   it("finishes when run again after stopping at any point", async () => {
-    await pinnedOwnerWithSessions(5);
+    await pinnedOwner(5);
     const fresh = resetPlan(await readForPlan(), NOW);
 
     for (let applied = 1; applied < fresh.statements.length; applied++) {
-      await setOwner({ state: "pinned", generation: 5, email: OWNER_EMAIL, google_sub: "sub-a" });
-      await env.DB.prepare("DELETE FROM owner_sessions").run();
-      await pinnedOwnerWithSessions(5);
+      await setOwner({ state: "pinned", generation: 5, email: OWNER_EMAIL });
+      await pinnedOwner(5);
       await runEach(fresh.statements.slice(0, applied));
       expect(await ownerRow(), `stopped after ${applied}`).toMatchObject({
         state: "resetting",
@@ -126,13 +107,12 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
       const results = await runAll(resumed.statements);
 
       expect(await ownerRow(), `stopped after ${applied}`).toEqual(unpinnedAt(6));
-      expect(await sessions(), `stopped after ${applied}`).toEqual([]);
       expect(resetOutcome(resumed, results), `stopped after ${applied}`).toBe("done");
     }
   });
 
   it("does not report Done when someone else finished the reset it resumed", async () => {
-    await pinnedOwnerWithSessions(2);
+    await pinnedOwner(2);
     await runEach(resetPlan(await readForPlan(), NOW).statements.slice(0, 1));
     const mine = resetPlan(await readForPlan(), NOW);
     const theirs = resetPlan(await readForPlan(), NOW);
@@ -146,7 +126,7 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
   });
 
   it("lets only one of two runs that read the same generation perform the reset", async () => {
-    await pinnedOwnerWithSessions(1);
+    await pinnedOwner(1);
     const row = await readForPlan();
     const first = resetPlan(row, NOW);
     const second = resetPlan(row, NOW);
@@ -161,15 +141,15 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
   });
 
   it("changes nothing when it arrives after another reset finished and a new owner signed in", async () => {
-    await pinnedOwnerWithSessions(1);
+    await pinnedOwner(1);
     const delayed = resetPlan(await readForPlan(), NOW);
     await runAll(resetPlan(await readForPlan(), NOW).statements);
     const newOwner = new Browser();
-    await newOwner.signInAsOwner({ sub: "sub-new" });
+    await newOwner.authenticate();
+    expect((await newOwner.get("/accounts")).status).toBe(200);
     expect(await ownerRow()).toMatchObject({
       state: "pinned",
       generation: 2,
-      google_sub: "sub-new",
     });
     const before = await dump();
 
@@ -182,13 +162,14 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
   });
 
   it("never touches a newer reset with its cleanup or finishing statements", async () => {
-    await pinnedOwnerWithSessions(1);
+    await pinnedOwner(1);
     const old = resetPlan(await readForPlan(), NOW);
     await runEach(old.statements.slice(0, 1));
     // Someone else finishes that reset, a new owner signs in at generation 2, and a newer reset begins.
     await runAll(resetPlan(await readForPlan(), NOW).statements);
     const newOwner = new Browser();
-    await newOwner.signInAsOwner({ sub: "sub-new" });
+    await newOwner.authenticate();
+    expect((await newOwner.get("/accounts")).status).toBe(200);
     const newer = resetPlan(await readForPlan(), NOW);
     await runEach(newer.statements.slice(0, 1));
     expect(await ownerRow()).toMatchObject({ state: "resetting", generation: 3 });
@@ -200,7 +181,7 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
   });
 
   it("changes nothing in a database other than the one it read", async () => {
-    await pinnedOwnerWithSessions(2);
+    await pinnedOwner(2);
     const row = await readForPlan();
     const before = await dump();
 
@@ -235,7 +216,7 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
   it("guards every cleanup statement on this reset's generation", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
-    expect(RESET_CLEANUP.length).toBeGreaterThan(0);
+    expect(RESET_CLEANUP).toEqual([]);
     for (const cleanup of RESET_CLEANUP) {
       expect(cleanup({ guard, now: NOW })).toContain(guard);
     }
@@ -252,112 +233,13 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
   });
 });
 
-describe("two sign-ins that race to pin an unpinned owner", () => {
-  it("pin exactly one Google account when they come from different accounts", async () => {
-    const a = new Browser();
-    const b = new Browser();
-    const [startA, startB] = [await a.startSignIn(), await b.startSignIn()];
-
-    const [responseA, responseB] = await Promise.all([
-      a.finishSignIn(startA, { sub: "sub-a" }),
-      b.finishSignIn(startB, { sub: "sub-b" }),
-    ]);
-
-    const winners = [responseA, responseB].filter((r) => r.status === 302);
-    const losers = [responseA, responseB].filter((r) => r.status === 403);
-    expect(winners).toHaveLength(1);
-    expect(losers).toHaveLength(1);
-    expect(textOf(await losers[0]!.text())).toContain(NOT_OWNER.title);
-    const row = await ownerRow();
-    const winner = responseA.status === 302 ? a : b;
-    const loser = winner === a ? b : a;
-    expect(row).toMatchObject({
-      state: "pinned",
-      generation: 1,
-      google_sub: winner === a ? "sub-a" : "sub-b",
-    });
-    expect(winner.session).toBeDefined();
-    expect(loser.session).toBeUndefined();
-    expect(await sessions()).toHaveLength(1);
-  });
-
-  it("give both tabs a session when they are the same Google account", async () => {
+describe("two owner requests racing to pin", () => {
+  it("opens both requests and pins the email once at the current generation", async () => {
     const browser = new Browser();
-    const [first, second] = [
-      await browser.startSignIn("/accounts"),
-      await browser.startSignIn("/connections"),
-    ];
-    expect(first.state).not.toBe(second.state);
-
-    const responses = await Promise.all([
-      browser.finishSignIn(first),
-      browser.finishSignIn(second),
-    ]);
-
-    expect(responses.map((r) => r.status)).toEqual([302, 302]);
-    expect(responses.map(location).sort((x, y) => String(x).localeCompare(String(y)))).toEqual([
-      "/accounts",
-      "/connections",
-    ]);
-    expect(await ownerRow()).toEqual({
-      state: "pinned",
-      generation: 1,
-      email: OWNER_EMAIL,
-      google_sub: "sub-a",
-    });
-    expect(await sessions()).toHaveLength(2);
-  });
-});
-
-describe("data from before a reset", () => {
-  it("does not open owner pages with a session from an earlier generation", async () => {
-    await setOwner({ state: "pinned", generation: 2, email: OWNER_EMAIL, google_sub: "sub-a" });
-    const token = "B".repeat(43);
-    await insertSession({
-      token_hash: await sha256Hex(token),
-      generation: 1,
-      created_at: Date.now(),
-      last_used_at: Date.now(),
-    });
-    const browser = new Browser();
-    browser.cookies.set("__Host-session", token);
-
-    const response = await browser.get("/accounts");
-
-    expect(response.status).toBe(302);
-    expect(location(response)).toBe("/signin?next=%2Faccounts");
-  });
-
-  it("stores nothing for a sign-in begun before the reset and finished after it", async () => {
-    await pinnedOwnerWithSessions(1);
-    const browser = new Browser();
-    const before = await browser.startSignIn();
-    await runAll(resetPlan(await readForPlan(), NOW).statements);
-    const afterReset = await dump();
-
-    const response = await browser.finishSignIn(before);
-
-    expect(response.status).toBe(400);
-    expect(textOf(await response.text())).toContain(DIDNT_FINISH.title);
-    expect(browser.session).toBeUndefined();
-    expect(await dump()).toEqual(afterReset);
-  });
-
-  it("stores nothing for it even after the same owner signs in again in the same browser", async () => {
-    await pinnedOwnerWithSessions(1);
-    const browser = new Browser();
-    const old = await browser.startSignIn();
-    await runAll(resetPlan(await readForPlan(), NOW).statements);
-    await browser.signInAsOwner();
-    expect(await ownerRow()).toMatchObject({ state: "pinned", generation: 2 });
-    const session = browser.session;
-    const afterSignIn = await dump();
-
-    const response = await browser.finishSignIn(old);
-
-    expect(response.status).toBe(400);
-    expect(textOf(await response.text())).toContain(DIDNT_FINISH.title);
-    expect(browser.session).toBe(session);
-    expect(await dump()).toEqual(afterSignIn);
+    await browser.authenticate();
+    const responses = await Promise.all([browser.get("/accounts"), browser.get("/connections")]);
+    expect(responses.map((r) => r.status)).toEqual([200, 200]);
+    expect(await ownerRow()).toEqual({ state: "pinned", generation: 1, email: OWNER_EMAIL });
+    expect(responses.flatMap((r) => r.headers.getSetCookie())).toEqual([]);
   });
 });
