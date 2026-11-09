@@ -3,7 +3,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { unstable_readConfig } from "wrangler";
 import { resetOutcome, resetPlan, type OwnerState } from "../src/owner/reset.ts";
-import { databaseLabel, type D1BindingConfig } from "./d1-target.ts";
+import { databaseLabel, ownerDatabase, type D1BindingConfig } from "./d1-target.ts";
 
 interface StatementResult {
   readonly results: unknown[];
@@ -35,12 +35,17 @@ async function main() {
       }
     } else throw new Error(`Unknown argument: ${arg}`);
   }
+  // Wrangler takes the environment from --env, then from CLOUDFLARE_ENV; pass it explicitly so
+  // what this script shows and what wrangler changes are the same.
+  if (environment === undefined && process.env.CLOUDFLARE_ENV) {
+    environment = process.env.CLOUDFLARE_ENV;
+    passThrough.push("--env", environment);
+  }
   const config: {
     name?: string;
     d1_databases: D1BindingConfig[];
   } = unstable_readConfig({ config: configPath, env: environment }, { hideWarnings: true });
-  const binding = config.d1_databases.find((db) => db.binding === "DB");
-  if (!binding) throw new Error("The configuration has no D1 binding named DB.");
+  const binding = ownerDatabase(config.d1_databases);
   console.log(`Database: ${databaseLabel(config.name, binding, local ? "local" : "remote")}`);
   console.log(`Configuration: ${configPath}`);
   console.log(environment ? `Environment: ${environment}` : "Environment: top level");

@@ -33,14 +33,14 @@ function sql(command: string): Array<Record<string, unknown>> {
   return out.flatMap((statement) => statement.results);
 }
 
-function ownerReset(args: string[], input?: string) {
+function ownerReset(args: string[], input?: string, extraEnv: Record<string, string> = {}) {
   return spawnSync(
     "pnpm",
     ["--silent", "owner:reset", "--local", "--persist-to", persistTo, ...args],
     {
       encoding: "utf8",
       input: input ?? "",
-      env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+      env: { ...process.env, WRANGLER_SEND_METRICS: "false", ...extraEnv },
     },
   );
 }
@@ -144,9 +144,13 @@ describe("pnpm owner:reset", () => {
   );
 });
 
-it(
-  "resets only the chosen environment in the chosen configuration and shows its database and owner",
-  () => {
+it.each([
+  ["--env", ["--env", "staging"], {}],
+  ["CLOUDFLARE_ENV", [], { CLOUDFLARE_ENV: "staging" }],
+  ["--env over CLOUDFLARE_ENV", ["--env", "staging"], { CLOUDFLARE_ENV: "production" }],
+] as const)(
+  "resets only the environment chosen with %s in the chosen configuration and shows its database and owner",
+  (_label, selector, selectorEnv) => {
     const configPath = join(persistTo, "wrangler.jsonc");
     const topId = "00000000-0000-4000-8000-000000000001";
     const stagingId = "00000000-0000-4000-8000-000000000002";
@@ -203,7 +207,7 @@ it(
       );
     }
 
-    const run = ownerReset(["--config", configPath, "--env", "staging", "--yes"]);
+    const run = ownerReset(["--config", configPath, ...selector, "--yes"], undefined, selectorEnv);
 
     expect(run.status, run.stderr).toBe(0);
     expect(run.stdout).toContain("Environment: staging");
