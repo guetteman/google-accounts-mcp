@@ -6,16 +6,19 @@ import type { TestEnv } from "./env";
 beforeEach(async () => {
   // Resolve fixtures after a test's hoisted module reset, so mocked SSR components and
   // the JWKS handler still use the same test keys and environment as the request helper.
-  const { network, unhandledFrames } = await import("./support/network");
+  const { network, unhandledFrames, requests } = await import("./support/network");
   const { access } = await import("./support/access");
   const { freshAccessIssuer } = await import("./support/worker");
   network.enable();
   unhandledFrames.length = 0;
+  requests.length = 0;
   await reset();
   await applyD1Migrations(env.DB, (env as TestEnv).TEST_MIGRATIONS);
   freshAccessIssuer();
   access.reset();
-  network.use(...access.handlers());
+  const { oauth } = await import("./support/oauth");
+  oauth.reset();
+  network.use(...access.handlers(), ...oauth.handlers());
 });
 
 afterEach(async () => {
@@ -23,6 +26,7 @@ afterEach(async () => {
   const { network, unhandledFrames } = await import("./support/network");
   access.release();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   network.resetHandlers();
   network.disable();
   expect(unhandledFrames).toEqual([]);

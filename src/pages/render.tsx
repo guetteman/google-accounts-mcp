@@ -1,3 +1,6 @@
+import { ConsentPage } from "./consent";
+import { ClientRefusedPage } from "./client-refused";
+import { ConsentExpiredPage } from "./consent-expired";
 import { renderToString } from "react-dom/server";
 import { isFramePage, PRODUCT, type Page } from "./page";
 import { frameElement } from "./registry";
@@ -18,6 +21,12 @@ const CSP =
 function pageElement(page: Page) {
   if (isFramePage(page)) return frameElement(page);
   switch (page._tag) {
+    case "Consent":
+      return <ConsentPage {...page} />;
+    case "ClientRefused":
+      return <ClientRefusedPage />;
+    case "ConsentExpired":
+      return <ConsentExpiredPage />;
     case "AccessRefused":
       return <AccessRefusedPage />;
     case "AccessUnavailable":
@@ -42,7 +51,10 @@ function jsonForScript(value: unknown): string {
     .replace(/\u2029/g, "\\u2029");
 }
 
-export function renderPage(page: Page, init?: ResponseInit): Response {
+export function renderPage(
+  page: Page,
+  init?: ResponseInit & { formAction?: ReadonlyArray<string> },
+): Response {
   const hydrate = isFramePage(page);
   const body = renderToString(pageElement(page));
   const html = renderToString(
@@ -68,7 +80,13 @@ export function renderPage(page: Page, init?: ResponseInit): Response {
   );
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "text/html; charset=utf-8");
-  headers.set("Content-Security-Policy", CSP);
+  headers.set(
+    "Content-Security-Policy",
+    CSP.replace(
+      "form-action 'self'",
+      `form-action 'self'${init?.formAction?.map((origin) => ` ${origin}`).join("") ?? ""}`,
+    ),
+  );
   headers.set("Referrer-Policy", "same-origin");
   headers.set("Cache-Control", "no-store");
   return new Response(`<!doctype html>${html}`, { ...init, headers });

@@ -18,6 +18,7 @@ export function freshAccessIssuer(): void {
 export function testEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {}): Env {
   const base: Record<string, unknown> = {
     DB: env.DB,
+    OAUTH_KV: env.OAUTH_KV,
     OWNER_EMAIL: env.OWNER_EMAIL,
     ACCESS_ISSUER: issuer,
     ACCESS_AUDIENCE: "a".repeat(64),

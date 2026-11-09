@@ -10,3 +10,7 @@ network.configure({
     throw new Error("Unexpected outbound request");
   },
 });
+
+// Observe every outbound HTTP request, including Access, CIMD, JWKS and unexpected hosts.
+export const requests: string[] = [];
+network.events.on("request:start", ({ request }) => requests.push(request.url));

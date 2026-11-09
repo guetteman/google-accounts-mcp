@@ -15,7 +15,7 @@ type Fetch = (
 function refuse(request: Request, page: Page): Response {
   const path = new URL(request.url).pathname;
   if (path === "/mcp") return new Response("Service unavailable", { status: 503 });
-  if (path.startsWith("/oauth/") || path === "/register" || path.startsWith("/.well-known/")) {
+  if (path.startsWith("/oauth/") || path.startsWith("/.well-known/")) {
     return Response.json({ error: "temporarily_unavailable" }, { status: 503 });
   }
   return renderPage(page, { status: 503 });

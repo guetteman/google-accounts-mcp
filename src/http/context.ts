@@ -1,8 +1,8 @@
 import type { Config } from "../config";
-import type { GatedEnv } from "../owner/gate";
+import type { OAuthEnv } from "../oauth/server";
 import type { Owner } from "../owner/owner";
 
 export interface PageEnv {
-  Bindings: GatedEnv;
+  Bindings: OAuthEnv;
   Variables: { config: Config; owner: Owner };
 }
