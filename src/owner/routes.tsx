@@ -41,5 +41,3 @@ for (const current of ["accounts", "connections"] as const) {
     }),
   );
 }
-// Consent is implemented in #9; its owner check already applies to refusal requests.
-ownerRoutes.get("/authorize", ownerOnly, (c) => c.notFound());

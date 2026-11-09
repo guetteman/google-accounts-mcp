@@ -165,7 +165,7 @@ describe("Access owner check", () => {
       const before = await dump();
       for (const path of ["/", "/accounts", "/connections", "/authorize", WRITE_PATH]) {
         const response = path === WRITE_PATH ? await browser.post(path) : await browser.get(path);
-        expect(response.status, path).toBe(403);
+        expect(response.status, path).toBe(path === "/authorize" ? 404 : 403);
         expect(`${await response.text()}${location(response) ?? ""}`, path).not.toContain(
           OWNER_EMAIL,
         );
