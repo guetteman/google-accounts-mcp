@@ -1,12 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { parseEnv } from "node:util";
 import { unstable_readConfig } from "wrangler";
 import { resetOutcome, resetPlan, type OwnerState } from "../src/owner/reset.ts";
-import { databaseLabel, ownerDatabase, type D1BindingConfig } from "./d1-target.ts";
+import {
+  databaseLabel,
+  expectedTargetId,
+  ownerDatabase,
+  wranglerTarget,
+  type D1BindingConfig,
+  type WranglerTarget,
+} from "./d1-target.ts";
 
 interface StatementResult {
   readonly results: unknown[];
@@ -15,6 +19,7 @@ interface StoredOwner {
   readonly state: OwnerState;
   readonly generation: number;
   readonly email: string | null;
+  readonly instance: number;
 }
 
 async function main() {
@@ -39,85 +44,34 @@ async function main() {
     } else throw new Error(`Unknown argument: ${arg}`);
   }
   if (persistTo !== undefined && !local) throw new Error("--persist-to needs --local.");
+  const mode = local ? "local" : "remote";
 
-  const environment = environmentArg ?? cloudflareEnv();
-  const config: { name?: string; account_id?: string; d1_databases: D1BindingConfig[] } =
-    unstable_readConfig({ config: configPath, env: environment }, { hideWarnings: true });
-  const database = ownerDatabase(config.d1_databases);
-  console.log(`Database: ${databaseLabel(config.name, database, local ? "local" : "remote")}`);
-  console.log(`Configuration: ${configPath}`);
-  console.log(environment ? `Environment: ${environment}` : "Environment: top level");
-
-  // Wrangler reads its configuration and environment again on every call. To change only the
-  // database shown above, every call gets this one resolved database, frozen in a file next to
-  // the configuration (so local state, .env files, and profiles resolve as before), and
-  // `--env ""`, which stops CLOUDFLARE_ENV from choosing another environment.
-  const frozenPath = join(dirname(resolve(configPath)), `.owner-reset-${process.pid}.json`);
-  writeFileSync(
-    frozenPath,
-    JSON.stringify({
-      name: config.name,
-      ...(config.account_id ? { account_id: config.account_id } : {}),
-      compatibility_date: "2026-10-20",
-      d1_databases: [database],
-    }),
-    { flag: "wx" },
+  // The environment is decided here and passed to every wrangler call, so wrangler cannot pick
+  // another one from a .env file.
+  const environment = environmentArg ?? process.env.CLOUDFLARE_ENV ?? "";
+  const config: { name?: string; d1_databases: D1BindingConfig[] } = unstable_readConfig(
+    { config: configPath, env: environment },
+    { hideWarnings: true },
   );
-  try {
-    await run({ frozenPath, local, persistTo, yes });
-  } finally {
-    rmSync(frozenPath, { force: true });
-  }
-}
+  const database = ownerDatabase(config.d1_databases);
+  const wranglerArgs = [
+    local ? "--local" : "--remote",
+    ...(persistTo === undefined ? [] : ["--persist-to", persistTo]),
+    "--config",
+    configPath,
+    "--env",
+    environment,
+  ];
 
-/** CLOUDFLARE_ENV as wrangler reads it: the process environment, then .env.local, then .env. */
-function cloudflareEnv(): string | undefined {
-  if (process.env.CLOUDFLARE_ENV !== undefined) return process.env.CLOUDFLARE_ENV;
-  let value: string | undefined;
-  for (const file of [".env", ".env.local"]) {
-    if (!existsSync(file)) continue;
-    const parsed = parseEnv(readFileSync(file, "utf8"));
-    if (parsed.CLOUDFLARE_ENV !== undefined) value = parsed.CLOUDFLARE_ENV;
-  }
-  return value;
-}
-
-async function run(options: {
-  readonly frozenPath: string;
-  readonly local: boolean;
-  readonly persistTo: string | undefined;
-  readonly yes: boolean;
-}) {
-  const { frozenPath, local, persistTo, yes } = options;
-  function execute(command: string): StatementResult[] {
-    const result = spawnSync(
+  function wrangler(extra: string[]) {
+    return spawnSync(
       fileURLToPath(new URL("../node_modules/.bin/wrangler", import.meta.url)),
-      [
-        "d1",
-        "execute",
-        "DB",
-        "--json",
-        "--command",
-        command,
-        local ? "--local" : "--remote",
-        ...(persistTo === undefined ? [] : ["--persist-to", persistTo]),
-        "--config",
-        frozenPath,
-        "--env",
-        "",
-      ],
+      ["d1", "execute", "DB", ...extra, ...wranglerArgs],
       { encoding: "utf8", env: { ...process.env, WRANGLER_SEND_METRICS: "false" } },
     );
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(result.stdout);
-    } catch {
-      throw new Error(result.error?.message || result.stderr || "Wrangler did not return JSON.");
-    }
-    if (parsed && typeof parsed === "object" && "error" in parsed)
-      throw new Error(JSON.stringify(parsed.error));
-    if (result.status !== 0)
-      throw new Error(result.stderr || `Wrangler exited with status ${result.status}`);
+  }
+
+  function statementResults(parsed: unknown): StatementResult[] {
     if (
       !Array.isArray(parsed) ||
       !parsed.every(
@@ -130,25 +84,62 @@ async function run(options: {
     return parsed as StatementResult[];
   }
 
-  function readOwner(): StoredOwner {
-    const row = execute("SELECT state, generation, email FROM owner WHERE id = 1")[0]?.results[0];
+  /** Reads the owner row and the database wrangler says it read it from. */
+  function readOwner(): { row: StoredOwner; target: WranglerTarget } {
+    const result = wrangler([
+      "--command",
+      "SELECT state, generation, email, instance FROM owner WHERE id = 1",
+    ]);
+    if (result.status !== 0)
+      throw new Error(result.stderr || result.error?.message || "Wrangler failed.");
+    const target = wranglerTarget(result.stdout);
+    const json = result.stdout.indexOf("\n[");
+    if (!target || json < 0) throw new Error("Could not read which database wrangler used.");
+    const expected = expectedTargetId(database, mode);
+    if (target.mode !== mode || (expected !== undefined && target.id !== expected)) {
+      throw new Error(
+        `Wrangler used the ${target.mode} database ${target.id}, not the configured one; nothing changed.`,
+      );
+    }
+    const row = statementResults(JSON.parse(result.stdout.slice(json + 1)))[0]?.results[0];
     if (
       !row ||
       typeof row !== "object" ||
       !("state" in row) ||
       !("generation" in row) ||
       !("email" in row) ||
+      !("instance" in row) ||
       !["pinned", "unpinned", "resetting"].includes(String(row.state)) ||
       typeof row.generation !== "number" ||
       !Number.isSafeInteger(row.generation) ||
       row.generation < 1 ||
+      typeof row.instance !== "number" ||
+      !Number.isSafeInteger(row.instance) ||
+      row.instance < 1 ||
       (row.email !== null && typeof row.email !== "string")
     )
       throw new Error("The stored owner row is missing or invalid.");
-    return row as StoredOwner;
+    return { row: row as StoredOwner, target };
   }
 
-  function describe(row: StoredOwner) {
+  /** Runs statements as one call; reports wrangler's JSON error without changing anything more. */
+  function execute(command: string): StatementResult[] {
+    const result = wrangler(["--json", "--command", command]);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(result.error?.message || result.stderr || "Wrangler did not return JSON.");
+    }
+    if (parsed && typeof parsed === "object" && "error" in parsed)
+      throw new Error(JSON.stringify(parsed.error));
+    if (result.status !== 0)
+      throw new Error(result.stderr || `Wrangler exited with status ${result.status}`);
+    return statementResults(parsed);
+  }
+
+  function describe({ row, target }: { row: StoredOwner; target: WranglerTarget }) {
+    console.log(`Wrangler used: ${target.mode} database ${target.id}, instance ${row.instance}`);
     console.log(`Stored owner: ${row.email ?? "no owner"}`);
     const state =
       row.state === "resetting"
@@ -159,8 +150,11 @@ async function run(options: {
     console.log(`State: ${state}, generation ${row.generation}`);
   }
 
-  const row = readOwner();
-  describe(row);
+  console.log(`Database: ${databaseLabel(config.name, database, mode)}`);
+  console.log(`Configuration: ${configPath}`);
+  console.log(environment ? `Environment: ${environment}` : "Environment: top level");
+  const read = readOwner();
+  describe(read);
   console.log("Reset ends every session and removes all data from the previous owner.");
   if (!yes) {
     const readline = createInterface({ input: process.stdin, output: process.stdout });
@@ -178,12 +172,14 @@ async function run(options: {
       return;
     }
   }
-  const plan = resetPlan(row, Date.now());
+  // Every statement is guarded on the instance read above, so if wrangler now reaches another
+  // database (the configuration or credentials changed while waiting), nothing changes there.
+  const plan = resetPlan(read.row, Date.now());
   const results = execute(plan.statements.join("; "));
   switch (resetOutcome(plan, results)) {
     case "overtaken":
       console.log(
-        "Another reset changed the database first; nothing done. Run again to see the current state.",
+        "The database changed before the reset ran (another reset, or wrangler reached a different database); nothing done. Run again to see the current state.",
       );
       break;
     case "done":

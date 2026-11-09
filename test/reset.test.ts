@@ -3,7 +3,15 @@ import { describe, expect, it } from "vite-plus/test";
 import { RESET_CLEANUP, resetOutcome, resetPlan } from "../src/owner/reset";
 import { Browser } from "./support/browser";
 import { DIDNT_FINISH, MISMATCH, NOT_OWNER } from "./support/copy";
-import { dump, insertSession, ownerRow, sessions, setOwner, sha256Hex } from "./support/db";
+import {
+  dump,
+  insertSession,
+  ownerInstance,
+  ownerRow,
+  sessions,
+  setOwner,
+  sha256Hex,
+} from "./support/db";
 import { location, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
 
 const NOW = 1_800_000_000_000;
@@ -11,7 +19,7 @@ const NOW = 1_800_000_000_000;
 async function readForPlan() {
   const row = await ownerRow();
   if (row === null) throw new Error("no owner row");
-  return { state: row.state, generation: row.generation };
+  return { state: row.state, generation: row.generation, instance: await ownerInstance() };
 }
 
 /** The reset's statements sent in one call, as `wrangler d1 execute --command` sends them. */
@@ -191,6 +199,39 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
     expect(await dump()).toEqual(before);
   });
 
+  it("changes nothing in a database other than the one it read", async () => {
+    await pinnedOwnerWithSessions(2);
+    const row = await readForPlan();
+    const before = await dump();
+
+    const elsewhere = resetPlan(
+      { ...row, instance: row.instance === 1 ? 2 : row.instance - 1 },
+      NOW,
+    );
+    const results = await runEach(elsewhere.statements);
+
+    expect(resetOutcome(elsewhere, results)).toBe("overtaken");
+    expect(await dump()).toEqual(before);
+
+    await runEach(resetPlan(row, NOW).statements.slice(0, 1));
+    const resetting = await dump();
+    const resumedElsewhere = resetPlan(
+      { ...(await readForPlan()), instance: row.instance === 1 ? 2 : row.instance - 1 },
+      NOW,
+    );
+    await runEach(resumedElsewhere.statements);
+    expect(await dump()).toEqual(resetting);
+  });
+
+  it("refuses an instance that is not a positive safe integer", () => {
+    for (const instance of [Number.NaN, 0, -3, 2.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(
+        () => resetPlan({ state: "pinned", generation: 1, instance }, NOW),
+        String(instance),
+      ).toThrow();
+    }
+  });
+
   it("guards every cleanup statement on this reset's generation", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
@@ -202,9 +243,12 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
 
   it("refuses a generation that is not a safe integer", () => {
     for (const generation of [Number.NaN, 1.5, Number.MAX_SAFE_INTEGER + 1, -1, 0]) {
-      expect(() => resetPlan({ state: "pinned", generation }, NOW), String(generation)).toThrow();
+      expect(
+        () => resetPlan({ state: "pinned", generation, instance: 1 }, NOW),
+        String(generation),
+      ).toThrow();
     }
-    expect(() => resetPlan({ state: "pinned", generation: 1 }, Number.NaN)).toThrow();
+    expect(() => resetPlan({ state: "pinned", generation: 1, instance: 1 }, Number.NaN)).toThrow();
   });
 });
 

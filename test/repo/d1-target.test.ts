@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { databaseLabel, ownerDatabase } from "../../scripts/d1-target.ts";
+import {
+  databaseLabel,
+  expectedTargetId,
+  ownerDatabase,
+  wranglerTarget,
+} from "../../scripts/d1-target.ts";
 
 const NAME_ONLY = { binding: "DB", database_name: "owner-storage" };
 const BOTH = { ...NAME_ONLY, database_id: "00000000-0000-4000-8000-0000000000aa" };
@@ -49,5 +54,27 @@ describe("the configuration's DB database", () => {
     expect(() => ownerDatabase([{ binding: "CACHE" }])).toThrow();
     expect(() => ownerDatabase([other])).toThrow();
     expect(() => ownerDatabase([])).toThrow();
+  });
+});
+
+describe("the database wrangler says it used", () => {
+  it("is read from the line wrangler prints before it runs SQL", () => {
+    expect(
+      wranglerTarget("🌀 Executing on local database DB (DB) from .wrangler/state/v3/d1:\n[]"),
+    ).toEqual({ mode: "local", id: "DB" });
+    expect(
+      wranglerTarget(
+        "🌀 Executing on remote database DB (00000000-0000-4000-8000-0000000000aa):\n[]",
+      ),
+    ).toEqual({ mode: "remote", id: "00000000-0000-4000-8000-0000000000aa" });
+    expect(wranglerTarget("[]")).toBeNull();
+  });
+
+  it("must match the configured database: its local key, or its remote ID when it has one", () => {
+    expect(expectedTargetId(WITH_PREVIEW, "local")).toBe("00000000-0000-4000-8000-0000000000bb");
+    expect(expectedTargetId(BOTH, "local")).toBe("00000000-0000-4000-8000-0000000000aa");
+    expect(expectedTargetId(NAME_ONLY, "local")).toBe("DB");
+    expect(expectedTargetId(WITH_PREVIEW, "remote")).toBe("00000000-0000-4000-8000-0000000000aa");
+    expect(expectedTargetId(NAME_ONLY, "remote")).toBeUndefined();
   });
 });

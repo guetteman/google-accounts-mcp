@@ -40,3 +40,33 @@ export function ownerDatabase(databases: ReadonlyArray<D1BindingConfig>): D1Bind
     throw new Error("The configuration has no D1 binding named DB.");
   return only;
 }
+
+export interface WranglerTarget {
+  readonly mode: "local" | "remote" | "preview";
+  readonly id: string;
+}
+
+/**
+ * The database wrangler says it used, from the line `d1 execute` prints before it runs SQL
+ * (wrangler 4.158.0: "Executing on <local|remote|preview> database <name> (<id>)"). Locally the id
+ * is the key of the local state; remotely it is the database's UUID.
+ */
+export function wranglerTarget(output: string): WranglerTarget | null {
+  const match = /Executing on (local|remote|preview) database \S+ \(([^)]+)\)/.exec(output);
+  if (!match?.[1] || !match[2]) return null;
+  return { mode: match[1] as WranglerTarget["mode"], id: match[2] };
+}
+
+/**
+ * The id wrangler must report for the configured database: locally the key of its local state
+ * (preview_database_id, then database_id, then the binding); remotely its database_id, or
+ * undefined when wrangler finds it by name.
+ */
+export function expectedTargetId(
+  db: D1BindingConfig,
+  mode: "local" | "remote",
+): string | undefined {
+  return mode === "local"
+    ? (db.preview_database_id ?? db.database_id ?? db.binding)
+    : db.database_id;
+}

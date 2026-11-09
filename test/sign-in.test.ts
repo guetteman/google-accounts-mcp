@@ -62,7 +62,14 @@ describe("first sign-in", () => {
 
     const before = await dump();
     expect(before.owner).toEqual([
-      { id: 1, state: "unpinned", generation: 1, email: null, google_sub: null },
+      {
+        id: 1,
+        instance: expect.any(Number),
+        state: "unpinned",
+        generation: 1,
+        email: null,
+        google_sub: null,
+      },
     ]);
 
     const code = google.authorize(target, {

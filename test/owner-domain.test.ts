@@ -6,7 +6,7 @@ import { GenerationSchema, normalizeEmail, signIn, type OwnerIdentity } from "..
 import { resetPlan } from "../src/owner/reset";
 import { requireOwner, signOut, signOutEverywhere } from "../src/owner/session";
 import { Browser } from "./support/browser";
-import { dump, ownerRow, sessions, setOwner } from "./support/db";
+import { dump, ownerInstance, ownerRow, sessions, setOwner } from "./support/db";
 import { ORIGIN, OWNER_EMAIL, testEnv } from "./support/worker";
 
 function config(ownerEmail = OWNER_EMAIL) {
@@ -62,7 +62,10 @@ describe("owner actions started before a reset", () => {
           Date.now(),
         ),
       );
-      const plan = resetPlan({ state: "pinned", generation: oldSession.generation }, Date.now());
+      const plan = resetPlan(
+        { state: "pinned", generation: oldSession.generation, instance: await ownerInstance() },
+        Date.now(),
+      );
       await env.DB.batch(plan.statements.map((sql) => env.DB.prepare(sql)));
       const newOwner = new Browser();
       await newOwner.signInAsOwner({ sub: "sub-new" });
@@ -91,6 +94,6 @@ describe("owner actions started before a reset", () => {
 
 it("refuses a reset whose next generation exceeds the safe integer range", () => {
   expect(() =>
-    resetPlan({ state: "pinned", generation: Number.MAX_SAFE_INTEGER }, Date.now()),
+    resetPlan({ state: "pinned", generation: Number.MAX_SAFE_INTEGER, instance: 1 }, Date.now()),
   ).toThrow();
 });

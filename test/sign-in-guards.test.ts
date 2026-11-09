@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { resetPlan } from "../src/owner/reset";
 import { Browser, setCookies, type SignInStart } from "./support/browser";
 import { DIDNT_FINISH, GOOGLE_DOWN, NOT_OWNER, UNAVAILABLE } from "./support/copy";
-import { dump, insertSession, ownerRow, writeRecordingDb } from "./support/db";
+import { dump, insertSession, ownerInstance, ownerRow, writeRecordingDb } from "./support/db";
 import { base64url, fromBase64url, google, type Claims } from "./support/google";
 import { location, testEnv, textOf } from "./support/worker";
 
@@ -117,7 +117,10 @@ describe("sign-in callback guards", () => {
   it("keeps expired sessions when a sign-in begun before a reset is refused", async () => {
     const browser = new Browser();
     const start = await browser.startSignIn();
-    const plan = resetPlan({ state: "unpinned", generation: 1 }, Date.now());
+    const plan = resetPlan(
+      { state: "unpinned", generation: 1, instance: await ownerInstance() },
+      Date.now(),
+    );
     await env.DB.batch(plan.statements.map((sql) => env.DB.prepare(sql)));
     await seedExpiredSession(2);
     const before = await dump();

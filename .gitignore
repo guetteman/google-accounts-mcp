@@ -9,4 +9,3 @@ coverage/
 .dev.vars
 .dev.vars.*
 *.log
-.owner-reset-*.json

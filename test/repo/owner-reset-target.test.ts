@@ -1,14 +1,14 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-// `pnpm owner:reset` must change exactly the database it shows, however wrangler would otherwise
-// pick one: by environment variables, .env files, a configuration edited while it waits, a
-// database_name that collides with the binding, or a local preview ID. Each test keeps two local
-// databases and checks that only the one shown changes.
+// `pnpm owner:reset` must never change a database other than the one it shows, however wrangler
+// would otherwise pick one: environment variables, .env files, a configuration edited while it
+// waits, a database_name that collides with the binding, or a local preview ID. Each test keeps
+// two local databases, each with its own instance number, and checks what changes.
 const TIMEOUT = 180_000;
 const SCRIPT = fileURLToPath(new URL("../../scripts/owner-reset.ts", import.meta.url));
 const WRANGLER = fileURLToPath(new URL("../../node_modules/.bin/wrangler", import.meta.url));
@@ -93,7 +93,7 @@ const twoEnvironments = () =>
 
 describe("pnpm owner:reset changes only the database it shows", () => {
   it(
-    "follows CLOUDFLARE_ENV from a .env file and shows that environment",
+    "decides the environment itself, so a CLOUDFLARE_ENV in a .env file cannot redirect wrangler",
     () => {
       seed(A, 1);
       seed(B, 5);
@@ -103,10 +103,11 @@ describe("pnpm owner:reset changes only the database it shows", () => {
       const run = reset(["--config", config, "--yes"]);
 
       expect(run.status, run.stderr).toBe(0);
-      expect(run.stdout).toContain("Environment: staging");
-      expect(run.stdout).toContain(B);
-      expect(generationOf(B)).toBe(6);
-      expect(generationOf(A)).toBe(1);
+      expect(run.stdout).toContain("Environment: top level");
+      expect(run.stdout).toContain(A);
+      expect(run.stdout).not.toContain(B);
+      expect(generationOf(A)).toBe(2);
+      expect(generationOf(B)).toBe(5);
     },
     TIMEOUT,
   );
@@ -130,7 +131,7 @@ describe("pnpm owner:reset changes only the database it shows", () => {
   );
 
   it(
-    "keeps the database it showed when the configuration changes while it waits for confirmation",
+    "changes no database when the configuration points elsewhere after it showed one",
     async () => {
       seed(A, 7);
       seed(B, 7);
@@ -157,7 +158,8 @@ describe("pnpm owner:reset changes only the database it shows", () => {
       child.stdin.end("reset\n");
 
       expect(await exited, stderr).toBe(0);
-      expect(generationOf(A)).toBe(8);
+      expect(stdout).toMatch(/nothing done/);
+      expect(generationOf(A)).toBe(7);
       expect(generationOf(B)).toBe(7);
     },
     TIMEOUT,
@@ -198,18 +200,6 @@ describe("pnpm owner:reset changes only the database it shows", () => {
       expect(run.stdout).not.toContain(A);
       expect(generationOf(B)).toBe(6);
       expect(generationOf(A)).toBe(1);
-    },
-    TIMEOUT,
-  );
-
-  it(
-    "leaves no frozen configuration behind",
-    () => {
-      seed(A, 1);
-      const config = writeConfig("wrangler.jsonc", { d1_databases: [db(A)] });
-      reset(["--config", config, "--yes"]);
-      reset(["--config", config], {});
-      expect(readdirSync(dir).filter((name) => name.startsWith(".owner-reset-"))).toEqual([]);
     },
     TIMEOUT,
   );

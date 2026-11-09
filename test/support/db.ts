@@ -37,6 +37,15 @@ export async function ownerRow(): Promise<OwnerRowValues | null> {
   ).first<OwnerRowValues>();
 }
 
+/** The random number the migration gave this database's owner row; the reset guards on it. */
+export async function ownerInstance(): Promise<number> {
+  const row = await env.DB.prepare("SELECT instance FROM owner WHERE id = 1").first<{
+    instance: number;
+  }>();
+  if (row === null) throw new Error("no owner row");
+  return row.instance;
+}
+
 export async function setOwner(row: OwnerRowValues): Promise<void> {
   await env.DB.prepare(
     "UPDATE owner SET state = ?, generation = ?, email = ?, google_sub = ? WHERE id = 1",
