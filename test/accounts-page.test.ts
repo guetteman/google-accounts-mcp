@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
-import { accounts, finish, ownerBrowser, seedAccount, start } from "./support/accounts";
+import { accounts, finish, NOW, ownerBrowser, seedAccount, start } from "./support/accounts";
 import { google } from "./support/google";
 import { brokenDb, dump, observeStatements, statementFailingDb } from "./support/db";
 import { testEnv, textOf } from "./support/worker";
@@ -164,3 +164,50 @@ it.each(["name", "remove"])(
     );
   },
 );
+
+it("returns 503 when listing accounts fails after the owner gate passes", async () => {
+  const b = await ownerBrowser();
+  const response = await b.get("/accounts", {
+    env: testEnv({ DB: statementFailingDb(/FROM accounts/) }),
+  });
+  expect(response.status).toBe(503);
+  expect(textOf(await response.text())).toContain("The server can't reach its database");
+});
+
+it("refuses a stale rename after removal without changing the tombstone", async () => {
+  const row = await seedAccount();
+  const b = await ownerBrowser();
+  expect(await (await b.post(`/accounts/${row.id}/remove`)).json()).toEqual({ outcome: "ok" });
+  const before = await dump();
+  expect(await (await b.post(`/accounts/${row.id}/name`, { name: "Changed" })).json()).toEqual({
+    outcome: "not_found",
+  });
+  expect(await dump()).toEqual(before);
+});
+
+it("lists accounts in creation order and preserves that order after rename", async () => {
+  await seedAccount({ name: "Alpha newest", created_at: NOW + 1 });
+  const older = await seedAccount({
+    name: "Zulu oldest",
+    email: "alex.projects@example.com",
+    created_at: NOW,
+  });
+  const b = await ownerBrowser();
+  let text = textOf(await (await b.get("/accounts")).text());
+  expect(text.indexOf("Zulu oldest")).toBeLessThan(text.indexOf("Alpha newest"));
+  expect(
+    await (await b.post(`/accounts/${older.id}/name`, { name: "Omega renamed" })).json(),
+  ).toEqual({ outcome: "ok" });
+  text = textOf(await (await b.get("/accounts")).text());
+  expect(text.indexOf("Omega renamed")).toBeLessThan(text.indexOf("Alpha newest"));
+});
+
+it.each([
+  { state: "removed" as const },
+  { health: "needs_reconnect" as const, access_token: null },
+  { health: "ready" as const, refresh_token: null },
+  { health: "blocked_by_admin" as const, refresh_token: null },
+])("rejects account rows that violate the persisted token contract: %j", async (invalid) => {
+  await expect(seedAccount(invalid)).rejects.toThrow(/CHECK constraint failed/);
+  expect(await accounts()).toEqual([]);
+});

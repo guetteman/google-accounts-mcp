@@ -17,6 +17,13 @@ const props = {
       workspace: false,
       status: { kind: "ready" as const },
     },
+    {
+      id: "22222222-2222-4222-8222-222222222222" as AccountView["id"],
+      name: "Projects",
+      email: "alex.projects@example.com",
+      workspace: false,
+      status: { kind: "needs_reconnect" as const },
+    },
   ],
   alert: null,
 };

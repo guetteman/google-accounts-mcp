@@ -114,3 +114,123 @@ it.each([390, 1280])(
   },
   15000,
 );
+
+it.each([390, 1280])(
+  "navigates Connect and Reconnect to the returned URL and keeps not-found errors on the page at %s px",
+  async (width) => {
+    for (const action of ["Connect a Google account", "Reconnect"]) {
+      for (const outcome of ["ok", "not_found"]) {
+        const page = await browser.newPage({ viewport: { width, height: 900 } });
+        page.setDefaultTimeout(2000);
+        try {
+          const destination = `https://google.example/authorize?flow=${encodeURIComponent(action)}`;
+          const posts: string[] = [];
+          await page.route("https://google.example/**", (route) =>
+            route.fulfill({ contentType: "text/html", body: "Fake Google authorization" }),
+          );
+          await page.route("**/accounts/**", (route) => {
+            posts.push(new URL(route.request().url()).pathname);
+            return route.fulfill({
+              contentType: "application/json",
+              body: JSON.stringify({ outcome, url: destination }),
+            });
+          });
+          await page.goto(origin);
+          const navigations: string[] = [];
+          page.on("request", (request) => {
+            if (request.isNavigationRequest()) navigations.push(request.url());
+          });
+          await page
+            .getByRole("button", { name: action, exact: true })
+            .filter({ visible: true })
+            .click();
+          if (outcome === "ok") {
+            await page.waitForURL(destination);
+            expect(navigations).toEqual([destination]);
+          } else {
+            const alert = page.getByRole("status");
+            await alert.waitFor();
+            expect(await alert.innerText()).toContain(
+              "This account no longer exists. Nothing changed. Reload the page.",
+            );
+            expect(page.url()).toBe(`${origin}/`);
+            expect(navigations).toEqual([]);
+          }
+          expect(posts).toEqual([
+            action === "Reconnect"
+              ? "/accounts/22222222-2222-4222-8222-222222222222/reconnect"
+              : "/accounts/connect",
+          ]);
+        } finally {
+          await page.close();
+        }
+      }
+    }
+  },
+  15000,
+);
+
+it.each(["light", "dark"] as const)(
+  "keeps the tinted Remove button at AA contrast in %s mode, including hover",
+  async (colorScheme) => {
+    const page = await browser.newPage({ viewport: { width: 390, height: 900 }, colorScheme });
+    page.setDefaultTimeout(2000);
+    try {
+      await page.goto(origin);
+      await page
+        .getByRole("button", { name: "Actions for Personal", exact: true })
+        .filter({ visible: true })
+        .click();
+      await page.getByRole("menuitem", { name: "Remove", exact: true }).click();
+      const button = page.getByRole("button", { name: "Remove", exact: true });
+      await button.waitFor();
+      for (const hover of [false, true]) {
+        if (hover) await button.hover();
+        else await page.getByRole("heading", { name: "Remove Personal?", exact: true }).hover();
+        await page.evaluate(async () => {
+          await Promise.all(
+            document
+              .getAnimations()
+              .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+              .map((a) => a.finished.catch(() => {})),
+          );
+        });
+        const contrast = await button.evaluate((element) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = 1;
+          const context = canvas.getContext("2d")!;
+          const rgb = (color: string) => {
+            context.clearRect(0, 0, 1, 1);
+            context.fillStyle = color;
+            context.fillRect(0, 0, 1, 1);
+            return Array.from(context.getImageData(0, 0, 1, 1).data);
+          };
+          const style = getComputedStyle(element);
+          const base = rgb(
+            getComputedStyle(element.closest('[role="alertdialog"]')!).backgroundColor,
+          );
+          const background = rgb(style.backgroundColor);
+          const alpha = background[3]! / 255;
+          const composed = background
+            .slice(0, 3)
+            .map((value, i) => value * alpha + base[i]! * (1 - alpha));
+          const luminance = (color: number[]) =>
+            color
+              .slice(0, 3)
+              .map((value) => {
+                const channel = value / 255;
+                return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+              })
+              .reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i]!, 0);
+          const foreground = luminance(rgb(style.color)),
+            behind = luminance(composed);
+          return (Math.max(foreground, behind) + 0.05) / (Math.min(foreground, behind) + 0.05);
+        });
+        expect(contrast, `${colorScheme}, hover=${hover}`).toBeGreaterThanOrEqual(4.5);
+      }
+    } finally {
+      await page.close();
+    }
+  },
+  15000,
+);

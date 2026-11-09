@@ -4,6 +4,7 @@ import "./support/account-checks";
 import { Browser } from "./support/browser";
 import {
   accounts,
+  call,
   finish,
   fixtureOpen,
   NOW,
@@ -11,8 +12,8 @@ import {
   seedAccount,
   start,
 } from "./support/accounts";
-import { google, SCOPES } from "./support/google";
-import { dump, observeStatements, statementFailingDb } from "./support/db";
+import { deferred, google, SCOPES } from "./support/google";
+import { dump, observeStatements, setOwner, statementFailingDb } from "./support/db";
 import { ORIGIN, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
 import { resetOwner } from "./support/connections";
 const DIDNT =
@@ -390,4 +391,85 @@ it("connects a long address with a default name limited to one hundred code poin
   expect(text).toContain("Ready");
   expect(text).toContain(`Connected ${email}.`);
   expect(text).toContain(email);
+});
+
+it("refuses a reconnect with a different subject even when its new address is unclaimed", async () => {
+  const target = await seedAccount({ sub: "original", name: "Projects" });
+  await seedAccount({ email: "alex.projects@example.com", sub: "unrelated" });
+  const b = await ownerBrowser();
+  const before = await dump();
+  const result = await finish(b, (await start(b, target.id)).url, {
+    claims: { sub: "different", email: "new.address@example.com" },
+  });
+  expect(result.text).toContain(
+    `Nothing changed. You signed in to Google as new.address@example.com, but this reconnect is for ${target.email}.`,
+  );
+  expect(await dump()).toEqual(before);
+});
+
+it("seals the connected refresh token for its account and uses it for the first refresh", async () => {
+  const b = await ownerBrowser();
+  await finish(b, (await start(b)).url);
+  const row = (await accounts())[0]!;
+  const refresh = await fixtureOpen(`${row.id}:refresh`, row.refresh_token!);
+  expect(google.issuedRefresh.has(refresh)).toBe(true);
+  vi.spyOn(Date, "now").mockReturnValue(NOW + 3600000);
+  expect(await call(row.id)).toMatchObject({ status: 200 });
+  expect(google.refreshTokens).toEqual([refresh]);
+  expect(google.events).toEqual(["exchange", "refresh", "gmail"]);
+});
+
+it("refuses an add whose owner resets and repins immediately before the insert", async () => {
+  const b = await ownerBrowser();
+  const { url } = await start(b);
+  const entered = deferred(),
+    release = deferred();
+  const db = observeStatements(env.DB, async (sql) => {
+    if (/INSERT INTO accounts/.test(sql)) {
+      entered.resolve();
+      await release.promise;
+    }
+  });
+  const pending = b.get(google.issueCode(url), { env: testEnv({ DB: db }) });
+  try {
+    expect(
+      await Promise.race([entered.promise.then(() => "paused"), pending.then(() => "finished")]),
+    ).toBe("paused");
+    await resetOwner();
+    await setOwner({ state: "pinned", generation: 2, email: OWNER_EMAIL });
+    release.resolve();
+    expect((await pending).status).toBe(303);
+    expect(await accounts()).toEqual([]);
+    expect(textOf(await (await b.get("/accounts")).text())).toContain(DIDNT);
+  } finally {
+    release.resolve();
+    await pending;
+  }
+});
+
+it("rejects a future-dated flow cookie without exchanging its valid code", async () => {
+  const b = await ownerBrowser();
+  const { url } = await start(b);
+  const name = `__Host-g-${url.searchParams.get("state")}`;
+  const value = JSON.parse(decodeURIComponent(b.cookies.get(ORIGIN)!.get(name)!));
+  value.startedAt = NOW + 1;
+  const before = await dump();
+  const response = await b.get(google.issueCode(url), {
+    headers: { Cookie: `${name}=${encodeURIComponent(JSON.stringify(value))}` },
+  });
+  expect(response.status).toBe(303);
+  expect(textOf(await (await b.get("/accounts")).text())).toContain(DIDNT);
+  expect(await dump()).toEqual(before);
+  expect(google.events).toEqual([]);
+});
+
+it("refuses a callback carrying both a valid code and a Google error", async () => {
+  const b = await ownerBrowser();
+  const { url } = await start(b);
+  const before = await dump();
+  const response = await b.get(`${google.issueCode(url)}&error=access_denied`);
+  expect(response.status).toBe(303);
+  expect(textOf(await (await b.get("/accounts")).text())).toContain(DIDNT);
+  expect(await dump()).toEqual(before);
+  expect(google.events).toEqual([]);
 });

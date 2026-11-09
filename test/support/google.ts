@@ -7,7 +7,12 @@ export const SCOPES = ["gmail.readonly", "gmail.compose", "gmail.send", "gmail.m
   .map((s) => `https://www.googleapis.com/auth/${s}`)
   .concat("https://mail.google.com/");
 export const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
-export const token = () => `${MARKER}${crypto.randomUUID()}`;
+export const issuedTokens = new Set<string>();
+export const token = () => {
+  const value = `${MARKER}${crypto.randomUUID()}`;
+  issuedTokens.add(value);
+  return value;
+};
 export type Answer =
   | "ok"
   | "invalid_grant"
@@ -15,11 +20,13 @@ export type Answer =
   | "invalid_client"
   | "slow"
   | 503
-  | 429;
+  | 429
+  | { status: number; body: string; headers?: Record<string, string> };
 export interface CodeOptions {
   claims?: Record<string, unknown>;
   scope?: string;
   noRefresh?: boolean;
+  accessToken?: string;
 }
 interface Code extends CodeOptions {
   state: string;
@@ -41,8 +48,10 @@ export const google = {
   gmailAnswers: [] as (number | "lost")[],
   events: [] as string[],
   refreshTokens: [] as string[],
+  tokenRedirects: [] as RequestRedirect[],
   gmailTokens: [] as string[],
   issuedAccess: [] as string[],
+  issuedRefresh: new Set<string>(),
   pending: [] as ReturnType<typeof deferred>[],
   reset() {
     this.release();
@@ -53,12 +62,20 @@ export const google = {
     this.gmailAnswers = [];
     this.events = [];
     this.refreshTokens = [];
+    this.tokenRedirects = [];
     this.gmailTokens = [];
     this.issuedAccess = [];
+    this.issuedRefresh.clear();
+    issuedTokens.clear();
   },
   release() {
     this.pending.forEach((p) => p.resolve());
     this.pending = [];
+  },
+  issueRefreshToken() {
+    const value = token();
+    this.issuedRefresh.add(value);
+    return value;
   },
   issueCode(url: URL, options: CodeOptions = {}) {
     const code = crypto.randomUUID();
@@ -71,6 +88,8 @@ export const google = {
     return `/google/callback?${new URLSearchParams({ code, state: url.searchParams.get("state")! })}`;
   },
   async answer(answer: Answer) {
+    if (typeof answer === "object")
+      return new HttpResponse(answer.body, { status: answer.status, headers: answer.headers });
     if (answer === "slow") {
       const pending = deferred();
       this.pending.push(pending);
@@ -83,6 +102,7 @@ export const google = {
   handlers() {
     return [
       http.post("https://oauth2.googleapis.com/token", async ({ request }) => {
+        this.tokenRedirects.push(request.redirect);
         const form = new URLSearchParams(new TextDecoder().decode(await request.arrayBuffer()));
         if (
           form.get("client_id") !== testEnv().GOOGLE_CLIENT_ID ||
@@ -92,6 +112,8 @@ export const google = {
         if (form.get("grant_type") === "refresh_token") {
           this.events.push("refresh");
           this.refreshTokens.push(form.get("refresh_token")!);
+          if (!this.issuedRefresh.has(form.get("refresh_token")!))
+            return HttpResponse.json({ error: "invalid_grant" }, { status: 400 });
           const failure = await this.answer(this.refreshAnswers.shift() ?? "ok");
           if (failure) return failure;
           const access = token();
@@ -118,24 +140,27 @@ export const google = {
           return HttpResponse.json({ error: "invalid_grant" }, { status: 400 });
         const failure = await this.answer(this.exchangeAnswer);
         if (failure) return failure;
-        const access = token();
+        const access = entry.accessToken ?? token();
+        if (access) issuedTokens.add(access);
         this.issuedAccess.push(access);
+        const idToken = unsignedAssertion({
+          iss: "https://accounts.google.com",
+          aud: testEnv().GOOGLE_CLIENT_ID,
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          sub: "personal",
+          email: OWNER_EMAIL,
+          email_verified: true,
+          test_marker: token(),
+          ...entry.claims,
+        });
+        issuedTokens.add(idToken);
         return HttpResponse.json({
           access_token: access,
-          ...(entry.noRefresh ? {} : { refresh_token: token() }),
+          ...(entry.noRefresh ? {} : { refresh_token: this.issueRefreshToken() }),
           expires_in: 3600,
           token_type: "Bearer",
           scope: entry.scope ?? ["openid", "email", ...SCOPES].join(" "),
-          id_token: unsignedAssertion({
-            iss: "https://accounts.google.com",
-            aud: testEnv().GOOGLE_CLIENT_ID,
-            exp: Math.floor(Date.now() / 1000) + 3600,
-            sub: "personal",
-            email: OWNER_EMAIL,
-            email_verified: true,
-            test_marker: token(),
-            ...entry.claims,
-          }),
+          id_token: idToken,
         });
       }),
       http.post("https://oauth2.googleapis.com/revoke", async ({ request }) => {

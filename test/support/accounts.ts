@@ -80,7 +80,7 @@ export async function seedAccount(overrides: Partial<AccountRow> = {}) {
     scopes: JSON.stringify(SCOPES),
     health: "ready",
     blocked_until: null,
-    refresh_token: await fixtureSeal(`${id}:refresh`, token()),
+    refresh_token: await fixtureSeal(`${id}:refresh`, google.issueRefreshToken()),
     access_token: await fixtureSeal(`${id}:access`, token()),
     access_expires_at: NOW + 3000000,
     ...overrides,
@@ -148,5 +148,7 @@ export async function call(id: AccountId, db = env.DB, snapshot?: Credential) {
     observedBodies.push(result.failure);
     return { error: result.failure._tag, detail: result.failure };
   }
-  return { status: result.success.status, body: await result.success.text() };
+  const body = await result.success.text();
+  observedBodies.push(body);
+  return { status: result.success.status, body };
 }

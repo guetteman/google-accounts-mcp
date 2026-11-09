@@ -1,3 +1,6 @@
+import { Effect } from "effect";
+import { loadCredential } from "../src/accounts/store";
+import { normalizeEmail, readOwner } from "../src/owner/owner";
 import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
@@ -13,7 +16,7 @@ import {
   start,
 } from "./support/accounts";
 import { deferred, google, MARKER, SCOPES } from "./support/google";
-import { dump, observeStatements, statementFailingDb } from "./support/db";
+import { dump, observeStatements, setOwner, statementFailingDb } from "./support/db";
 import { resetOwner } from "./support/connections";
 import { textOf } from "./support/worker";
 
@@ -366,3 +369,76 @@ it.each(["reconnect", "remove"])(
     }
   },
 );
+
+it.each(["stale generation", "other owner email", "removed ready", "removed needs reconnect"])(
+  "refuses a credential read for %s",
+  async (kind) => {
+    const row = await seedAccount(
+      kind.startsWith("removed")
+        ? {
+            state: "removed",
+            refresh_token: null,
+            access_token: null,
+            health: kind === "removed ready" ? "ready" : "needs_reconnect",
+          }
+        : {},
+    );
+    const pinned = await Effect.runPromise(readOwner(env.DB));
+    const owner = { generation: pinned.generation, email: pinned.email! };
+    if (kind === "stale generation") {
+      await setOwner({ state: "pinned", generation: 2, email: row.email });
+      await env.DB.prepare("UPDATE accounts SET generation = 2 WHERE id = ?").bind(row.id).run();
+    }
+    if (kind === "other owner email") owner.email = normalizeEmail("another@example.com")!;
+    expect(await Effect.runPromise(loadCredential(env.DB, owner, row.id))).toBeNull();
+    expect(google.events).toEqual([]);
+  },
+);
+
+it("keeps the admin retry window closed at nine minutes and fifty-nine seconds", async () => {
+  const row = await seedAccount({ access_expires_at: NOW });
+  google.refreshAnswers = ["admin_policy_enforced"];
+  expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
+  const before = await accounts();
+  vi.spyOn(Date, "now").mockReturnValue(NOW + 599000);
+  expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
+  expect(google.events).toEqual(["refresh"]);
+  expect(await accounts()).toEqual(before);
+});
+
+it("returns a Gmail 401 after a proactive refresh without another refresh or resend", async () => {
+  const row = await seedAccount({ access_expires_at: NOW });
+  google.gmailAnswers = [401];
+  expect(await call(row.id)).toMatchObject({ status: 401 });
+  expect(google.events).toEqual(["refresh", "gmail"]);
+});
+
+it("does not replace needs-reconnect health with a late admin-block result", async () => {
+  const row = await seedAccount({ access_expires_at: NOW });
+  const snapshot = await credential(row.id);
+  const entered = deferred(),
+    release = deferred();
+  const db = observeStatements(env.DB, async (sql) => {
+    if (/UPDATE accounts/.test(sql)) {
+      entered.resolve();
+      await release.promise;
+    }
+  });
+  google.refreshAnswers = ["admin_policy_enforced"];
+  const pending = call(row.id, db, snapshot);
+  try {
+    expect(
+      await Promise.race([entered.promise.then(() => "paused"), pending.then(() => "finished")]),
+    ).toBe("paused");
+    google.refreshAnswers = ["invalid_grant"];
+    expect(await call(row.id, env.DB, snapshot)).toMatchObject({ error: "NeedsReconnect" });
+    const before = await accounts();
+    release.resolve();
+    expect(await pending).toMatchObject({ error: "NeedsReconnect" });
+    expect(await accounts()).toEqual(before);
+    expect(google.gmailTokens).toEqual([]);
+  } finally {
+    release.resolve();
+    await pending;
+  }
+});
