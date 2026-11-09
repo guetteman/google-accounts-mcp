@@ -15,3 +15,10 @@ When you design or prototype a page, start from shadcn components and apply Refa
 - Agents must never deploy.
 - Keep `.gitignore` in place before you run `vp check --fix`; otherwise it can rewrite `node_modules` and corrupt the pnpm store.
 - When you stop `pnpm dev`, stop its entire process group so that Vite and workerd do not keep running.
+
+## Local development and verification
+
+- Install dependencies with `vp install`. Run `vp check`, `pnpm exec wrangler types --check`, `vp test run`, and `vp build` before handing off a change. Tests include Worker tests in workerd and Node tests for the reset command, with fake Access signing keys and a fake certs endpoint.
+- Run `vp dev` for page previews at `/__pages/:id`: `access-refused`, `access-unavailable`, `not-owner`, `mismatch`, `setup-incomplete`, `setup-incomplete-two`, `unavailable`, `accounts`, and `connections`. Previews pass through the owner gate, so they need a `.dev.vars` with the three settings (`OWNER_EMAIL=alex.personal@example.com`, `ACCESS_ISSUER=https://example-team.cloudflareaccess.com`, and a 64-hex `ACCESS_AUDIENCE` are enough) and the migration applied with `pnpm exec wrangler d1 migrations apply DB --local`. They exist only in development builds.
+- Use `pnpm owner:reset --local` to reset local D1. The command defaults to remote D1 when `--local` is omitted. It reports the database, configuration, environment, stored owner, and generation before asking for confirmation. It takes the environment from `--env` or the `CLOUDFLARE_ENV` environment variable, not from `.env` files, and guards every statement on the database's `instance`, so a reset confirmed for one database changes nothing in another. Pass `--persist-to`, `--env`, or `--config` to select the same database as the local Worker.
+- Until `wrangler.jsonc` has a `database_id`, local D1 state is keyed by the `DB` binding. Adding an ID switches to a different local database; apply migrations to that database before using it.
