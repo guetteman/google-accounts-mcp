@@ -26,7 +26,7 @@ async function expired(response: Response) {
 
 describe("owner consent", () => {
   for (const method of ["GET", "POST"]) {
-    it.fails.each(["missing", "invalid", "another email", "keys unavailable"])(
+    it.each(["missing", "invalid", "another email", "keys unavailable"])(
       `requires the owner at ${method} consent with %s identity`,
       async (kind) => {
         await pinOwner();
@@ -85,7 +85,7 @@ describe("owner consent", () => {
     },
   );
 
-  it.fails.each(["no cookie", "another browser", "another handle", "already used", "too old"])(
+  it.each(["no cookie", "another browser", "another handle", "already used", "too old"])(
     "expires a consent with %s without creating another connection",
     async (kind) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -130,7 +130,7 @@ describe("owner consent", () => {
     },
   );
 
-  it.fails("rechecks Access at submission even after the owner opened consent", async () => {
+  it("rechecks Access at submission even after the owner opened consent", async () => {
     const mcp = new McpClient();
     await mcp.authorize();
     const before = await dump();
@@ -141,7 +141,7 @@ describe("owner consent", () => {
     expect(await dump()).toEqual(before);
   });
 
-  it.fails("shows the local app warning and creates only the named new connection at exchange", async () => {
+  it("shows the local app warning and creates only the named new connection at exchange", async () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const mcp = new McpClient();
     const { html } = await mcp.authorize();
@@ -186,7 +186,7 @@ describe("owner consent", () => {
     expect(await (await mcp.call()).text()).toContain('"tools":[]');
   });
 
-  it.fails.each(["form", "query"])(
+  it.each(["form", "query"])(
     "ignores forged app and connection values in the consent %s",
     async (source) => {
       const mcp = new McpClient();
@@ -212,7 +212,7 @@ describe("owner consent", () => {
     },
   );
 
-  it.fails.each([
+  it.each([
     { label: "blank", name: "   \t\n" },
     { label: "over one hundred letters", name: "a".repeat(101) },
     { label: "over one hundred emoji", name: "😀".repeat(101) },
@@ -231,13 +231,13 @@ describe("owner consent", () => {
     expect((await onlyConnection()).name).toBe("Work laptop");
   });
 
-  it.fails("trims and stores exactly one hundred Unicode code points including emoji", async () => {
+  it("trims and stores exactly one hundred Unicode code points including emoji", async () => {
     const name = `${"a".repeat(99)}😀`;
     await new McpClient().connect(`  ${name}  `);
     expect((await onlyConnection()).name).toBe(name);
   });
 
-  it.fails("shows database unavailable without a code when KV fails during approval", async () => {
+  it("shows database unavailable without a code when KV fails during approval", async () => {
     const mcp = new McpClient();
     await mcp.authorize();
     const response = await mcp.consent(
@@ -265,7 +265,7 @@ describe("owner consent", () => {
     expect((await kvDump()).filter((e) => e.name.startsWith("grant:"))).toEqual([]);
   });
 
-  it.fails.each(["GET", "approval"])(
+  it.each(["GET", "approval"])(
     "reports an unreachable client document during %s without creating a grant",
     async (stage) => {
       const mcp = new McpClient();
@@ -285,7 +285,7 @@ describe("owner consent", () => {
     },
   );
 
-  it.fails("keeps two Claude Code laptops on the same callback port independently connected", async () => {
+  it("keeps two Claude Code laptops on the same callback port independently connected", async () => {
     const first = await new McpClient().connect("Work laptop");
     const second = await new McpClient().connect("Personal laptop");
     const all = await rows();
@@ -299,7 +299,7 @@ describe("owner consent", () => {
     }
   });
 
-  it.fails("keeps the code retryable when connection statements fail at exchange", async () => {
+  it("keeps the code retryable when connection statements fail at exchange", async () => {
     const mcp = new McpClient();
     await mcp.authorize();
     await mcp.approve();
@@ -315,7 +315,7 @@ describe("owner consent", () => {
     expect(await rows()).toHaveLength(1);
   });
 
-  it.fails.each([false, true])(
+  it.each([false, true])(
     "deduplicates a committed exchange retry and refuses it if revoked is %s",
     async (revoked) => {
       const mcp = new McpClient();
@@ -340,7 +340,7 @@ describe("owner consent", () => {
     },
   );
 
-  it.fails("revokes a replayed code grant while leaving its connection active and last used unchanged", async () => {
+  it("revokes a replayed code grant while leaving its connection active and last used unchanged", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
     const mcp = await new McpClient().connect();
     expect((await mcp.call()).status).toBe(200);
@@ -356,7 +356,7 @@ describe("owner consent", () => {
     expect(textOf(await (await mcp.browser.get("/connections")).text())).toContain("Active");
   });
 
-  it.fails("refuses an approved code from before reset after the owner pins again", async () => {
+  it("refuses an approved code from before reset after the owner pins again", async () => {
     const mcp = new McpClient();
     await mcp.authorize();
     await mcp.approve();
@@ -366,7 +366,7 @@ describe("owner consent", () => {
     expect(await rows()).toEqual([]);
   });
 
-  it.fails("expires a consent page shown before reset when submission pins the owner again", async () => {
+  it("expires a consent page shown before reset when submission pins the owner again", async () => {
     const mcp = new McpClient();
     await mcp.authorize();
     expect(mcp.form!.fields.generation).toBe("1");
@@ -376,7 +376,7 @@ describe("owner consent", () => {
     expect((await kvDump()).filter((e) => e.name.startsWith("grant:"))).toEqual([]);
   });
 
-  it.fails.each(clients)(
+  it.each(clients)(
     "allows only $label callback origin in consent CSP and cancels without a grant",
     async (client) => {
       const mcp = new McpClient(client);

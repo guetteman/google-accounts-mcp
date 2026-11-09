@@ -8,10 +8,11 @@ describe("hydration props", () => {
   it.each(["accounts", "connections"] as const)(
     "escapes HTML delimiters and preserves the exact host in the %s props",
     async (current) => {
-      const page = {
-        _tag: current === "accounts" ? ("Accounts" as const) : ("Connections" as const),
-        frame: { host, current, ownerEmail: OWNER_EMAIL },
-      };
+      const frame = { host, current, ownerEmail: OWNER_EMAIL };
+      const page: import("../src/pages/page").Page =
+        current === "accounts"
+          ? { _tag: "Accounts", frame }
+          : { _tag: "Connections", frame, connections: [], mcpUrl: `https://${host}/mcp` };
       const html = await renderPage(page).text();
       expect(html).not.toContain("<script>alert(1)</script>");
       const blob = /<script\b[^>]*id="page-props"[^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];

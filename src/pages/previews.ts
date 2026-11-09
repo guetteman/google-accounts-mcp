@@ -1,5 +1,49 @@
+import { acceptAuthorize } from "../oauth/clients";
+import type { ConnectionView } from "../connections/model";
 import type { Page } from "./page";
 
+const connections: ReadonlyArray<ConnectionView> = [
+  {
+    id: "11111111-1111-4111-8111-111111111111" as ConnectionView["id"],
+    name: "Work laptop",
+    appLabel: "Claude Code",
+    status: { kind: "active" },
+    lastUsed: "Nov 9",
+    created: "Nov 1",
+  },
+  {
+    id: "22222222-2222-4222-8222-222222222222" as ConnectionView["id"],
+    name: "Claude",
+    appLabel: "Claude",
+    status: { kind: "active" },
+    lastUsed: "Nov 8",
+    created: "Nov 1",
+  },
+  {
+    id: "33333333-3333-4333-8333-333333333333" as ConnectionView["id"],
+    name: "ChatGPT",
+    appLabel: "ChatGPT",
+    status: { kind: "active" },
+    lastUsed: "Never",
+    created: "Nov 1",
+  },
+  {
+    id: "44444444-4444-4444-8444-444444444444" as ConnectionView["id"],
+    name: "Old laptop",
+    appLabel: "Claude Code",
+    status: { kind: "expired", on: "Nov 6" },
+    lastUsed: "Aug 8",
+    created: "Aug 8",
+  },
+  {
+    id: "55555555-5555-4555-8555-555555555555" as ConnectionView["id"],
+    name: "Personal laptop",
+    appLabel: "Claude Code",
+    status: { kind: "revoked", on: "Sep 14" },
+    lastUsed: "Sep 14",
+    created: "Sep 1",
+  },
+];
 const host = "accounts-mcp.example.com";
 export const previews: Readonly<Record<string, Page>> = {
   "access-refused": { _tag: "AccessRefused", host },
@@ -13,8 +57,47 @@ export const previews: Readonly<Record<string, Page>> = {
     _tag: "Accounts",
     frame: { host, ownerEmail: "owner@example.com", current: "accounts" },
   },
+  "client-refused": { _tag: "ClientRefused" },
+  "consent-expired": { _tag: "ConsentExpired" },
+  ...Object.fromEntries(
+    [
+      [
+        "claude-code",
+        "https://claude.ai/oauth/claude-code-client-metadata",
+        "http://localhost:3118/callback",
+      ],
+      [
+        "claude",
+        "https://claude.ai/oauth/mcp-oauth-client-metadata",
+        "https://claude.ai/api/mcp/auth_callback",
+      ],
+      [
+        "chatgpt",
+        "https://chatgpt.com/oauth/client.json",
+        "https://chatgpt.com/connector_platform_oauth_redirect",
+      ],
+    ].map(([id, clientId, callback]) => [
+      `consent-${id}`,
+      {
+        _tag: "Consent" as const,
+        host,
+        ownerEmail: "owner@example.com",
+        client: acceptAuthorize(clientId!, callback!)!,
+        handle: "preview",
+        generation: 1,
+      },
+    ]),
+  ),
+  "connections-empty": {
+    _tag: "Connections",
+    frame: { host, ownerEmail: "owner@example.com", current: "connections" },
+    connections: [],
+    mcpUrl: `https://${host}/mcp`,
+  },
   connections: {
     _tag: "Connections",
+    connections,
+    mcpUrl: `https://${host}/mcp`,
     frame: { host, ownerEmail: "owner@example.com", current: "connections" },
   },
 };

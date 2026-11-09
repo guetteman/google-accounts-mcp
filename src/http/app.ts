@@ -2,6 +2,8 @@ import { Result } from "effect";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { readConfig } from "../config";
+import { consentRoutes } from "../oauth/consent";
+import { connectionRoutes } from "../connections/routes";
 import { ownerRoutes } from "../owner/routes";
 import { renderPage } from "../pages/render";
 import type { PageEnv } from "./context";
@@ -29,6 +31,8 @@ app.use("*", async (c, next) => {
   c.set("config", config.success);
   await next();
 });
+app.route("/", consentRoutes);
+app.route("/", connectionRoutes);
 app.route("/", ownerRoutes);
 if (import.meta.env.DEV) {
   const { previews } = await import("../pages/previews");

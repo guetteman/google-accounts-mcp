@@ -31,7 +31,7 @@ function tableRows(html: string) {
   return [...body!.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => m[1]!);
 }
 
-it.fails("lists every current-generation connection with active newest first then most recently ended", async () => {
+it("lists every current-generation connection with active newest first then most recently ended", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await setOwner({ state: "pinned", generation: 3, email: OWNER_EMAIL });
   await seedConnection({ generation: 2, name: "Old owner connection" });
@@ -66,7 +66,7 @@ it.fails("lists every current-generation connection with active newest first the
   for (const row of listed) expect(row).toContain("Never");
 });
 
-it.fails("formats dates in UTC and leaves ended connections without action menus", async () => {
+it("formats dates in UTC and leaves ended connections without action menus", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await pinOwner();
   await seedConnection({
@@ -103,7 +103,7 @@ it.fails("formats dates in UTC and leaves ended connections without action menus
   }
 });
 
-it.fails("renames an active connection by changing only its trimmed name", async () => {
+it("renames an active connection by changing only its trimmed name", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await pinOwner();
   const row = await seedConnection();
@@ -123,7 +123,7 @@ it.fails("renames an active connection by changing only its trimmed name", async
   expect(await dump()).toEqual(expected);
 });
 
-it.fails.each(["revoked", "expired"])(
+it.each(["revoked", "expired"])(
   "leaves an already %s connection unchanged on rename and revoke",
   async (state) => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -144,7 +144,7 @@ it.fails.each(["revoked", "expired"])(
   },
 );
 
-it.fails("returns not found for unknown connection actions without changing anything", async () => {
+it("returns not found for unknown connection actions without changing anything", async () => {
   await pinOwner();
   await seedConnection();
   const browser = await ownerBrowser();
@@ -160,7 +160,7 @@ it.fails("returns not found for unknown connection actions without changing anyt
   }
 });
 
-it.fails.each([
+it.each([
   { label: "blank", name: " " },
   { label: "over one hundred letters", name: "a".repeat(101) },
   { label: "over one hundred emoji", name: "😀".repeat(101) },
@@ -176,7 +176,7 @@ it.fails.each([
   expect(await dump()).toEqual(before);
 });
 
-it.fails("accepts a rename of exactly one hundred Unicode code points", async () => {
+it("accepts a rename of exactly one hundred Unicode code points", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await pinOwner();
   const row = await seedConnection();
@@ -189,7 +189,7 @@ it.fails("accepts a rename of exactly one hundred Unicode code points", async ()
   expect((await onlyConnection()).name).toBe(name);
 });
 
-it.fails("marks revoke at the current time and cleans up only that grant afterwards", async () => {
+it("marks revoke at the current time and cleans up only that grant afterwards", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   const mcp = await new McpClient().connect();
   const row = await onlyConnection();
@@ -234,7 +234,7 @@ it.each(["database outage", "owner mismatch"])(
   },
 );
 
-it.fails("reports connection read failures as unavailable before any write", async () => {
+it("reports connection read failures as unavailable before any write", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await pinOwner();
   await seedConnection();
@@ -251,7 +251,7 @@ it.fails("reports connection read failures as unavailable before any write", asy
   expect(await dump()).toEqual(before);
 });
 
-it.fails.each(["name", "revoke"])(
+it.each(["name", "revoke"])(
   "reports an uncertain %s write and reloads the actual D1 state",
   async (action) => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -273,7 +273,7 @@ it.fails.each(["name", "revoke"])(
   },
 );
 
-it.fails("returns not found for actions from a page loaded before reset", async () => {
+it("returns not found for actions from a page loaded before reset", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await pinOwner();
   const row = await seedConnection();
@@ -296,7 +296,7 @@ it.fails("returns not found for actions from a page loaded before reset", async 
 });
 
 for (const action of ["name", "revoke"]) {
-  it.fails.each(["generation", "email"])(
+  it.each(["generation", "email"])(
     `guards each ${action} statement when owner %s changes after verification`,
     async (field) => {
       vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -323,7 +323,7 @@ for (const action of ["name", "revoke"]) {
   );
 }
 
-it.fails("shows the deploy MCP URL and Copy button when there are no connections", async () => {
+it("shows the deploy MCP URL and Copy button when there are no connections", async () => {
   const browser = await ownerBrowser();
   const response = await browser.get("/connections");
   expect(response.status).toBe(200);
@@ -342,7 +342,7 @@ it.fails("shows the deploy MCP URL and Copy button when there are no connections
   ).toBe(true);
 });
 
-it.fails("reports an uncertain response after a committed rename and reloads the changed name", async () => {
+it("reports an uncertain response after a committed rename and reloads the changed name", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await pinOwner();
   const row = await seedConnection();

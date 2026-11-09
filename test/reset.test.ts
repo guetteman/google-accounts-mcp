@@ -214,7 +214,7 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
     }
   });
 
-  it.fails("deletes connections with exactly this reset's guard", () => {
+  it("deletes connections with exactly this reset's guard", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
     expect(RESET_CLEANUP).toHaveLength(1);
@@ -245,7 +245,7 @@ describe("two owner requests racing to pin", () => {
   });
 });
 
-it.fails("deletes every connection while resetting and leaves another database or newer generation intact", async () => {
+it("deletes every connection while resetting and leaves another database or newer generation intact", async () => {
   await pinnedOwner(2);
   await seedConnection({ generation: 1 });
   await seedConnection({ generation: 2, state: "revoked", revoked_at: NOW });
@@ -269,7 +269,7 @@ it.fails("deletes every connection while resetting and leaves another database o
   expect(await dump()).toEqual(repinned);
 });
 
-it.fails("continues connection cleanup after an interrupted reset", async () => {
+it("continues connection cleanup after an interrupted reset", async () => {
   await pinnedOwner(1);
   await seedConnection();
   const plan = resetPlan(await readForPlan(), NOW);

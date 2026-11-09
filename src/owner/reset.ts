@@ -8,7 +8,9 @@ export interface ResetPlan {
 
 export type ResetOutcome = "done" | "overtaken" | "unknown";
 
-export const RESET_CLEANUP: ReadonlyArray<(c: { guard: string; now: number }) => string> = [];
+export const RESET_CLEANUP: ReadonlyArray<(c: { guard: string; now: number }) => string> = [
+  ({ guard }) => `DELETE FROM connections WHERE ${guard}`,
+];
 
 /**
  * The statements of a reset of the database whose owner row was read as `row`. Every statement

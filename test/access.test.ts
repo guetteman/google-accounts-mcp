@@ -153,7 +153,7 @@ describe("Access owner check", () => {
     expect((await browser.get("/")).status).toBe(503);
   });
 
-  it.fails.each(["missing", "invalid", "another address"])(
+  it.each(["missing", "invalid", "another address"])(
     "attempts no writes and reveals no owner on any owner route with %s identity",
     async (kind) => {
       await prepareWrites();

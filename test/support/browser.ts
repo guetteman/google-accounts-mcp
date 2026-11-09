@@ -12,6 +12,7 @@ export interface RequestOptions {
 /** A browser behind fake Access, with host-only cookies kept separately for each origin. */
 export class Browser {
   assertion?: string;
+  private readonly cookieExpiries = new Map<string, number>();
   readonly cookies = new Map<string, Map<string, string>>();
   constructor(private readonly defaultEnv: () => Env = () => testEnv()) {}
 
@@ -27,6 +28,11 @@ export class Browser {
       headers.set("Cf-Access-Jwt-Assertion", this.assertion);
     if (!headers.has("Cookie")) {
       const jar = this.cookies.get(url.origin);
+      if (jar)
+        for (const name of jar.keys()) {
+          const expiry = this.cookieExpiries.get(`${url.origin}|${name}`);
+          if (expiry !== undefined && expiry <= Date.now()) jar.delete(name);
+        }
       if (jar?.size) headers.set("Cookie", [...jar].map(([k, v]) => `${k}=${v}`).join("; "));
     }
     const origin = options.origin === undefined ? url.origin : options.origin;
@@ -47,7 +53,12 @@ export class Browser {
       const name = pair.slice(0, equals);
       const value = pair.slice(equals + 1);
       if (/Max-Age=0(?:;|$)/i.test(cookie)) jar.delete(name);
-      else jar.set(name, value);
+      else {
+        jar.set(name, value);
+        const maxAge = /Max-Age=(\d+)(?:;|$)/i.exec(cookie)?.[1];
+        if (maxAge !== undefined)
+          this.cookieExpiries.set(`${url.origin}|${name}`, Date.now() + Number(maxAge) * 1000);
+      }
     }
     this.cookies.set(url.origin, jar);
     return response;

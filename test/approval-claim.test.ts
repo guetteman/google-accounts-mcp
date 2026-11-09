@@ -9,7 +9,7 @@ import { OWNER_EMAIL } from "./support/worker";
 const stores = import.meta.glob<{
   activeWhere: (p: { now: string; ownerEmail: string }) => string;
 }>("../src/connections/store.ts");
-it.fails.each(["active", "revoked", "expired", "mismatched owner", "reset"])(
+it.each(["active", "revoked", "expired", "mismatched owner", "reset"])(
   "claims an approval atomically only when its connection is active during %s",
   async (state) => {
     await pinOwner();

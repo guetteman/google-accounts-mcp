@@ -5,7 +5,7 @@ import { brokenDb, dump, failingKv, kvDump, restoreKv, statementFailingDb } from
 import { clients, expectOAuthError, McpClient, rpcResult } from "./support/oauth";
 import { callWorker, ORIGIN, testEnv, textOf } from "./support/worker";
 
-it.fails("refuses a revoked connection even with stale KV while another connection keeps working", async () => {
+it("refuses a revoked connection even with stale KV while another connection keeps working", async () => {
   const revoked = await new McpClient().connect("Work laptop");
   const first = await onlyConnection();
   const other = await new McpClient().connect("Personal laptop");
@@ -24,7 +24,7 @@ it.fails("refuses a revoked connection even with stale KV while another connecti
 });
 
 describe("ninety days without refreshing", () => {
-  it.fails.each([89, 91])(
+  it.each([89, 91])(
     "handles a first refresh on day %s and shows the original expiry date",
     async (day) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -46,7 +46,7 @@ describe("ninety days without refreshing", () => {
     },
   );
 
-  it.fails("keeps a client that refreshes every twenty days working on day two hundred", async () => {
+  it("keeps a client that refreshes every twenty days working on day two hundred", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
     const mcp = await new McpClient().connect();
     for (let day = 20; day <= 200; day += 20) {
@@ -57,7 +57,7 @@ describe("ninety days without refreshing", () => {
     expect((await mcp.call()).status).toBe(200);
   });
 
-  it.fails("refuses an expired D1 connection while its access token and KV grant remain valid", async () => {
+  it("refuses an expired D1 connection while its access token and KV grant remain valid", async () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const mcp = await new McpClient().connect();
     expect((await mcp.call()).status).toBe(200);
@@ -71,7 +71,7 @@ describe("ninety days without refreshing", () => {
     expect(await kvDump()).toEqual(beforeKv);
   });
 
-  it.fails("updates last used only on MCP calls and extends expiry only on refresh", async () => {
+  it("updates last used only on MCP calls and extends expiry only on refresh", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
     const mcp = await new McpClient().connect();
     expect((await onlyConnection()).last_used_at).toBeNull();
@@ -93,7 +93,7 @@ describe("ninety days without refreshing", () => {
 const mcpModules = import.meta.glob<{ createMcpServer: (...args: unknown[]) => unknown }>(
   "../src/mcp/server.ts",
 );
-it.fails.each(clients)(
+it.each(clients)(
   "initializes with no tools and passes the stored $app identity to the MCP factory",
   async (client) => {
     const mcp = await new McpClient(client).connect();
@@ -130,7 +130,7 @@ it.fails.each(clients)(
   },
 );
 
-it.fails("refuses a grant whose connection row was deleted", async () => {
+it("refuses a grant whose connection row was deleted", async () => {
   const mcp = await new McpClient().connect();
   const row = await onlyConnection();
   await env.DB.prepare("DELETE FROM connections WHERE id = ?").bind(row.id).run();
@@ -139,7 +139,7 @@ it.fails("refuses a grant whose connection row was deleted", async () => {
   await expectOAuthError(await mcp.refresh(), "invalid_grant");
 });
 
-it.fails("leaves all data and grants intact during owner mismatch and resumes the pending consent", async () => {
+it("leaves all data and grants intact during owner mismatch and resumes the pending consent", async () => {
   const mcp = await new McpClient().connect();
   const pending = new McpClient();
   await pending.authorize();
@@ -162,7 +162,7 @@ it.fails("leaves all data and grants intact during owner mismatch and resumes th
   expect(await rows()).toHaveLength(2);
 });
 
-it.fails.each(["connections only", "all D1"])(
+it.each(["connections only", "all D1"])(
   "refuses MCP and keeps refresh retryable during %s outage",
   async (failure) => {
     const mcp = await new McpClient().connect();
@@ -178,7 +178,7 @@ it.fails.each(["connections only", "all D1"])(
   },
 );
 
-it.fails("turns every KV operation failure into service unavailable for MCP and tokens", async () => {
+it("turns every KV operation failure into service unavailable for MCP and tokens", async () => {
   const mcp = await new McpClient().connect();
   const down = testEnv({ OAUTH_KV: failingKv("all") });
   expect((await mcp.call(undefined, down)).status).toBe(503);
@@ -190,7 +190,7 @@ it.fails("turns every KV operation failure into service unavailable for MCP and 
   expect(await rows()).toHaveLength(1);
 });
 
-it.fails.each(["before grant save", "token put"])(
+it.each(["before grant save", "token put"])(
   "keeps the inserted row after KV fails at %s and treats the retry according to code consumption",
   async (window) => {
     const mcp = new McpClient();
@@ -226,7 +226,7 @@ it.fails.each(["before grant save", "token put"])(
   },
 );
 
-it.fails("removes all connections at reset and refuses old tokens and unfinished sign-ins", async () => {
+it("removes all connections at reset and refuses old tokens and unfinished sign-ins", async () => {
   const connected = await new McpClient().connect();
   const page = new McpClient();
   await page.authorize();

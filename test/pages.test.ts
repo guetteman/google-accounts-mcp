@@ -132,7 +132,7 @@ describe("unimplemented and removed routes", () => {
   });
 });
 
-it.fails("challenges an unauthenticated MCP request instead of serving a page", async () => {
+it("challenges an unauthenticated MCP request instead of serving a page", async () => {
   const response = await new Browser().get("/mcp");
   expect(response.status).toBe(401);
   expect(response.headers.get("WWW-Authenticate")).toContain('Bearer realm="OAuth"');
@@ -141,7 +141,7 @@ it.fails("challenges an unauthenticated MCP request instead of serving a page", 
   );
   expect(response.headers.get("Cache-Control")).toBe("no-store");
 });
-it.fails("refuses an unidentified token client instead of serving a page", async () => {
+it("refuses an unidentified token client instead of serving a page", async () => {
   const response = await new Browser().post("/oauth/token");
   expect(response.status).toBe(401);
   expect(await response.json()).toMatchObject({ error: "invalid_client" });

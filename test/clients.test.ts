@@ -24,7 +24,7 @@ const refused = async (response: Response) => {
 };
 
 describe("client checks before outbound requests", () => {
-  it.fails.each(["unlisted", "missing", "repeated"])(
+  it.each(["unlisted", "missing", "repeated"])(
     "refuses a %s authorization client before fetching even Access keys",
     async (kind) => {
       const before = await dump();
@@ -50,7 +50,7 @@ describe("client checks before outbound requests", () => {
     },
   );
 
-  it.fails.each(
+  it.each(
     (
       [
         [clients[0], "http://localhost:3118/callback"],
@@ -64,7 +64,7 @@ describe("client checks before outbound requests", () => {
     expect(textOf(html)).toContain(`${client.label} wants to connect to accounts-mcp.example.com`);
   });
 
-  it.fails.each(
+  it.each(
     (
       [
         [clients[0], "http://localhost:3118/other"],
@@ -109,7 +109,7 @@ describe("client checks before outbound requests", () => {
     "no client",
     "JSON body",
   ];
-  it.fails.each(invalidRequests)(
+  it.each(invalidRequests)(
     "refuses token authentication with %s without fetching or writing",
     async (kind) => {
       network.use(
@@ -183,7 +183,7 @@ it("does not register clients and requires a same-origin registration POST", asy
   expect(await dump()).toEqual(before);
   expect(requests).toEqual([]);
 });
-it.fails("advertises metadata documents without dynamic registration", async () => {
+it("advertises metadata documents without dynamic registration", async () => {
   const response = await new Browser().get("/.well-known/oauth-authorization-server");
   expect(response.status).toBe(200);
   const metadata = await response.json<Record<string, unknown>>();
@@ -191,7 +191,7 @@ it.fails("advertises metadata documents without dynamic registration", async () 
   expect(metadata.client_id_metadata_document_supported).toBe(true);
 });
 
-it.fails.each(clients)(
+it.each(clients)(
   "exchanges refreshes and revokes $label tokens with its own client authentication",
   async (client) => {
     const mcp = await new McpClient(client).connect();
@@ -204,7 +204,7 @@ it.fails.each(clients)(
 );
 
 for (const scope of [undefined, "mcp offline_access"]) {
-  it.fails.each(clients)(
+  it.each(clients)(
     `keeps exactly the requested ${scope ?? "empty"} scope for $label across refreshes`,
     async (client) => {
       const mcp = await new McpClient(client).connect(undefined, scope);
@@ -214,15 +214,18 @@ for (const scope of [undefined, "mcp offline_access"]) {
       expect(JSON.parse(grant!.value!).scope).toEqual(scope ? scope.split(" ") : []);
       await mcp.keepTokens(await mcp.refresh(undefined, scope ?? ""));
       expect(mcp.tokens!.scope ?? "").toBe(scope ?? "");
-      await expectOAuthError(
-        await mcp.refresh(undefined, `${scope ?? ""} ungranted`.trim()),
-        "invalid_scope",
-      );
+      await expectOAuthError(await mcp.refresh(undefined, "ungranted"), "invalid_scope");
+      if (scope) {
+        await mcp.keepTokens(await mcp.refresh(undefined, "mcp ungranted"));
+        expect(mcp.tokens!.scope).toBe("mcp");
+        const retained = (await kvDump()).find((entry) => entry.name.startsWith("grant:"));
+        expect(JSON.parse(retained!.value!).scope).toEqual(scope.split(" "));
+      }
     },
   );
 }
 
-it.fails("treats removed registration as a page when the owner gate refuses it", async () => {
+it("treats removed registration as a page when the owner gate refuses it", async () => {
   const response = await new Browser().post(
     "/register",
     {},

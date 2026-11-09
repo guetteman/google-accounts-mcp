@@ -35,11 +35,9 @@ export const ownerOnly: MiddlewareHandler<PageEnv> = async (c, next) => {
 
 export const ownerRoutes = new Hono<PageEnv>();
 ownerRoutes.get("/", ownerOnly, (c) => c.redirect("/accounts", 302));
-for (const current of ["accounts", "connections"] as const) {
-  ownerRoutes.get(`/${current}`, ownerOnly, (c) =>
-    renderPage({
-      _tag: current === "accounts" ? "Accounts" : "Connections",
-      frame: { host: new URL(c.req.url).host, ownerEmail: c.get("owner").email, current },
-    }),
-  );
-}
+ownerRoutes.get("/accounts", ownerOnly, (c) =>
+  renderPage({
+    _tag: "Accounts",
+    frame: { host: new URL(c.req.url).host, ownerEmail: c.get("owner").email, current: "accounts" },
+  }),
+);

@@ -5,4 +5,10 @@ import type { FramePage } from "./page";
 
 // Both SSR and hydration select the same component without importing the server renderer.
 export const frameElement = (page: FramePage) =>
-  createElement(page._tag === "Accounts" ? AccountsPage : ConnectionsPage, { frame: page.frame });
+  page._tag === "Accounts"
+    ? createElement(AccountsPage, { frame: page.frame })
+    : createElement(ConnectionsPage, {
+        frame: page.frame,
+        connections: page.connections,
+        mcpUrl: page.mcpUrl,
+      });

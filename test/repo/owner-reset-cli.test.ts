@@ -224,7 +224,7 @@ it.each([
   TIMEOUT,
 );
 
-it.fails(
+it(
   "deletes active and revoked connections only after a local reset is confirmed",
   () => {
     sql(`UPDATE owner SET state = 'pinned', generation = 3, email = '${OWNER}' WHERE id = 1;
