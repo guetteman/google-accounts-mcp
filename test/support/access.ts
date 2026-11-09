@@ -33,6 +33,17 @@ export async function accessJwks(rotated = false, alg = "RS256") {
   return { keys: [{ ...jwk, kid: rotated ? ROTATED_KEY_ID : KEY_ID, alg, use: "sig" }] };
 }
 
+/** A 256-byte modulus whose top byte is 0x01: 2041 bits, one byte from looking like 2048. */
+async function shortJwks() {
+  const [key] = (await accessJwks()).keys;
+  if (!key?.n) throw new Error("the test key has no modulus");
+  const n = Uint8Array.from(atob(key.n.replaceAll("-", "+").replaceAll("_", "/")), (c) =>
+    c.charCodeAt(0),
+  );
+  n[0] = 0x01;
+  return { keys: [{ ...key, n: bytes(n.buffer) }] };
+}
+
 export const access = {
   mode: "ok" as
     | "ok"
@@ -42,6 +53,7 @@ export const access = {
     | "invalid-key"
     | "weak-key"
     | "no-kty"
+    | "short-key"
     | "invalid-json"
     | "redirect",
   rotated: false,
@@ -72,6 +84,7 @@ export const access = {
           if (this.mode === "invalid-key")
             return HttpResponse.json({ keys: [{ kid: KEY_ID, kty: "RSA", n: "!", e: "!" }] });
           if (this.mode === "weak-key") return HttpResponse.json(await weakJwks());
+          if (this.mode === "short-key") return HttpResponse.json(await shortJwks());
           if (this.mode === "no-kty") {
             const { keys } = await accessJwks();
             return HttpResponse.json({ keys: keys.map(({ kty: _kty, ...key }) => key) });

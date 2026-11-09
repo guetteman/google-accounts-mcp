@@ -184,6 +184,7 @@ describe("Access signing keys", () => {
     "invalid-key",
     "weak-key",
     "no-kty",
+    "short-key",
     "invalid-json",
     "redirect",
   ] as const)("shows an Access outage for %s certs and changes nothing", async (mode) => {
@@ -200,7 +201,7 @@ describe("Access signing keys", () => {
     expect(await dump()).toEqual(before);
   });
 
-  it.each(["invalid-key", "weak-key", "no-kty"] as const)(
+  it.each(["invalid-key", "weak-key", "no-kty", "short-key"] as const)(
     "recovers on the next request after the certs endpoint returns an unusable key (%s)",
     async (mode) => {
       access.mode = mode;
