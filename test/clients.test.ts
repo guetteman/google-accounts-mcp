@@ -24,6 +24,20 @@ const refused = async (response: Response) => {
 };
 
 describe("client checks before outbound requests", () => {
+  it.each([codeClient.callback, "https://evil.example/callback"])(
+    "refuses a second redirect_uri %s before fetching or writing",
+    async (secondCallback) => {
+      const mcp = new McpClient();
+      await mcp.browser.authenticate();
+      const url = new URL(await mcp.authorizePath());
+      url.searchParams.append("redirect_uri", secondCallback);
+      const before = await dump();
+      await refused(await mcp.browser.get(url.href));
+      expect(requests).toEqual([]);
+      expect(await dump()).toEqual(before);
+    },
+  );
+
   it.each(["unlisted", "missing", "repeated"])(
     "refuses a %s authorization client before fetching even Access keys",
     async (kind) => {
@@ -70,7 +84,9 @@ describe("client checks before outbound requests", () => {
         [clients[0], "http://localhost:3118/other"],
         [clients[0], "http://localhost/callback"],
         [clients[0], "http://localhost:70000/callback"],
+        [clients[0], "http://localhost:0/callback"],
         [clients[0], "http://evil.example/callback"],
+        [clients[0], "http://evil.example:3118/callback"],
         [clients[0], "http://localhost:3118/callback?extra=1"],
         [clients[1], "http://localhost:3118/callback"],
       ] as const
@@ -108,6 +124,7 @@ describe("client checks before outbound requests", () => {
     "missing issuer",
     "no client",
     "JSON body",
+    "multipart body",
   ];
   it.each(invalidRequests)(
     "refuses token authentication with %s without fetching or writing",
@@ -144,7 +161,12 @@ describe("client checks before outbound requests", () => {
         if (kind === "id plus empty id") body.append("client_id", "");
         if (kind === "empty assertion") body.set("client_assertion", "");
         if (kind.includes("repeated assertion") || kind === "assertion plus empty assertion") {
+          body.set("client_id", clients[2].id);
           body.set("client_assertion", assertion);
+          body.set(
+            "client_assertion_type",
+            "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+          );
           body.append(
             kind === "repeated assertion type" ? "client_assertion_type" : "client_assertion",
             kind === "assertion plus empty assertion" ? "" : assertion,
@@ -159,12 +181,20 @@ describe("client checks before outbound requests", () => {
         }
         if (kind === "no client") body.delete("client_id");
         if (kind === "JSON body") headers.set("Content-Type", "application/json");
+        let requestBody: BodyInit =
+          kind === "JSON body" ? JSON.stringify({ client_id: codeClient.id }) : body;
+        if (kind === "multipart body") {
+          headers.delete("Content-Type");
+          const multipart = new FormData();
+          body.forEach((value, key) => multipart.append(key, value));
+          requestBody = multipart;
+        }
         const before = await dump();
         const response = await callWorker(
           new Request(`${ORIGIN}/oauth/token`, {
             method: "POST",
             headers,
-            body: kind === "JSON body" ? JSON.stringify({ client_id: codeClient.id }) : body,
+            body: requestBody,
           }),
         );
         await expectOAuthError(response, "invalid_client");

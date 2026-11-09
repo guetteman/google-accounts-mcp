@@ -25,6 +25,84 @@ async function expired(response: Response) {
 }
 
 describe("owner consent", () => {
+  it("refuses the wrong value under the correct consent cookie name without consuming the handle", async () => {
+    const mcp = new McpClient();
+    await mcp.authorize();
+    const cookieName = [...mcp.browser.cookies.get(mcp.origin)!.keys()][0]!;
+    await expired(
+      await mcp.consent(
+        "Work laptop",
+        {},
+        { headers: { Cookie: `${cookieName}=${"0".repeat(64)}` } },
+      ),
+    );
+    expect(await rows()).toEqual([]);
+    await mcp.approve();
+    await mcp.keepTokens(await mcp.exchange());
+    expect(await rows()).toHaveLength(1);
+  });
+
+  it("expires the stored consent after ten minutes and refuses a retained cookie without its transaction", async () => {
+    const mcp = new McpClient();
+    const before = Math.floor(Date.now() / 1000);
+    await mcp.authorize();
+    const after = Math.floor(Date.now() / 1000);
+    const { keys } = await env.OAUTH_KV.list({ prefix: "transaction:" });
+    expect(keys).toHaveLength(1);
+    expect(keys[0]!.expiration).toBeGreaterThanOrEqual(before + 600);
+    expect(keys[0]!.expiration).toBeLessThanOrEqual(after + 600);
+    // Local KV uses real time, not the Worker's fake clock. Remove the transaction
+    // to model KV expiry while retaining the cookie a queued request can still carry.
+    await env.OAUTH_KV.delete(keys[0]!.name);
+    await expired(await mcp.consent());
+    expect(await rows()).toEqual([]);
+    expect((await kvDump()).filter((entry) => entry.name.startsWith("grant:"))).toEqual([]);
+  });
+
+  it.each(clients)("requires S256 PKCE before showing $label consent", async (client) => {
+    await pinOwner();
+    const mcp = new McpClient(client);
+    await mcp.browser.authenticate();
+    const before = await dump();
+    for (const method of [undefined, "plain"]) {
+      const url = new URL(await mcp.authorizePath());
+      if (method === undefined) {
+        url.searchParams.delete("code_challenge");
+        url.searchParams.delete("code_challenge_method");
+      } else url.searchParams.set("code_challenge_method", method);
+      const response = await mcp.browser.get(url.href);
+      expect(response.status).toBe(400);
+      expect(response.headers.get("Location")).toBeNull();
+      expect(await dump()).toEqual(before);
+    }
+  });
+
+  it.each(clients)(
+    "requires $label's original verifier before creating a connection",
+    async (client) => {
+      const mcp = new McpClient(client);
+      await mcp.authorize();
+      await mcp.approve();
+      for (const verifier of [undefined, "a".repeat(43)]) {
+        const response = await mcp.token({
+          grant_type: "authorization_code",
+          code: mcp.code!,
+          redirect_uri: mcp.callback,
+          resource: `${mcp.origin}/mcp`,
+          ...(verifier === undefined ? {} : { code_verifier: verifier }),
+        });
+        await expectOAuthError(
+          response,
+          verifier === undefined ? "invalid_request" : "invalid_grant",
+        );
+        expect(await rows()).toEqual([]);
+      }
+      await mcp.keepTokens(await mcp.exchange());
+      expect(await rows()).toHaveLength(1);
+      expect((await mcp.call()).status).toBe(200);
+    },
+  );
+
   for (const method of ["GET", "POST"]) {
     it.each(["missing", "invalid", "another email", "keys unavailable"])(
       `requires the owner at ${method} consent with %s identity`,
@@ -339,6 +417,22 @@ describe("owner consent", () => {
       expect(await rows()).toHaveLength(1);
     },
   );
+
+  it("preserves the owner's rename when retrying a committed exchange", async () => {
+    const mcp = new McpClient();
+    await mcp.authorize();
+    await mcp.approve("Original name");
+    await expectOAuthError(
+      await mcp.exchange(testEnv({ DB: committedConnectionFailureDb() })),
+      "temporarily_unavailable",
+    );
+    const row = await onlyConnection();
+    const renamed = await mcp.browser.post(`/connections/${row.id}/name`, { name: "New name" });
+    expect(await renamed.json()).toEqual({ outcome: "ok" });
+    await mcp.keepTokens(await mcp.exchange());
+    expect(await onlyConnection()).toMatchObject({ id: row.id, name: "New name" });
+    expect((await mcp.call()).status).toBe(200);
+  });
 
   it("revokes a replayed code grant while leaving its connection active and last used unchanged", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);

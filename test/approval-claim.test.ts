@@ -9,7 +9,7 @@ import { OWNER_EMAIL } from "./support/worker";
 const stores = import.meta.glob<{
   activeWhere: (p: { now: string; ownerEmail: string }) => string;
 }>("../src/connections/store.ts");
-it.each(["active", "revoked", "expired", "mismatched owner", "reset"])(
+it.each(["active", "revoked", "expired", "mismatched owner", "resetting owner", "reset"])(
   "claims an approval atomically only when its connection is active during %s",
   async (state) => {
     await pinOwner();
@@ -26,6 +26,9 @@ it.each(["active", "revoked", "expired", "mismatched owner", "reset"])(
       await env.DB.prepare("UPDATE connections SET expires_at = ? WHERE id = ?")
         .bind(NOW, row.id)
         .run();
+    // Test the public predicate's pinned-state requirement independently of generation.
+    if (state === "resetting owner")
+      await setOwner({ state: "resetting", generation: 1, email: OWNER_EMAIL });
     if (state === "reset") {
       await resetOwner();
       await setOwner({ state: "pinned", generation: 2, email: OWNER_EMAIL });
