@@ -1,5 +1,6 @@
 import { Result } from "effect";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { readConfig } from "../config";
 import { callbackRoutes } from "../google/callback";
 import { ownerRoutes } from "../owner/routes";
@@ -9,6 +10,19 @@ import { sameOrigin } from "./same-origin";
 
 export const app = new Hono<PageEnv>();
 app.use("*", sameOrigin);
+app.use("*", (c, next) => {
+  // Hono otherwise trusts Content-Length instead of measuring the streamed bytes.
+  c.req.raw = new Request(c.req.raw);
+  c.req.raw.headers.delete("Content-Length");
+  return next();
+});
+app.use(
+  "*",
+  bodyLimit({
+    maxSize: 16 * 1024, // Room for the 1024-character return path after form encoding.
+    onError: (c) => c.text("Payload too large", 413),
+  }),
+);
 app.use("*", async (c, next) => {
   const config = readConfig(c.env);
   if (Result.isFailure(config))
