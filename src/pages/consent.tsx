@@ -14,7 +14,7 @@ export function ConsentPage({
   generation,
 }: Extract<Page, { _tag: "Consent" }>) {
   return (
-    <StandalonePage>
+    <StandalonePage width="md">
       <Card className="shadow-none">
         <CardHeader>
           <CardTitle className="text-xl font-semibold tracking-tight text-balance">

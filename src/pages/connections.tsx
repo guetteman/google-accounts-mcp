@@ -169,7 +169,7 @@ export function ConnectionsPage({
                       <h2 className="text-sm font-medium text-muted-foreground">
                         {group === "active" ? "Active" : "Ended"}
                       </h2>
-                      <ItemGroup>
+                      <ItemGroup className="gap-0">
                         {rows.map((c, i) => (
                           <div key={c.id}>
                             {i > 0 && <ItemSeparator className="my-0" />}
@@ -338,7 +338,7 @@ function ConnectionsEmpty({ mcpUrl }: { mcpUrl: string }) {
             readOnly
             value={mcpUrl}
             aria-label="MCP server URL"
-            className="font-mono text-xs"
+            className="font-mono text-xs md:text-xs"
           />
           <Button
             variant="outline"
