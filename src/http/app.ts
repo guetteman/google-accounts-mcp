@@ -7,6 +7,7 @@ import { connectionRoutes } from "../connections/routes";
 import { ownerRoutes } from "../owner/routes";
 import { renderPage } from "../pages/render";
 import type { PageEnv } from "./context";
+import { MAX_BODY_BYTES } from "./body-limit";
 import { sameOrigin } from "./same-origin";
 
 export const app = new Hono<PageEnv>();
@@ -20,7 +21,7 @@ app.use("*", (c, next) => {
 app.use(
   "*",
   bodyLimit({
-    maxSize: 16 * 1024, // Cap every page action before handlers read the body.
+    maxSize: MAX_BODY_BYTES, // Cap every page action before handlers read the body.
     onError: (c) => c.text("Payload too large", 413),
   }),
 );

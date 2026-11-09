@@ -275,7 +275,6 @@ function ConnectionDialog({
                 onChange={(e) => setName(e.target.value)}
                 autoFocus
                 required
-                maxLength={100}
                 disabled={busy}
               />
             </div>

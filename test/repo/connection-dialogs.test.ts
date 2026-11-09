@@ -123,7 +123,8 @@ it.each(["consent", "rename"])(
         exact: true,
       });
       await field.fill("");
-      await field.pressSequentially("😀".repeat(100));
+      // Use Chromium's native text insertion, which enforces maxlength for emoji too.
+      await page.keyboard.insertText("😀".repeat(100));
       expect(await field.inputValue()).toBe("😀".repeat(100));
       expect(await field.getAttribute("required")).not.toBeNull();
       expect(await field.getAttribute("maxlength")).toBeNull();

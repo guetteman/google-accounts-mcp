@@ -1,3 +1,4 @@
+import { limitRequestBody } from "../http/body-limit";
 import type { App } from "../connections/model";
 import type { GatedEnv } from "../owner/gate";
 
@@ -69,7 +70,14 @@ const invalidClient = () =>
     { error: "invalid_client", error_description: "Client authentication failed" },
     { status: 401, headers: { "Cache-Control": "no-store", Pragma: "no-cache" } },
   );
-export async function screenTokenRequest(request: Request): Promise<Response | null> {
+export async function screenTokenRequest(request: Request): Promise<Request | Response> {
+  try {
+    const bounded = await limitRequestBody(request);
+    if (bounded instanceof Response) return bounded;
+    request = bounded;
+  } catch {
+    return invalidClient();
+  }
   if (
     request.headers.has("Authorization") ||
     request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !==
@@ -97,7 +105,7 @@ export async function screenTokenRequest(request: Request): Promise<Response | n
   if ((assertions.length && !issuer) || (id !== undefined && issuer !== null && id !== issuer))
     return invalidClient();
   const client = id ?? issuer;
-  return typeof client === "string" && appForClientId(client) ? null : invalidClient();
+  return typeof client === "string" && appForClientId(client) ? request : invalidClient();
 }
 type Fetch = (
   request: Request,
@@ -108,8 +116,9 @@ export const withClientFilter =
   (inner: Fetch): Fetch =>
   async (request, env, ctx) => {
     if (request.method === "POST" && new URL(request.url).pathname === "/oauth/token") {
-      const refusal = await screenTokenRequest(request);
-      if (refusal) return refusal;
+      const screened = await screenTokenRequest(request);
+      if (screened instanceof Response) return screened;
+      request = screened;
     }
     return inner(request, env, ctx);
   };

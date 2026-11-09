@@ -64,7 +64,6 @@ export function ConsentPage({
                 name="name"
                 defaultValue={client.label}
                 required
-                maxLength={100}
                 autoComplete="off"
               />
             </div>
