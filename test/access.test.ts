@@ -194,6 +194,16 @@ describe("Access signing keys", () => {
     },
   );
 
+  it("recovers on the next request after the certs endpoint returns a corrupt key", async () => {
+    access.mode = "invalid-key";
+    const owner = new Browser();
+    await owner.authenticate();
+    expect((await owner.get("/accounts")).status).toBe(503);
+    access.mode = "ok";
+    expect((await owner.get("/accounts")).status).toBe(200);
+    expect(access.requests).toHaveLength(2);
+  });
+
   it("aborts a slow cert fetch after a bounded wait and leaves D1 unchanged", async () => {
     access.mode = "slow";
     const browser = new Browser();
@@ -221,6 +231,32 @@ describe("Access signing keys", () => {
     expect((await owner.get("/accounts")).status).toBe(403);
     expect(access.requests).toHaveLength(2);
     expect(await dump()).toEqual(before);
+  });
+
+  it("refreshes expired keys even when the assertion uses a known key", async () => {
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"], now });
+    const owner = new Browser();
+    await owner.authenticate();
+    expect((await owner.get("/accounts")).status).toBe(200);
+    vi.setSystemTime(now + 10 * 60_000);
+    expect((await owner.get("/accounts")).status).toBe(200);
+    expect(access.requests).toHaveLength(2);
+  });
+
+  it("never reuses keys from a different configured issuer", async () => {
+    const owner = new Browser();
+    await owner.authenticate();
+    expect((await owner.get("/accounts")).status).toBe(200);
+    const issuer = "https://another-team.cloudflareaccess.com";
+    owner.assertion = await signAccessJwt({ iss: issuer });
+    access.mode = "fail";
+    const response = await owner.get("/accounts", { env: testEnv({ ACCESS_ISSUER: issuer }) });
+    expect(response.status).toBe(503);
+    expect(access.requests.map((r) => r.url)).toEqual([
+      `${testEnv().ACCESS_ISSUER}/cdn-cgi/access/certs`,
+      `${issuer}/cdn-cgi/access/certs`,
+    ]);
   });
 
   it("accepts a rotated signing key after refreshing the cached certs", async () => {

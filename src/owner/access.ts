@@ -51,7 +51,10 @@ export const verifyAccess = (request: Request, access: Config["access"], now: nu
           try {
             return await keys(header, token);
           } catch (error) {
-            if (!(error instanceof errors.JWKSNoMatchingKey)) throw new AccessUnavailable();
+            if (!(error instanceof errors.JWKSNoMatchingKey)) {
+              if (cached?.keys === keys) cached = undefined;
+              throw new AccessUnavailable();
+            }
           }
           // A new kid can mean rotation. Refresh once even when the cache is still fresh.
           keys = await fetchKeys(access.issuer);
@@ -59,6 +62,7 @@ export const verifyAccess = (request: Request, access: Config["access"], now: nu
             return await keys(header, token);
           } catch (error) {
             if (error instanceof errors.JWKSNoMatchingKey) throw new AccessRejected();
+            if (cached?.keys === keys) cached = undefined;
             throw new AccessUnavailable();
           }
         },
