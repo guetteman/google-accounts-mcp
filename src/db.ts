@@ -1,5 +1,6 @@
 import { Data, Effect } from "effect";
 
+export class WriteUncertain extends Data.TaggedError("WriteUncertain") {}
 export class Unavailable extends Data.TaggedError("Unavailable") {}
 type Value = string | number | null;
 

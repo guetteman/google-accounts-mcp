@@ -10,6 +10,7 @@ export type ResetOutcome = "done" | "overtaken" | "unknown";
 
 export const RESET_CLEANUP: ReadonlyArray<(c: { guard: string; now: number }) => string> = [
   ({ guard }) => `DELETE FROM connections WHERE ${guard}`,
+  ({ guard }) => `DELETE FROM accounts WHERE ${guard}`,
 ];
 
 /**

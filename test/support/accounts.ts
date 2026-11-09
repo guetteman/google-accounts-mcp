@@ -1,3 +1,4 @@
+import { loadCredential } from "../../src/accounts/store";
 import { env } from "cloudflare:workers";
 import { Effect, Result } from "effect";
 import { expect } from "vite-plus/test";
@@ -97,20 +98,12 @@ export const accounts = async () =>
   (await env.DB.prepare("SELECT * FROM accounts ORDER BY created_at, id").all<AccountRow>())
     .results;
 export async function credential(id: AccountId): Promise<Credential> {
-  const r = await env.DB.prepare("SELECT * FROM accounts WHERE id = ?")
-    .bind(id)
-    .first<AccountRow>();
-  if (!r) throw new Error("Test requires an existing account");
-  return {
-    id: r.id,
-    email: r.email,
-    version: r.version,
-    health: r.health,
-    blockedUntil: r.blocked_until,
-    refreshToken: r.refresh_token,
-    accessToken: r.access_token,
-    accessExpiresAt: r.access_expires_at,
-  };
+  const row = await Effect.runPromise(readOwner(env.DB));
+  const value = await Effect.runPromise(
+    loadCredential(env.DB, { generation: row.generation, email: row.email! }, id),
+  );
+  if (!value) throw new Error("Test requires a valid existing credential");
+  return value;
 }
 export async function ownerBrowser() {
   const browser = new Browser();

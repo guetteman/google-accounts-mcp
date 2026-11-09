@@ -83,7 +83,7 @@ export const google = {
   handlers() {
     return [
       http.post("https://oauth2.googleapis.com/token", async ({ request }) => {
-        const form = new URLSearchParams(await request.text());
+        const form = new URLSearchParams(new TextDecoder().decode(await request.arrayBuffer()));
         if (
           form.get("client_id") !== testEnv().GOOGLE_CLIENT_ID ||
           form.get("client_secret") !== "fake"
@@ -133,13 +133,18 @@ export const google = {
             sub: "personal",
             email: OWNER_EMAIL,
             email_verified: true,
+            test_marker: token(),
             ...entry.claims,
           }),
         });
       }),
       http.post("https://oauth2.googleapis.com/revoke", async ({ request }) => {
         this.events.push("revoke");
-        if (!new URLSearchParams(await request.text()).get("token")?.includes(MARKER))
+        if (
+          !new URLSearchParams(new TextDecoder().decode(await request.arrayBuffer()))
+            .get("token")
+            ?.includes(MARKER)
+        )
           throw new Error("Revoke needs a plaintext test token");
         return (await this.answer(this.revokeAnswer)) ?? new HttpResponse(null, { status: 200 });
       }),

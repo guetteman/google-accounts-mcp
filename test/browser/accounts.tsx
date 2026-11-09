@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { AccountsPage } from "../../src/pages/accounts";
+import type { AccountView } from "../../src/accounts/model";
 import type { Frame } from "../../src/pages/page";
 import "../../src/styles.css";
 const props = {
@@ -10,11 +11,11 @@ const props = {
   } as Frame,
   accounts: [
     {
-      id: "11111111-1111-4111-8111-111111111111",
+      id: "11111111-1111-4111-8111-111111111111" as AccountView["id"],
       name: "Personal",
       email: "alex.personal@example.com",
       workspace: false,
-      status: { kind: "ready" },
+      status: { kind: "ready" as const },
     },
   ],
   alert: null,

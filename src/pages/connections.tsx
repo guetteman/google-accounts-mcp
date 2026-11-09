@@ -57,7 +57,8 @@ import type { ConnectionView } from "../connections/model";
 import { cn } from "@/lib/utils";
 import { OwnerFrame, PageHeader } from "./frame";
 import type { Frame } from "./page";
-import { outcomeMessage, postConnectionAction } from "./connection-actions";
+import { postAction } from "./actions";
+import { outcomeMessage } from "./connection-actions";
 
 function status(c: ConnectionView) {
   return c.status.kind === "active"
@@ -236,7 +237,7 @@ function ConnectionDialog({
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     setBusy(true);
-    const outcome = await postConnectionAction(
+    const { outcome } = await postAction(
       `/connections/${connection.id}/${action}`,
       action === "name" ? { name } : {},
     );

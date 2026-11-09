@@ -260,7 +260,10 @@ it.each(["add", "reconnect"])(
   "refuses a different subject taking another account's address on %s",
   async (kind) => {
     await seedAccount({ email: "alex@harbor.example", sub: "C", name: "Work" });
-    const other = await seedAccount({ email: "alex.projects@example.com", sub: "D" });
+    const other = await seedAccount({
+      email: "alex.projects@example.com",
+      sub: kind === "add" ? "other" : "D",
+    });
     const b = await ownerBrowser();
     const before = await dump();
     const result = await finish(

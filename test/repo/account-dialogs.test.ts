@@ -66,7 +66,7 @@ it.each([390, 1280])(
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     page.setDefaultTimeout(2000);
     try {
-      await page.route("**/accounts/*", (route) =>
+      await page.route("**/accounts/**", (route) =>
         route.fulfill({
           contentType: "application/json",
           body: JSON.stringify({ outcome: "not_found" }),

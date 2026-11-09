@@ -3,7 +3,8 @@ import { Hono } from "hono";
 import type { PageEnv } from "../http/context";
 import { ownerOnly } from "../owner/routes";
 import { renderPage } from "../pages/render";
-import { parseConnectionId, parseName } from "./model";
+import { parseConnectionId } from "./model";
+import { parseName } from "../names";
 import { listConnections, renameConnection, revokeConnection } from "./store";
 
 export const connectionRoutes = new Hono<PageEnv>();
@@ -31,7 +32,7 @@ for (const action of ["name", "revoke"] as const) {
     const result = await Effect.runPromise(
       Effect.result<
         string | { grantId: string },
-        import("./store").WriteUncertain | import("../db").Unavailable,
+        import("../db").WriteUncertain | import("../db").Unavailable,
         never
       >(
         action === "name"

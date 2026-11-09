@@ -1,3 +1,4 @@
+import { accountRoutes } from "../accounts/routes";
 import { Result } from "effect";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -34,6 +35,7 @@ app.use("*", async (c, next) => {
 });
 app.route("/", consentRoutes);
 app.route("/", connectionRoutes);
+app.route("/", accountRoutes);
 app.route("/", ownerRoutes);
 if (import.meta.env.DEV) {
   const { previews } = await import("../pages/previews");
