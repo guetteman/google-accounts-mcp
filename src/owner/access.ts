@@ -1,5 +1,5 @@
 import { Data, Effect } from "effect";
-import { createLocalJWKSet, errors, jwtVerify } from "jose";
+import { createLocalJWKSet, errors, jwtVerify, type JSONWebKeySet } from "jose";
 import type { Config } from "../config";
 import { normalizeEmail } from "./owner";
 
@@ -12,8 +12,33 @@ export interface AccessIdentity {
 
 const CERTS_TIMEOUT = 5_000;
 const CACHE_MAX_AGE = 10 * 60_000;
+// Access signs with 2048-bit RSA keys. jose refuses a shorter key only after the key resolver
+// returns, where a bad key would read as a bad assertion, so the key set is checked on fetch.
+const MIN_MODULUS_BYTES = 256;
 type Keys = ReturnType<typeof createLocalJWKSet>;
 let cached: { issuer: string; keys: Keys; fetchedAt: number } | undefined;
+
+function modulusBytes(n: string): number {
+  const binary = atob(n.replaceAll("-", "+").replaceAll("_", "/"));
+  return binary.replace(/^\0+/, "").length;
+}
+
+/** Every key must be one jose can verify an RS256 assertion with, or the whole set is unusable. */
+function usableKeySet(body: unknown): JSONWebKeySet {
+  const keys: unknown = (body as { keys?: unknown } | null)?.keys;
+  if (!Array.isArray(keys) || keys.length === 0) throw new AccessUnavailable();
+  for (const key of keys as Array<Record<string, unknown> | null>) {
+    if (
+      key?.kty !== "RSA" ||
+      typeof key.kid !== "string" ||
+      typeof key.n !== "string" ||
+      typeof key.e !== "string" ||
+      modulusBytes(key.n) < MIN_MODULUS_BYTES
+    )
+      throw new AccessUnavailable();
+  }
+  return { keys: keys as JSONWebKeySet["keys"] };
+}
 
 async function fetchKeys(issuer: string): Promise<Keys> {
   const controller = new AbortController();
@@ -24,7 +49,7 @@ async function fetchKeys(issuer: string): Promise<Keys> {
       redirect: "manual",
     });
     if (!response.ok) throw new AccessUnavailable();
-    const keys = createLocalJWKSet(await response.json());
+    const keys = createLocalJWKSet(usableKeySet(await response.json()));
     cached = { issuer, keys, fetchedAt: Date.now() };
     return keys;
   } catch {
@@ -44,10 +69,8 @@ export const verifyAccess = (request: Request, access: Config["access"], now: nu
         assertion,
         async (header, token) => {
           if (typeof header.kid !== "string" || !header.kid) throw new AccessRejected();
-          let keys =
-            cached?.issuer === access.issuer && now < cached.fetchedAt + CACHE_MAX_AGE
-              ? cached.keys
-              : await fetchKeys(access.issuer);
+          const warm = cached?.issuer === access.issuer && now < cached.fetchedAt + CACHE_MAX_AGE;
+          let keys = warm && cached ? cached.keys : await fetchKeys(access.issuer);
           try {
             return await keys(header, token);
           } catch (error) {
@@ -55,6 +78,7 @@ export const verifyAccess = (request: Request, access: Config["access"], now: nu
               if (cached?.keys === keys) cached = undefined;
               throw new AccessUnavailable();
             }
+            if (!warm) throw new AccessRejected();
           }
           // A new kid can mean rotation. Refresh once even when the cache is still fresh.
           keys = await fetchKeys(access.issuer);
