@@ -1,3 +1,4 @@
+import { GMAIL_SCOPES } from "../google/client";
 import { useState } from "react";
 import { EllipsisIcon, MailIcon } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -66,13 +67,12 @@ function actionMessage(outcome: Outcome): string | null {
     case "ok":
       return null;
     case "not_found":
-    case "already_ended":
       return "This account no longer exists. Nothing changed. Reload the page.";
     case "invalid":
       return "Use a name with 1 to 100 characters.";
     case "unavailable":
       return "Couldn't reach the database. Nothing changed. Try again in a minute.";
-    case "unknown":
+    default:
       return "Couldn't confirm the change. Reload the page to see whether it happened.";
   }
 }
@@ -91,8 +91,6 @@ function alertMessage(alert: AccountsAlert | null): string | null {
       return `Nothing changed. You signed in to Google as ${alert.signedIn}, but this reconnect is for ${alert.target}.`;
     case "changed":
       return `Nothing changed. ${alert.address} changed while you were at Google. Try again.`;
-    case "gone":
-      return actionMessage("not_found");
     case "didnt_finish":
       return "Didn't finish. It expired, was cancelled, or started in another browser. Nothing changed. Try again.";
     case "client_refused":
@@ -125,7 +123,7 @@ function Status({ account }: { account: AccountView }) {
       ? "Google stopped accepting this server's access. Reconnect to restore it."
       : status.kind === "blocked_by_admin"
         ? "The organization's admin blocked this app. The server retries every 10 minutes."
-        : `Google granted ${status.granted} of the 5 permissions Gmail needs. Reconnect and check every box.`;
+        : `Google granted ${status.granted} of the ${GMAIL_SCOPES.length} permissions Gmail needs. Reconnect and check every box.`;
   return (
     <span className="text-muted-foreground">
       <span className={fixable(account) ? "text-red-700 dark:text-red-300" : "text-foreground"}>

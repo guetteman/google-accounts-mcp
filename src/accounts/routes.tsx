@@ -141,34 +141,28 @@ accountRoutes.get("/google/callback", ownerOnly, async (c) => {
         });
         const sealed = { ...grant, ...tokens, id };
         if (flow.purpose === "add") return yield* addAccount(c.env.DB, owner, sealed, Date.now());
-        return yield* reconnectAccount(
-          c.env.DB,
-          owner,
-          { id, version: flow.version },
-          sealed,
-          Date.now(),
-        );
+        return yield* reconnectAccount(c.env.DB, owner, { id, version: flow.version }, sealed);
       }),
     ),
   );
   if (Result.isFailure(result)) return reply({ kind: "unconfirmed" });
   const outcome = result.success;
-  if (outcome === "owner_changed") return reply({ kind: "didnt_finish" });
-  if ("connected" in outcome && outcome.connected !== undefined)
-    return reply({ kind: "connected", address: outcome.connected });
-  if ("reconnected" in outcome && outcome.reconnected !== undefined)
-    return reply({ kind: "reconnected", address: outcome.reconnected });
-  if ("alreadyConnected" in outcome && outcome.alreadyConnected !== undefined)
-    return reply({ kind: "already_connected", address: outcome.alreadyConnected });
-  if ("addressTaken" in outcome && outcome.addressTaken !== undefined)
-    return reply({ kind: "address_taken", ...outcome.addressTaken });
-  if ("wrongAccount" in outcome && outcome.wrongAccount !== undefined)
-    return reply({ kind: "wrong_account", ...outcome.wrongAccount });
-  return reply(
-    outcome.changed !== undefined
-      ? { kind: "changed", address: outcome.changed }
-      : { kind: "didnt_finish" },
-  );
+  switch (outcome._tag) {
+    case "OwnerChanged":
+      return reply({ kind: "didnt_finish" });
+    case "Connected":
+      return reply({ kind: "connected", address: outcome.address });
+    case "Reconnected":
+      return reply({ kind: "reconnected", address: outcome.address });
+    case "AlreadyConnected":
+      return reply({ kind: "already_connected", address: outcome.address });
+    case "AddressTaken":
+      return reply({ kind: "address_taken", address: outcome.address, name: outcome.name });
+    case "WrongAccount":
+      return reply({ kind: "wrong_account", signedIn: outcome.signedIn, target: outcome.target });
+    case "Changed":
+      return reply({ kind: "changed", address: outcome.address });
+  }
 });
 accountRoutes.post("/accounts/:id/name", ownerOnly, readForm, async (c) => {
   const id = parseAccountId(c.req.param("id"));
@@ -176,11 +170,14 @@ accountRoutes.post("/accounts/:id/name", ownerOnly, readForm, async (c) => {
   const name = parseName(c.get("form").get("name"));
   if (!name) return c.json({ outcome: "invalid" }, 400);
   const result = await Effect.runPromise(
-    Effect.result(renameAccount(c.env.DB, c.get("owner"), id, name, Date.now())),
+    Effect.result(renameAccount(c.env.DB, c.get("owner"), id, name)),
   );
   return Result.isFailure(result)
     ? c.json({ outcome: "unknown" }, 503)
-    : c.json({ outcome: result.success }, result.success === "not_found" ? 404 : 200);
+    : c.json(
+        { outcome: result.success._tag === "NotFound" ? "not_found" : "ok" },
+        result.success._tag === "NotFound" ? 404 : 200,
+      );
 });
 accountRoutes.post("/accounts/:id/remove", ownerOnly, readForm, async (c) => {
   const id = parseAccountId(c.req.param("id"));
@@ -203,11 +200,11 @@ accountRoutes.post("/accounts/:id/remove", ownerOnly, readForm, async (c) => {
     Effect.result(removeAccount(c.env.DB, owner, id, Date.now())),
   );
   if (Result.isFailure(result)) return c.json({ outcome: "unknown" }, 503);
-  if (result.success === "not_found") return c.json({ outcome: "not_found" }, 404);
+  if (result.success._tag === "NotFound") return c.json({ outcome: "not_found" }, 404);
   const headers = new Headers();
   setAlert(headers, {
     kind: confirmed ? "removed" : "removed_unconfirmed",
-    address: result.success.removed,
+    address: result.success.address,
   });
   return Response.json({ outcome: "ok" }, { headers });
 });

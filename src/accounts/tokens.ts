@@ -3,15 +3,8 @@ import type { Config } from "../config";
 import { Unavailable } from "../db";
 import type { Owner } from "../owner/owner";
 import { open, seal } from "../seal";
-import { refresh } from "../google/client";
-import {
-  AccountGone,
-  BlockedByAdmin,
-  GoogleUnavailable,
-  NeedsReconnect,
-  RequestLost,
-  type Credential,
-} from "./model";
+import { refresh, GoogleUnavailable } from "../google/client";
+import { AccountGone, BlockedByAdmin, NeedsReconnect, RequestLost, type Credential } from "./model";
 import {
   claimBlockSlot,
   loadCredential,

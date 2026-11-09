@@ -2,7 +2,6 @@ import { Data, Effect, Schema } from "effect";
 import { decodeJwt } from "jose";
 import type { Config } from "../config";
 import { normalizeEmail, type OwnerEmail } from "../owner/owner";
-import { GoogleUnavailable } from "../accounts/model";
 
 export const GMAIL_SCOPES = ["gmail.readonly", "gmail.compose", "gmail.send", "gmail.modify"]
   .map((scope) => `https://www.googleapis.com/auth/${scope}`)
@@ -19,11 +18,12 @@ export interface GoogleIdentity {
 }
 export interface Grant {
   readonly identity: GoogleIdentity;
-  readonly scopes: GmailScopes;
+  readonly scopes: ReadonlyArray<string>;
   readonly refreshToken: string;
   readonly accessToken: string;
   readonly expiresAt: number;
 }
+export class GoogleUnavailable extends Data.TaggedError("GoogleUnavailable") {}
 export class ClientRefused extends Data.TaggedError("ClientRefused") {}
 export class CodeRefused extends Data.TaggedError("CodeRefused") {}
 export class NoRefreshToken extends Data.TaggedError("NoRefreshToken") {}
@@ -137,7 +137,8 @@ export const exchangeCode = (
     const token = yield* decodedToken(body, p.now);
     return {
       identity,
-      scopes: parseGrantedScopes(body.scope),
+      scopes:
+        typeof body.scope === "string" ? [...new Set(body.scope.split(/\s+/).filter(Boolean))] : [],
       refreshToken: body.refresh_token,
       ...token,
     } satisfies Grant;

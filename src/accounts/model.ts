@@ -1,6 +1,6 @@
 import { normalizeEmail } from "../owner/owner";
 import type { Sealed } from "../seal";
-import type { GmailScopes } from "../google/client";
+import { GMAIL_SCOPES, type GmailScopes } from "../google/client";
 import { Data, Schema } from "effect";
 export type AccountId = string & { readonly __accountId: unique symbol };
 export type Health = "ready" | "needs_reconnect" | "blocked_by_admin";
@@ -20,7 +20,6 @@ export class NeedsReconnect extends Data.TaggedError("NeedsReconnect")<{
 export class BlockedByAdmin extends Data.TaggedError("BlockedByAdmin")<{
   readonly email: string;
 }> {}
-export class GoogleUnavailable extends Data.TaggedError("GoogleUnavailable") {}
 export class AccountGone extends Data.TaggedError("AccountGone") {}
 export class RequestLost extends Data.TaggedError("RequestLost") {}
 
@@ -38,7 +37,7 @@ export type AccountStatus =
 export const accountStatus = (health: Health, scopes: GmailScopes): AccountStatus =>
   health !== "ready"
     ? { kind: health }
-    : scopes.length < 5
+    : scopes.length < GMAIL_SCOPES.length
       ? { kind: "missing_access", granted: scopes.length }
       : { kind: "ready" };
 export interface AccountView {

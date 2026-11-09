@@ -99,7 +99,6 @@ const AddressAlert = Schema.Struct({
 });
 const SimpleAlert = Schema.Struct({
   kind: Schema.Literals([
-    "gone",
     "didnt_finish",
     "google_down",
     "client_refused",

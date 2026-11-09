@@ -19,6 +19,6 @@ CREATE TABLE accounts (
     (state = 'live' AND health <> 'needs_reconnect' AND refresh_token IS NOT NULL)
     OR ((state = 'removed' OR health = 'needs_reconnect') AND refresh_token IS NULL AND access_token IS NULL)
   )
-);
+) STRICT;
 CREATE UNIQUE INDEX accounts_live_sub ON accounts(sub) WHERE state = 'live';
 CREATE UNIQUE INDEX accounts_live_email ON accounts(email) WHERE state = 'live';

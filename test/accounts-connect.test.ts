@@ -333,7 +333,7 @@ it.each(["needs_reconnect", "blocked_by_admin"] as const)(
       email: "new.address@example.com",
       health: "ready",
       version: row.version + 1,
-      scopes: JSON.stringify(SCOPES),
+      scopes: JSON.stringify(["openid", "email", ...SCOPES]),
     });
     expect(google.events).not.toContain("revoke");
   },
