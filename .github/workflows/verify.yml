@@ -29,4 +29,5 @@ jobs:
       - run: vp install --frozen-lockfile
       - run: vp check
       - run: pnpm exec wrangler types --check
+      - run: pnpm exec playwright-core install --with-deps chromium
       - run: vp test run
