@@ -62,7 +62,9 @@ export const withGoogle = (
         if (snapshot.blockedUntil === null || snapshot.blockedUntil > deps.now())
           return yield* Effect.fail(new BlockedByAdmin({ email: snapshot.email }));
         if (!(yield* claimBlockSlot(deps.db, snapshot, deps.now())))
-          return yield* Effect.fail(new BlockedByAdmin({ email: snapshot.email }));
+          return reloaded
+            ? yield* Effect.fail(new BlockedByAdmin({ email: snapshot.email }))
+            : yield* reload();
       } else if (
         !force &&
         snapshot.accessToken &&

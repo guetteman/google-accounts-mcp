@@ -86,7 +86,7 @@ export const addAccount = (db: D1Database, owner: Owner, grant: SealedGrant, now
         db.batch<IdentityRow>([
           db
             .prepare(`INSERT INTO accounts (id,generation,sub,email,name,hd,state,created_at,version,scopes,health,refresh_token,access_token,access_expires_at)
- SELECT ?1,generation,?2,?3,?3,?4,'live',?5,1,?6,'ready',?7,?8,?9 FROM owner WHERE id = 1 AND state = 'pinned' AND generation = ?10 AND email = ?11 ON CONFLICT DO NOTHING RETURNING id`)
+ SELECT ?1,generation,?2,?3,substr(?3,1,100),?4,'live',?5,1,?6,'ready',?7,?8,?9 FROM owner WHERE id = 1 AND state = 'pinned' AND generation = ?10 AND email = ?11 ON CONFLICT DO NOTHING RETURNING id`)
             .bind(
               grant.id,
               grant.identity.sub,

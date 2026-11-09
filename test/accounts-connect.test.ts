@@ -374,3 +374,20 @@ it("guards a reconnect write when removal lands after the callback read its cook
     await callback;
   }
 });
+
+it("connects a long address with a default name limited to one hundred code points", async () => {
+  const email = `${"a".repeat(50)}@${"b".repeat(50)}.example`;
+  const b = await ownerBrowser();
+  const { text } = await finish(b, (await start(b)).url, {
+    claims: { email, hd: `${"b".repeat(50)}.example` },
+  });
+  expect(await accounts()).toHaveLength(1);
+  expect((await accounts())[0]).toMatchObject({
+    email,
+    name: Array.from(email).slice(0, 100).join(""),
+    health: "ready",
+  });
+  expect(text).toContain("Ready");
+  expect(text).toContain(`Connected ${email}.`);
+  expect(text).toContain(email);
+});

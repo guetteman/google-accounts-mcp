@@ -314,3 +314,55 @@ it("does not revive a revoked account with an earlier successful refresh", async
     await pending;
   }
 });
+
+it.each(["reconnect", "remove"])(
+  "reloads an expired block snapshot when the owner performs %s before its claim",
+  async (change) => {
+    const row = await seedAccount({
+      sub: "personal",
+      health: "blocked_by_admin",
+      blocked_until: NOW - 1,
+      access_token: null,
+      access_expires_at: null,
+    });
+    const snapshot = await credential(row.id);
+    const b = await ownerBrowser();
+    const flow = change === "reconnect" ? await start(b, row.id) : null;
+    const entered = deferred(),
+      release = deferred();
+    let reads = 0;
+    const db = observeStatements(env.DB, async (sql) => {
+      if (/SELECT a.id, a.email, a.version/.test(sql)) reads++;
+      if (/UPDATE accounts/.test(sql)) {
+        entered.resolve();
+        await release.promise;
+      }
+    });
+    const pending = call(row.id, db, snapshot);
+    try {
+      expect(
+        await Promise.race([entered.promise.then(() => "paused"), pending.then(() => "finished")]),
+      ).toBe("paused");
+      if (flow) await finish(b, flow.url);
+      else
+        expect(await (await b.post(`/accounts/${row.id}/remove`)).json()).toEqual({
+          outcome: "ok",
+        });
+      const before = await accounts();
+      release.resolve();
+      if (change === "reconnect") {
+        expect(await pending).toMatchObject({ status: 200 });
+        expect(google.gmailTokens).toEqual([`Bearer ${google.issuedAccess.at(-1)}`]);
+      } else {
+        expect(await pending).toMatchObject({ error: "AccountGone" });
+        expect(google.gmailTokens).toEqual([]);
+      }
+      expect(reads).toBe(1);
+      expect(google.events).not.toContain("refresh");
+      expect(await accounts()).toEqual(before);
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  },
+);
