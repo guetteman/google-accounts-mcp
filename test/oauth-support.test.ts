@@ -1,9 +1,7 @@
-import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import OAuthProvider, { type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
-import { expect, it, vi } from "vite-plus/test";
+import { expect, it } from "vite-plus/test";
 import { app } from "../src/http/app";
-import { NOW, onlyConnection, seedConnection } from "./support/connections";
+import { onlyConnection, seedConnection } from "./support/connections";
 import { Browser } from "./support/browser";
 import {
   committedConnectionFailureDb,
@@ -13,77 +11,6 @@ import {
   responseLostConnectionWriteDb,
   statementFailingDb,
 } from "./support/db";
-import { clients, expectOAuthError, McpClient, oauth } from "./support/oauth";
-import { requests } from "./support/network";
-import * as worker from "./support/worker";
-
-// These are helper checks, not acceptance evidence: an isolated library host validates the
-// client driver and msw setup now, before the production OAuth routes exist.
-it.each(clients)(
-  "validates the $label test driver against the pinned OAuth library",
-  async (client) => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW);
-    type LibraryEnv = Env & { OAUTH_PROVIDER?: OAuthHelpers };
-    const provider = new OAuthProvider<LibraryEnv>({
-      apiRoute: "/mcp",
-      resourceMetadata: { resource: `${worker.ORIGIN}/mcp` },
-      authorizeEndpoint: "/authorize",
-      tokenEndpoint: "/oauth/token",
-      clientIdMetadataDocumentEnabled: true,
-      apiHandler: { fetch: () => Response.json({ accepted: true }) },
-      defaultHandler: {
-        async fetch(request, libraryEnv) {
-          const helpers = libraryEnv.OAUTH_PROVIDER!;
-          if (request.method === "GET") {
-            const auth = await helpers.parseAuthRequest(request);
-            const { handle, headers } = await helpers.beginConsent(auth);
-            return new Response(
-              `<form action="/authorize" method="post"><input name="handle" value="${handle}" type="hidden"><input name="generation" value="1" type="hidden"><input name="name" value="${client.label}"></form>`,
-              { headers },
-            );
-          }
-          const form = await request.clone().formData();
-          const handle = form.get("handle");
-          if (typeof handle !== "string") throw new Error("Missing test consent handle");
-          const approved = await helpers.approveConsent(request, handle);
-          const { redirectTo } = await helpers.completeAuthorization({
-            request: approved.request,
-            userId: crypto.randomUUID(),
-            scope: approved.request.scope,
-            metadata: {},
-            props: {},
-            revokeExistingGrants: false,
-          });
-          const headers = new Headers(approved.headers);
-          headers.set("Location", redirectTo);
-          return new Response(null, { status: 302, headers });
-        },
-      },
-    });
-    vi.spyOn(worker, "callWorker").mockImplementation(
-      async (request, workerEnv = worker.testEnv()) => {
-        const ctx = createExecutionContext();
-        const response = await provider.fetch(
-          request,
-          { ...workerEnv, OAUTH_PROVIDER: undefined },
-          ctx,
-        );
-        await waitOnExecutionContext(ctx);
-        return response;
-      },
-    );
-    const mcp = await new McpClient(client).connect(undefined, "mcp offline_access");
-    expect((await mcp.call()).status).toBe(200);
-    await mcp.keepTokens(await mcp.refresh());
-    expect(mcp.tokens!.scope).toBe("mcp offline_access");
-    expect((await mcp.revoke()).status).toBe(200);
-    expect((await mcp.call()).status).toBe(401);
-    await expectOAuthError(await mcp.refresh(), "invalid_grant");
-    expect(requests).toContain(client.id);
-    if (client.app === "chatgpt")
-      expect(oauth.requests).toContain("https://chatgpt.com/oauth/jwks.json");
-  },
-);
 
 app.get("/__test/cookie-jar", (c) => {
   const headers = new Headers();
