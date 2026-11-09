@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 // The deployer's command against a local D1, through the same `wrangler d1 execute` it uses
@@ -118,4 +119,114 @@ describe("pnpm owner:reset", () => {
     },
     TIMEOUT,
   );
+
+  it(
+    "names the database by its ID when the configuration has one, as wrangler finds it",
+    () => {
+      const configPath = join(persistTo, "wrangler.jsonc");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          name: "review-stage",
+          main: "src/index.ts",
+          compatibility_date: "2026-10-20",
+          d1_databases: [{ binding: "DB", database_id: "00000000-0000-4000-8000-000000000000" }],
+        }),
+      );
+
+      const run = ownerReset(["--config", configPath]);
+
+      expect(run.stdout).toContain("Database: id 00000000-0000-4000-8000-000000000000");
+      expect(run.stdout).not.toContain("review-stage-db");
+      expect(run.stdout).toContain(configPath);
+    },
+    TIMEOUT,
+  );
 });
+
+it(
+  "resets only the chosen environment in the chosen configuration and shows its database and owner",
+  () => {
+    const configPath = join(persistTo, "wrangler.jsonc");
+    const topId = "00000000-0000-4000-8000-000000000001";
+    const stagingId = "00000000-0000-4000-8000-000000000002";
+    const stagingEmail = "alex.staging@example.com";
+    const topEmail = "alex.top@example.com";
+    const binding = (databaseId: string) => [
+      {
+        binding: "DB",
+        database_id: databaseId,
+        migrations_dir: fileURLToPath(new URL("../../migrations", import.meta.url)),
+      },
+    ];
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        name: "owner-reset-environments",
+        main: fileURLToPath(new URL("../../src/index.ts", import.meta.url)),
+        compatibility_date: "2026-10-20",
+        d1_databases: binding(topId),
+        env: { staging: { d1_databases: binding(stagingId) } },
+      }),
+    );
+    const selectedSql = (command: string, environment?: string) => {
+      const output = wrangler(
+        "d1",
+        "execute",
+        "DB",
+        "--json",
+        "--command",
+        command,
+        "--config",
+        configPath,
+        ...(environment ? ["--env", environment] : []),
+      );
+      return (JSON.parse(output) as Array<{ results: Array<Record<string, unknown>> }>).flatMap(
+        (entry) => entry.results,
+      );
+    };
+    for (const environment of [undefined, "staging"]) {
+      wrangler(
+        "d1",
+        "migrations",
+        "apply",
+        "DB",
+        "--config",
+        configPath,
+        ...(environment ? ["--env", environment] : []),
+      );
+      const email = environment ? stagingEmail : topEmail;
+      const generation = environment ? 3 : 7;
+      selectedSql(
+        `UPDATE owner SET state = 'pinned', generation = ${generation}, email = '${email}', google_sub = 'sub-${generation}' WHERE id = 1`,
+        environment,
+      );
+    }
+
+    const run = ownerReset(["--config", configPath, "--env", "staging", "--yes"]);
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("Environment: staging");
+    expect(run.stdout).toContain(`Configuration: ${configPath}`);
+    expect(run.stdout).toContain(stagingId);
+    expect(run.stdout).toContain(stagingEmail);
+    const read = "SELECT state, generation, email, google_sub FROM owner WHERE id = 1";
+    expect(selectedSql(read, "staging")).toEqual([
+      {
+        state: "unpinned",
+        generation: 4,
+        email: null,
+        google_sub: null,
+      },
+    ]);
+    expect(selectedSql(read)).toEqual([
+      {
+        state: "pinned",
+        generation: 7,
+        email: topEmail,
+        google_sub: "sub-7",
+      },
+    ]);
+  },
+  TIMEOUT,
+);

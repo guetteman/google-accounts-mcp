@@ -41,9 +41,7 @@ export function OwnerFrame({
           <SidebarTrigger />
           <span className="text-sm font-semibold tracking-tight">{PRODUCT}</span>
         </header>
-        <main className="w-full max-w-4xl px-4 pt-6 pb-24 sm:px-6 md:px-12 md:pt-12">
-          {children}
-        </main>
+        <div className="w-full max-w-4xl px-4 pt-6 pb-24 sm:px-6 md:px-12 md:pt-12">{children}</div>
       </SidebarInset>
     </SidebarProvider>
   );

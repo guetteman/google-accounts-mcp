@@ -76,6 +76,9 @@ export const signIn = (
   now: number,
 ) =>
   Effect.gen(function* () {
+    const current = yield* readOwner(db);
+    if (current.state === "pinned" && current.googleSub !== who.googleSub)
+      return yield* Effect.fail(new NotOwner({ email: who.email }));
     const { token, tokenHash } = yield* newSession();
     const results = yield* batch(db, () => [
       db
