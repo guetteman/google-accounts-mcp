@@ -548,3 +548,44 @@ it("stops after one reload when a damaged reconnect token loses another version 
   expect(google.gmailTokens).toEqual([]);
   expect(google.events).toEqual(["refresh", "exchange", "exchange"]);
 });
+
+it.each(["proactive", "forced"] as const)(
+  "sends the reconnect token once and keeps the single retry when a %s refresh loses to a reconnect",
+  async (kind) => {
+    const row = await seedAccount({
+      sub: "personal",
+      access_expires_at: kind === "proactive" ? NOW : NOW + 3000000,
+    });
+    const snapshot = await credential(row.id);
+    const originalAccess = await fixtureOpen(`${row.id}:access`, row.access_token!);
+    const b = await ownerBrowser();
+    let writes = 0,
+      reads = 0;
+    let latest: Awaited<ReturnType<typeof accounts>> = [];
+    let reconnectAccess = "";
+    const db = observeStatements(env.DB, async (sql) => {
+      if (/SELECT a.id, a.email, a.version/.test(sql)) reads++;
+      if (/UPDATE accounts AS a SET access_token =/.test(sql) && ++writes === 1) {
+        await finish(b, (await start(b, row.id)).url);
+        latest = await accounts();
+        reconnectAccess = await fixtureOpen(`${row.id}:access`, latest[0]!.access_token!);
+      }
+    });
+    google.gmailAnswers = [401, 200];
+    expect(await call(row.id, db, snapshot)).toMatchObject({
+      status: kind === "proactive" ? 401 : 200,
+    });
+    expect(reads).toBe(1);
+    expect(await accounts()).toEqual(latest);
+    expect(google.events).toEqual(
+      kind === "proactive"
+        ? ["refresh", "exchange", "gmail"]
+        : ["gmail", "refresh", "exchange", "gmail"],
+    );
+    expect(google.gmailTokens).toEqual(
+      kind === "proactive"
+        ? [`Bearer ${reconnectAccess}`]
+        : [`Bearer ${originalAccess}`, `Bearer ${reconnectAccess}`],
+    );
+  },
+);
