@@ -1,3 +1,4 @@
+import { readForm } from "../http/form";
 import { Effect, Result } from "effect";
 import { Hono } from "hono";
 import type { PageEnv } from "../http/context";
@@ -23,11 +24,11 @@ connectionRoutes.get("/connections", ownerOnly, async (c) => {
   });
 });
 for (const action of ["name", "revoke"] as const) {
-  connectionRoutes.post(`/connections/:id/${action}`, ownerOnly, async (c) => {
+  connectionRoutes.post(`/connections/:id/${action}`, ownerOnly, readForm, async (c) => {
     const id = parseConnectionId(c.req.param("id"));
     if (!id) return c.json({ outcome: "not_found" }, 404);
     const owner = c.get("owner");
-    const name = action === "name" ? parseName((await c.req.raw.formData()).get("name")) : null;
+    const name = action === "name" ? parseName(c.get("form").get("name")) : null;
     if (action === "name" && !name) return c.json({ outcome: "invalid" }, 400);
     const result = await Effect.runPromise(
       Effect.result<

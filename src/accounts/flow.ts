@@ -98,7 +98,14 @@ const AddressAlert = Schema.Struct({
   address: Schema.String,
 });
 const SimpleAlert = Schema.Struct({
-  kind: Schema.Literals(["gone", "didnt_finish", "google_down", "no_refresh_token", "unconfirmed"]),
+  kind: Schema.Literals([
+    "gone",
+    "didnt_finish",
+    "google_down",
+    "client_refused",
+    "no_refresh_token",
+    "unconfirmed",
+  ]),
 });
 const AlertSchema = Schema.Union([
   AddressAlert,

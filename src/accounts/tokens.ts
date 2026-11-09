@@ -1,6 +1,6 @@
 import { Effect, Result } from "effect";
 import type { Config } from "../config";
-import type { Unavailable } from "../db";
+import { Unavailable } from "../db";
 import type { Owner } from "../owner/owner";
 import { open, seal } from "../seal";
 import { refresh } from "../google/client";
@@ -19,14 +19,14 @@ import {
   markNeedsReconnect,
   storeRefreshed,
 } from "./store";
-type TokenError =
+export type TokenError =
   | NeedsReconnect
   | BlockedByAdmin
   | GoogleUnavailable
   | AccountGone
   | RequestLost
   | Unavailable;
-type Deps = { db: D1Database; config: Config; owner: Owner; now: () => number };
+export type Deps = { db: D1Database; config: Config; owner: Owner; now: () => number };
 interface Access {
   token: string;
   refreshed: boolean;
@@ -34,7 +34,15 @@ interface Access {
   reloaded: boolean;
 }
 
-/** The caller supplies its authorized snapshot; a fresh token needs no additional D1 read. */
+/**
+ * Read credentialStatement in the caller's authorization batch immediately before this call.
+ * A fresh token costs no D1 read: a stale snapshot is used as supplied. Decode failures are
+ * Unavailable. NeedsReconnect and BlockedByAdmin describe Google access; GoogleUnavailable
+ * covers token endpoint failures (including a refused client); AccountGone means a reload
+ * found no live row. Unavailable is a retryable local failure, including an exhausted reload
+ * budget. RequestLost means fetch got no response and may have taken effect: do not blindly
+ * resend. A throwing request builder is a caller defect, not RequestLost.
+ */
 export const withGoogle = (
   deps: Deps,
   account: Credential,
@@ -48,7 +56,7 @@ export const withGoogle = (
     Effect.gen(function* () {
       const reload = (): Effect.Effect<Access, TokenError> =>
         Effect.gen(function* () {
-          if (reloaded) return yield* Effect.fail(new AccountGone());
+          if (reloaded) return yield* Effect.fail(new Unavailable());
           const latest = yield* loadCredential(deps.db, deps.owner, snapshot.id);
           if (!latest) return yield* Effect.fail(new AccountGone());
           return yield* acquire(latest, false, true);
@@ -58,42 +66,48 @@ export const withGoogle = (
           if (!(yield* markNeedsReconnect(deps.db, snapshot))) return yield* reload();
           return yield* Effect.fail(new NeedsReconnect({ email: snapshot.email }));
         });
+      const decrypt = (context: string, value: import("../seal").Sealed) =>
+        Effect.gen(function* () {
+          const opened = yield* Effect.promise(() => open(deps.config.tokenKey, context, value));
+          if (!opened.ok && opened.reason === "other_key") {
+            console.error("TOKEN_KEY does not match the stored tokens");
+            return yield* Effect.fail(new Unavailable());
+          }
+          return opened.ok ? opened.value : null;
+        });
       if (snapshot.health === "needs_reconnect")
         return yield* Effect.fail(new NeedsReconnect({ email: snapshot.email }));
       if (snapshot.health === "blocked_by_admin") {
         if (snapshot.blockedUntil === null || snapshot.blockedUntil > deps.now())
           return yield* Effect.fail(new BlockedByAdmin({ email: snapshot.email }));
-        if (!(yield* claimBlockSlot(deps.db, snapshot, deps.now())))
-          return reloaded
-            ? yield* Effect.fail(new BlockedByAdmin({ email: snapshot.email }))
-            : yield* reload();
+        const claimedAt = deps.now();
+        if (!(yield* claimBlockSlot(deps.db, snapshot, claimedAt))) return yield* reload();
+        snapshot = { ...snapshot, blockedUntil: claimedAt + 600000 };
       } else if (
         !force &&
         snapshot.accessToken &&
         snapshot.accessExpiresAt !== null &&
         snapshot.accessExpiresAt > deps.now() + 300000
       ) {
-        const token = yield* Effect.promise(() =>
-          open(deps.config.tokenKey, `${snapshot.id}:access`, snapshot.accessToken!),
-        );
+        const token = yield* decrypt(`${snapshot.id}:access`, snapshot.accessToken);
         return token === null ? yield* damaged() : { token, refreshed: false, snapshot, reloaded };
       }
       const refreshToken = snapshot.refreshToken
-        ? yield* Effect.promise(() =>
-            open(deps.config.tokenKey, `${snapshot.id}:refresh`, snapshot.refreshToken!),
-          )
+        ? yield* decrypt(`${snapshot.id}:refresh`, snapshot.refreshToken)
         : null;
       if (refreshToken === null) return yield* damaged();
       const result = yield* Effect.result(refresh(deps.config, refreshToken, deps.now()));
       if (Result.isFailure(result)) {
         if (result.failure._tag === "GoogleUnavailable") return yield* Effect.fail(result.failure);
+        if (result.failure._tag === "ClientRefused")
+          return yield* Effect.fail(new GoogleUnavailable());
         if (result.failure._tag === "GrantRevoked") return yield* damaged();
         if (!(yield* markBlocked(deps.db, snapshot, deps.now()))) return yield* reload();
         return yield* Effect.fail(new BlockedByAdmin({ email: snapshot.email }));
       }
       const sealed = yield* Effect.tryPromise({
         try: () => seal(deps.config.tokenKey, `${snapshot.id}:access`, result.success.accessToken),
-        catch: () => new GoogleUnavailable(),
+        catch: () => new Unavailable(),
       });
       if (!(yield* storeRefreshed(deps.db, snapshot, sealed, result.success.expiresAt))) {
         const current = yield* reload();
@@ -101,8 +115,10 @@ export const withGoogle = (
       }
       return { token: result.success.accessToken, refreshed: true, snapshot, reloaded };
     });
-  const send = (token: string) =>
-    Effect.tryPromise({ try: () => fetch(build(token)), catch: () => new RequestLost() });
+  const send = (token: string) => {
+    const request = build(token);
+    return Effect.tryPromise({ try: () => fetch(request), catch: () => new RequestLost() });
+  };
   return Effect.gen(function* () {
     const access = yield* acquire(account, false, false);
     const response = yield* send(access.token);

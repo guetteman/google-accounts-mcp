@@ -444,7 +444,7 @@ it("does not replace needs-reconnect health with a late admin-block result", asy
 });
 
 it.each(["ok", "invalid_grant"] as const)(
-  "refreshes the effective reconnect credential after a reloaded token gets 401: %s",
+  "refreshes the newly reconnected account after Gmail rejects its token: %s",
   async (answer) => {
     const row = await seedAccount({
       sub: "personal",
@@ -489,7 +489,7 @@ it.each(["ok", "invalid_grant"] as const)(
   },
 );
 
-it("keeps the reload budget spent when a forced refresh loses to another reconnect", async () => {
+it("reports a retryable failure when the account reconnects twice during a request", async () => {
   const row = await seedAccount({
     sub: "personal",
     health: "blocked_by_admin",
@@ -511,7 +511,7 @@ it("keeps the reload budget spent when a forced refresh loses to another reconne
       latest = await accounts();
     }
   });
-  expect(await call(row.id, db, snapshot)).toMatchObject({ error: "AccountGone" });
+  expect(await call(row.id, db, snapshot)).toMatchObject({ error: "Unavailable" });
   expect(reads).toBe(1);
   expect(await accounts()).toEqual(latest);
   expect(latest[0]).toMatchObject({ health: "ready", version: row.version + 2 });
@@ -519,7 +519,7 @@ it("keeps the reload budget spent when a forced refresh loses to another reconne
   expect(google.events).toEqual(["exchange", "gmail", "refresh", "exchange"]);
 });
 
-it("stops after one reload when a damaged reconnect token loses another version race", async () => {
+it("reports a retryable failure when two reconnects interrupt recovery from a damaged token", async () => {
   const row = await seedAccount({ sub: "personal", access_expires_at: NOW });
   const snapshot = await credential(row.id);
   const b = await ownerBrowser();
@@ -540,7 +540,7 @@ it("stops after one reload when a damaged reconnect token loses another version 
       latest = await accounts();
     }
   });
-  expect(await call(row.id, db, snapshot)).toMatchObject({ error: "AccountGone" });
+  expect(await call(row.id, db, snapshot)).toMatchObject({ error: "Unavailable" });
   expect(writes).toBe(2);
   expect(reads).toBe(1);
   expect(await accounts()).toEqual(latest);

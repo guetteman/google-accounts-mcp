@@ -1,3 +1,4 @@
+import { readForm } from "../http/form";
 import { Effect, Result } from "effect";
 import { Hono } from "hono";
 import type { PageEnv } from "../http/context";
@@ -49,6 +50,7 @@ for (const purpose of ["add", "reconnect"] as const)
   accountRoutes.post(
     purpose === "add" ? "/accounts/connect" : "/accounts/:id/reconnect",
     ownerOnly,
+    readForm,
     async (c) => {
       const owner = c.get("owner");
       let target: { id: import("./model").AccountId; version: number; email: string } | null = null;
@@ -117,11 +119,13 @@ accountRoutes.get("/google/callback", ownerOnly, async (c) => {
   if (Result.isFailure(exchanged))
     return reply({
       kind:
-        exchanged.failure._tag === "GoogleUnavailable"
-          ? "google_down"
-          : exchanged.failure._tag === "NoRefreshToken"
-            ? "no_refresh_token"
-            : "didnt_finish",
+        exchanged.failure._tag === "ClientRefused"
+          ? "client_refused"
+          : exchanged.failure._tag === "GoogleUnavailable"
+            ? "google_down"
+            : exchanged.failure._tag === "NoRefreshToken"
+              ? "no_refresh_token"
+              : "didnt_finish",
     });
   const id = flow.purpose === "add" ? newAccountId() : flow.account;
   const result = await Effect.runPromise(
@@ -166,10 +170,10 @@ accountRoutes.get("/google/callback", ownerOnly, async (c) => {
       : { kind: "didnt_finish" },
   );
 });
-accountRoutes.post("/accounts/:id/name", ownerOnly, async (c) => {
+accountRoutes.post("/accounts/:id/name", ownerOnly, readForm, async (c) => {
   const id = parseAccountId(c.req.param("id"));
   if (!id) return c.json({ outcome: "not_found" }, 404);
-  const name = parseName((await c.req.raw.formData()).get("name"));
+  const name = parseName(c.get("form").get("name"));
   if (!name) return c.json({ outcome: "invalid" }, 400);
   const result = await Effect.runPromise(
     Effect.result(renameAccount(c.env.DB, c.get("owner"), id, name, Date.now())),
@@ -178,14 +182,14 @@ accountRoutes.post("/accounts/:id/name", ownerOnly, async (c) => {
     ? c.json({ outcome: "unknown" }, 503)
     : c.json({ outcome: result.success }, result.success === "not_found" ? 404 : 200);
 });
-accountRoutes.post("/accounts/:id/remove", ownerOnly, async (c) => {
+accountRoutes.post("/accounts/:id/remove", ownerOnly, readForm, async (c) => {
   const id = parseAccountId(c.req.param("id"));
   if (!id) return c.json({ outcome: "not_found" }, 404);
   const owner = c.get("owner");
   const target = await Effect.runPromise(Effect.result(removalTarget(c.env.DB, owner, id)));
   if (Result.isFailure(target)) return c.json({ outcome: "unavailable" }, 503);
   if (!target.success) return c.json({ outcome: "not_found" }, 404);
-  const disconnect = (await c.req.raw.formData()).get("disconnect") === "1";
+  const disconnect = c.get("form").get("disconnect") === "1";
   let confirmed = !disconnect;
   if (disconnect && target.success.refreshToken) {
     const token = await open(
@@ -193,7 +197,7 @@ accountRoutes.post("/accounts/:id/remove", ownerOnly, async (c) => {
       `${id}:refresh`,
       target.success.refreshToken,
     );
-    if (token) confirmed = await Effect.runPromise(revoke(token));
+    if (token.ok) confirmed = await Effect.runPromise(revoke(token.value));
   }
   const result = await Effect.runPromise(
     Effect.result(removeAccount(c.env.DB, owner, id, Date.now())),

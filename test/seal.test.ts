@@ -23,6 +23,9 @@ it("refuses a changed key ID even when the nonce and ciphertext are intact", asy
   const sealed = await seal(key, context, "synthetic secret");
   const parts = sealed.split(".");
   parts[1] = parts[1] === "0000000000000000" ? "1111111111111111" : "0000000000000000";
-  expect(await open(key, context, parts.join(".") as Sealed)).toBeNull();
-  expect(await open(key, context, sealed)).toBe("synthetic secret");
+  expect(await open(key, context, parts.join(".") as Sealed)).toEqual({
+    ok: false,
+    reason: "other_key",
+  });
+  expect(await open(key, context, sealed)).toEqual({ ok: true, value: "synthetic secret" });
 });

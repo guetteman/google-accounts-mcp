@@ -174,7 +174,7 @@ it("returns 503 when listing accounts fails after the owner gate passes", async 
   expect(textOf(await response.text())).toContain("The server can't reach its database");
 });
 
-it("refuses a stale rename after removal without changing the tombstone", async () => {
+it("refuses a stale rename without changing the removed account", async () => {
   const row = await seedAccount();
   const b = await ownerBrowser();
   expect(await (await b.post(`/accounts/${row.id}/remove`)).json()).toEqual({ outcome: "ok" });

@@ -29,7 +29,8 @@ export async function seal(key: TokenKey, context: string, plaintext: string): P
   );
   return `v1.${info.id}.${encode(iv)}.${encode(new Uint8Array(ciphertext))}` as Sealed;
 }
-export async function open(key: TokenKey, context: string, sealed: Sealed): Promise<string | null> {
+export type Opened = { ok: true; value: string } | { ok: false; reason: "damaged" | "other_key" };
+export async function open(key: TokenKey, context: string, sealed: Sealed): Promise<Opened> {
   try {
     const [version, id, nonce, value, ...rest] = sealed.split(".");
     if (
@@ -40,18 +41,22 @@ export async function open(key: TokenKey, context: string, sealed: Sealed): Prom
       rest.length ||
       !/^[\w-]+$/.test(nonce + value)
     )
-      return null;
+      return { ok: false, reason: "damaged" };
     const info = await keyInfo(key);
     const iv = decode(nonce);
-    if (id !== info.id || iv.length !== 12) return null;
-    return new TextDecoder().decode(
-      await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv, additionalData: encoder.encode(context) },
-        info.key,
-        decode(value),
+    if (iv.length !== 12) return { ok: false, reason: "damaged" };
+    if (id !== info.id) return { ok: false, reason: "other_key" };
+    return {
+      ok: true,
+      value: new TextDecoder().decode(
+        await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv, additionalData: encoder.encode(context) },
+          info.key,
+          decode(value),
+        ),
       ),
-    );
+    };
   } catch {
-    return null;
+    return { ok: false, reason: "damaged" };
   }
 }

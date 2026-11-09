@@ -33,7 +33,10 @@ export function readConfig(env: Env): Result.Result<Config, Incomplete> {
   const validClient =
     typeof clientId === "string" && /^[a-zA-Z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId);
   const clientSecret = env.GOOGLE_CLIENT_SECRET;
-  const validSecret = typeof clientSecret === "string" && clientSecret.trim().length > 0;
+  const validSecret =
+    typeof clientSecret === "string" &&
+    clientSecret.length > 0 &&
+    clientSecret === clientSecret.trim();
   const tokenKey = env.TOKEN_KEY;
   const validKey = typeof tokenKey === "string" && /^[a-fA-F0-9]{64}$/.test(tokenKey);
   const names: ConfigName[] = [];

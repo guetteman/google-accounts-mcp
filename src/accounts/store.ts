@@ -31,7 +31,13 @@ export const loadCredential = (db: D1Database, owner: Owner, id: AccountId) =>
   Effect.tryPromise({
     try: () => credentialStatement(db, owner, id).first<unknown>(),
     catch: () => new Unavailable(),
-  }).pipe(Effect.map(decodeCredential));
+  }).pipe(
+    Effect.flatMap((row) => {
+      if (row === null) return Effect.succeed(null);
+      const credential = decodeCredential(row);
+      return credential ? Effect.succeed(credential) : Effect.fail(new Unavailable());
+    }),
+  );
 export const listAccounts = (db: D1Database, owner: Owner) =>
   Effect.tryPromise({
     try: async (): Promise<ReadonlyArray<AccountView>> => {
@@ -237,8 +243,8 @@ export const markBlocked = (db: D1Database, account: Credential, now: number) =>
     db,
     account,
     "health = 'blocked_by_admin', blocked_until = ?3, access_token = NULL, access_expires_at = NULL",
-    [now + 600000],
-    "AND a.health <> 'needs_reconnect'",
+    [now + 600000, account.accessToken, account.blockedUntil],
+    "AND a.health <> 'needs_reconnect' AND a.access_token IS ?4 AND a.blocked_until IS ?5",
   );
 export const claimBlockSlot = (db: D1Database, account: Credential, now: number) =>
   tokenWrite(

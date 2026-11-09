@@ -14,6 +14,7 @@ export const token = () => {
   return value;
 };
 export type Answer =
+  | (() => Promise<Response>)
   | "ok"
   | "invalid_grant"
   | "admin_policy_enforced"
@@ -90,6 +91,7 @@ export const google = {
     return `/google/callback?${new URLSearchParams({ code, state: url.searchParams.get("state")! })}`;
   },
   async answer(answer: Answer) {
+    if (typeof answer === "function") return answer();
     if (typeof answer === "object")
       return new HttpResponse(answer.body, { status: answer.status, headers: answer.headers });
     if (answer === "slow") {

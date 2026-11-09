@@ -24,6 +24,7 @@ export interface Grant {
   readonly accessToken: string;
   readonly expiresAt: number;
 }
+export class ClientRefused extends Data.TaggedError("ClientRefused") {}
 export class CodeRefused extends Data.TaggedError("CodeRefused") {}
 export class NoRefreshToken extends Data.TaggedError("NoRefreshToken") {}
 export class GrantRevoked extends Data.TaggedError("GrantRevoked") {}
@@ -71,14 +72,16 @@ const tokenRequest = (config: Config, fields: Record<string, string>) =>
           }),
         });
         const body = object(await response.json());
-        if (body.error === "invalid_client")
+        if (body.error === "invalid_client") {
           console.error("Google OAuth client credentials were refused");
+          throw new ClientRefused();
+        }
         return { status: response.status, body };
       } finally {
         clearTimeout(timer);
       }
     },
-    catch: () => new GoogleUnavailable(),
+    catch: (error) => (error instanceof ClientRefused ? error : new GoogleUnavailable()),
   });
 const decodedToken = (body: unknown, now: number) =>
   Schema.decodeUnknownEffect(TokenResponse)(body).pipe(

@@ -130,8 +130,13 @@ export async function finish(
   expect(response.headers.get("Location")).toBe("/accounts");
   return { callback, response, text: textOf(await (await browser.get("/accounts")).text()) };
 }
-export async function call(id: AccountId, db = env.DB, snapshot?: Credential) {
-  const config = readConfig(testEnv());
+export async function call(
+  id: AccountId,
+  db = env.DB,
+  snapshot?: Credential,
+  workerEnv = testEnv(),
+) {
+  const config = readConfig(workerEnv);
   if (Result.isFailure(config)) throw new Error("Invalid test config");
   const row = await Effect.runPromise(readOwner(env.DB));
   const owner: Owner = { generation: row.generation, email: row.email! };

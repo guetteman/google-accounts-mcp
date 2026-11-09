@@ -95,6 +95,8 @@ function alertMessage(alert: AccountsAlert | null): string | null {
       return actionMessage("not_found");
     case "didnt_finish":
       return "Didn't finish. It expired, was cancelled, or started in another browser. Nothing changed. Try again.";
+    case "client_refused":
+      return "Google refused this server's OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Nothing changed.";
     case "google_down":
       return "Google didn't answer. Nothing changed. Try again in a minute.";
     case "no_refresh_token":

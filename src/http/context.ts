@@ -4,5 +4,5 @@ import type { Owner } from "../owner/owner";
 
 export interface PageEnv {
   Bindings: OAuthEnv;
-  Variables: { config: Config; owner: Owner };
+  Variables: { config: Config; owner: Owner; form: FormData };
 }

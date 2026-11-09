@@ -82,10 +82,12 @@ it("refuses an empty access token from both exchange and refresh", async () => {
   expect(google.events).toEqual(["exchange", "refresh"]);
 });
 
-it("reports invalid client credentials as unavailable in both flows and logs no secret", async () => {
+it("names refused OAuth client settings and logs no secret", async () => {
   const b = await ownerBrowser();
   google.exchangeAnswer = "invalid_client";
-  expect((await finish(b, (await start(b)).url)).text).toContain(DOWN);
+  expect((await finish(b, (await start(b)).url)).text).toContain(
+    "Google refused this server's OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Nothing changed.",
+  );
   expect(await accounts()).toEqual([]);
   const row = await seedAccount({ access_expires_at: NOW });
   const before = await dump();
@@ -99,7 +101,7 @@ it("reports invalid client credentials as unavailable in both flows and logs no 
   expect(JSON.stringify(recordedConsole())).not.toContain(testEnv().GOOGLE_CLIENT_SECRET);
 });
 
-it("fake Google refuses unissued refresh tokens and accepts an issued token", async () => {
+it("accepts only refresh tokens issued by the Google test server", async () => {
   const request = (refresh: string) =>
     fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
