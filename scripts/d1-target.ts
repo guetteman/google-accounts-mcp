@@ -44,6 +44,8 @@ export function ownerDatabase(databases: ReadonlyArray<D1BindingConfig>): D1Bind
 export interface WranglerTarget {
   readonly mode: "local" | "remote" | "preview";
   readonly id: string;
+  /** Where local state lives; absent remotely. */
+  readonly path?: string;
 }
 
 /**
@@ -52,10 +54,38 @@ export interface WranglerTarget {
  * is the key of the local state; remotely it is the database's UUID.
  */
 export function wranglerTarget(output: string): WranglerTarget | null {
-  const match = /Executing on (local|remote|preview) database \S+ \(([^)]+)\)/.exec(output);
+  const match =
+    /Executing on (local|remote|preview) database \S+ \(([^)]+)\)(?: from (.+))?:\s*$/m.exec(
+      output,
+    );
   if (!match?.[1] || !match[2]) return null;
-  return { mode: match[1] as WranglerTarget["mode"], id: match[2] };
+  return {
+    mode: match[1] as WranglerTarget["mode"],
+    id: match[2],
+    ...(match[3] ? { path: match[3] } : {}),
+  };
 }
+
+/**
+ * Whether the database wrangler reported is the configured one. Remotely, wrangler 4.158.0 labels
+ * a database "preview" whenever the configuration has a preview_database_id, even though it runs
+ * on database_id, so "preview" counts as remote here and the ID decides.
+ */
+export function targetMatches(
+  target: WranglerTarget,
+  db: D1BindingConfig,
+  mode: "local" | "remote",
+): boolean {
+  const expected = expectedTargetId(db, mode);
+  const modeMatches =
+    mode === "local"
+      ? target.mode === "local"
+      : target.mode === "remote" || target.mode === "preview";
+  return modeMatches && (expected === undefined || target.id === expected);
+}
+
+export const sameTarget = (a: WranglerTarget, b: WranglerTarget): boolean =>
+  a.mode === b.mode && a.id === b.id && a.path === b.path;
 
 /**
  * The id wrangler must report for the configured database: locally the key of its local state

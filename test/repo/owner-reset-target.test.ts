@@ -77,6 +77,18 @@ function generationOf(id: string): number {
   return out[0]?.results[0]?.generation ?? Number.NaN;
 }
 
+function sqlOn(id: string, command: string) {
+  const config = writeConfig(`sql-${id}.json`, { d1_databases: [db(id)] });
+  return JSON.parse(
+    wrangler(config, "d1", "execute", "DB", "--json", "--command", command),
+  ) as Array<{
+    results: Array<Record<string, unknown>>;
+  }>;
+}
+
+const instanceOf = (id: string) =>
+  Number(sqlOn(id, "SELECT instance FROM owner")[0]?.results[0]?.instance);
+
 function reset(args: string[], env: Record<string, string | undefined> = {}) {
   return spawnSync(process.execPath, [SCRIPT, "--local", "--persist-to", persistTo(), ...args], {
     encoding: "utf8",
@@ -104,7 +116,8 @@ describe("pnpm owner:reset changes only the database it shows", () => {
 
       expect(run.status, run.stderr).toBe(0);
       expect(run.stdout).toContain("Environment: top level");
-      expect(run.stdout).toContain(A);
+      expect(run.stdout).toContain(`Wrangler used: local database ${A}`);
+      expect(run.stdout).toContain(`instance ${instanceOf(A)}`);
       expect(run.stdout).not.toContain(B);
       expect(generationOf(A)).toBe(2);
       expect(generationOf(B)).toBe(5);
@@ -130,11 +143,15 @@ describe("pnpm owner:reset changes only the database it shows", () => {
     TIMEOUT,
   );
 
-  it(
-    "changes no database when the configuration points elsewhere after it showed one",
-    async () => {
+  it.each([
+    ["another database", false],
+    ["a copy of the database, instance and all", true],
+  ])(
+    "changes nothing when the configuration points to %s while it waits for confirmation",
+    async (_label, copy) => {
       seed(A, 7);
       seed(B, 7);
+      if (copy) sqlOn(B, `UPDATE owner SET instance = ${instanceOf(A)} WHERE id = 1`);
       const config = writeConfig("wrangler.jsonc", { d1_databases: [db(A)] });
 
       const child = spawn(
@@ -157,8 +174,9 @@ describe("pnpm owner:reset changes only the database it shows", () => {
       writeConfig("wrangler.jsonc", { d1_databases: [db(B)] });
       child.stdin.end("reset\n");
 
-      expect(await exited, stderr).toBe(0);
-      expect(stdout).toMatch(/nothing done/);
+      expect(await exited).not.toBe(0);
+      expect(`${stdout}${stderr}`).toMatch(/nothing changed/i);
+      expect(stdout).not.toMatch(/Done/);
       expect(generationOf(A)).toBe(7);
       expect(generationOf(B)).toBe(7);
     },

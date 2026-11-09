@@ -3,6 +3,8 @@ import {
   databaseLabel,
   expectedTargetId,
   ownerDatabase,
+  sameTarget,
+  targetMatches,
   wranglerTarget,
 } from "../../scripts/d1-target.ts";
 
@@ -61,7 +63,7 @@ describe("the database wrangler says it used", () => {
   it("is read from the line wrangler prints before it runs SQL", () => {
     expect(
       wranglerTarget("🌀 Executing on local database DB (DB) from .wrangler/state/v3/d1:\n[]"),
-    ).toEqual({ mode: "local", id: "DB" });
+    ).toEqual({ mode: "local", id: "DB", path: ".wrangler/state/v3/d1" });
     expect(
       wranglerTarget(
         "🌀 Executing on remote database DB (00000000-0000-4000-8000-0000000000aa):\n[]",
@@ -76,5 +78,41 @@ describe("the database wrangler says it used", () => {
     expect(expectedTargetId(NAME_ONLY, "local")).toBe("DB");
     expect(expectedTargetId(WITH_PREVIEW, "remote")).toBe("00000000-0000-4000-8000-0000000000aa");
     expect(expectedTargetId(NAME_ONLY, "remote")).toBeUndefined();
+  });
+});
+
+describe("whether wrangler used the configured database", () => {
+  const AA = "00000000-0000-4000-8000-0000000000aa";
+
+  it("reads where local state lives, so two local runs can be compared", () => {
+    const one = wranglerTarget(
+      "🌀 Executing on local database DB (DB) from .wrangler/state/v3/d1:",
+    );
+    const two = wranglerTarget("🌀 Executing on local database DB (DB) from other/v3/d1:");
+    expect(one).toEqual({ mode: "local", id: "DB", path: ".wrangler/state/v3/d1" });
+    expect(one && two && sameTarget(one, two)).toBe(false);
+    expect(one && sameTarget(one, { ...one })).toBe(true);
+  });
+
+  it("refuses a target in the other mode", () => {
+    expect(targetMatches({ mode: "remote", id: "DB" }, NAME_ONLY, "local")).toBe(false);
+    expect(targetMatches({ mode: "local", id: AA }, BOTH, "remote")).toBe(false);
+  });
+
+  it("accepts wrangler's preview label on the remote database_id, and nothing else", () => {
+    expect(targetMatches({ mode: "preview", id: AA }, WITH_PREVIEW, "remote")).toBe(true);
+    expect(
+      targetMatches(
+        { mode: "preview", id: "00000000-0000-4000-8000-0000000000bb" },
+        WITH_PREVIEW,
+        "remote",
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses another ID, and accepts any UUID only when the configuration has none", () => {
+    expect(targetMatches({ mode: "local", id: AA }, WITH_PREVIEW, "local")).toBe(false);
+    expect(targetMatches({ mode: "remote", id: "x" }, BOTH, "remote")).toBe(false);
+    expect(targetMatches({ mode: "remote", id: "x" }, NAME_ONLY, "remote")).toBe(true);
   });
 });

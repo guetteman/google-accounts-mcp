@@ -5,8 +5,9 @@ import { unstable_readConfig } from "wrangler";
 import { resetOutcome, resetPlan, type OwnerState } from "../src/owner/reset.ts";
 import {
   databaseLabel,
-  expectedTargetId,
   ownerDatabase,
+  sameTarget,
+  targetMatches,
   wranglerTarget,
   type D1BindingConfig,
   type WranglerTarget,
@@ -95,8 +96,7 @@ async function main() {
     const target = wranglerTarget(result.stdout);
     const json = result.stdout.indexOf("\n[");
     if (!target || json < 0) throw new Error("Could not read which database wrangler used.");
-    const expected = expectedTargetId(database, mode);
-    if (target.mode !== mode || (expected !== undefined && target.id !== expected)) {
+    if (!targetMatches(target, database, mode)) {
       throw new Error(
         `Wrangler used the ${target.mode} database ${target.id}, not the configured one; nothing changed.`,
       );
@@ -172,8 +172,18 @@ async function main() {
       return;
     }
   }
-  // Every statement is guarded on the instance read above, so if wrangler now reaches another
-  // database (the configuration or credentials changed while waiting), nothing changes there.
+  // Wrangler reads its configuration again on every call. Read once more right before writing and
+  // stop if anything differs from what was shown. Beyond that, every statement is guarded on the
+  // instance read above, so a write that still reaches another database changes nothing there.
+  const again = readOwner();
+  if (
+    !sameTarget(read.target, again.target) ||
+    JSON.stringify(read.row) !== JSON.stringify(again.row)
+  ) {
+    console.log("The database or its owner changed while waiting; nothing changed. Run again.");
+    process.exitCode = 1;
+    return;
+  }
   const plan = resetPlan(read.row, Date.now());
   const results = execute(plan.statements.join("; "));
   switch (resetOutcome(plan, results)) {
