@@ -49,6 +49,7 @@ export const google = {
   events: [] as string[],
   refreshTokens: [] as string[],
   tokenRedirects: [] as RequestRedirect[],
+  revokeRedirects: [] as RequestRedirect[],
   gmailTokens: [] as string[],
   issuedAccess: [] as string[],
   issuedRefresh: new Set<string>(),
@@ -63,6 +64,7 @@ export const google = {
     this.events = [];
     this.refreshTokens = [];
     this.tokenRedirects = [];
+    this.revokeRedirects = [];
     this.gmailTokens = [];
     this.issuedAccess = [];
     this.issuedRefresh.clear();
@@ -164,6 +166,7 @@ export const google = {
         });
       }),
       http.post("https://oauth2.googleapis.com/revoke", async ({ request }) => {
+        this.revokeRedirects.push(request.redirect);
         this.events.push("revoke");
         if (
           !new URLSearchParams(new TextDecoder().decode(await request.arrayBuffer()))

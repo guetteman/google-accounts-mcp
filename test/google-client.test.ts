@@ -5,7 +5,7 @@ import { accounts, call, finish, NOW, ownerBrowser, seedAccount, start } from ".
 import { dump } from "./support/db";
 import { google, type Answer } from "./support/google";
 import { network } from "./support/network";
-import { testEnv } from "./support/worker";
+import { testEnv, textOf } from "./support/worker";
 
 const DOWN = "Google didn't answer. Nothing changed. Try again in a minute.";
 const failures: Array<[string, Answer]> = [
@@ -117,3 +117,38 @@ it("fake Google refuses unissued refresh tokens and accepts an issued token", as
   expect(accepted.status).toBe(200);
   expect(await accepted.json()).toMatchObject({ access_token: google.issuedAccess.at(-1) });
 });
+
+it.each([302, 307])(
+  "refuses a revoke redirect with status %s and removes local access without following it",
+  async (status) => {
+    let followed = 0;
+    network.use(
+      http.all("https://redirect.example/revoke", () => {
+        followed++;
+        return new HttpResponse(null, { status: 200 });
+      }),
+    );
+    google.revokeAnswer = {
+      status,
+      body: "",
+      headers: { Location: "https://redirect.example/revoke" },
+    };
+    const row = await seedAccount();
+    const b = await ownerBrowser();
+    expect(await (await b.post(`/accounts/${row.id}/remove`, { disconnect: "1" })).json()).toEqual({
+      outcome: "ok",
+    });
+    expect((await accounts())[0]).toMatchObject({
+      state: "removed",
+      refresh_token: null,
+      access_token: null,
+    });
+    expect(textOf(await (await b.get("/accounts")).text())).toContain(
+      "Google didn't confirm the disconnect.",
+    );
+    // MSW rejects redirects of POST bodies before following; also verify the fetch policy.
+    expect(google.revokeRedirects).toEqual(["manual"]);
+    expect(followed).toBe(0);
+    expect(google.events).toEqual(["revoke"]);
+  },
+);

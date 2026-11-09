@@ -518,3 +518,33 @@ it("keeps the reload budget spent when a forced refresh loses to another reconne
   expect(google.gmailTokens).toEqual([`Bearer ${access}`]);
   expect(google.events).toEqual(["exchange", "gmail", "refresh", "exchange"]);
 });
+
+it("stops after one reload when a damaged reconnect token loses another version race", async () => {
+  const row = await seedAccount({ sub: "personal", access_expires_at: NOW });
+  const snapshot = await credential(row.id);
+  const b = await ownerBrowser();
+  let writes = 0,
+    reads = 0;
+  let latest: Awaited<ReturnType<typeof accounts>> = [];
+  const db = observeStatements(env.DB, async (sql) => {
+    if (/SELECT a.id, a.email, a.version/.test(sql)) reads++;
+    if (!/UPDATE accounts/.test(sql)) return;
+    writes++;
+    if (writes === 1) {
+      await finish(b, (await start(b, row.id)).url);
+      await env.DB.prepare("UPDATE accounts SET access_token = 'damaged' WHERE id = ?")
+        .bind(row.id)
+        .run();
+    } else if (writes === 2) {
+      await finish(b, (await start(b, row.id)).url);
+      latest = await accounts();
+    }
+  });
+  expect(await call(row.id, db, snapshot)).toMatchObject({ error: "AccountGone" });
+  expect(writes).toBe(2);
+  expect(reads).toBe(1);
+  expect(await accounts()).toEqual(latest);
+  expect(latest[0]).toMatchObject({ health: "ready", version: row.version + 2 });
+  expect(google.gmailTokens).toEqual([]);
+  expect(google.events).toEqual(["refresh", "exchange", "exchange"]);
+});
