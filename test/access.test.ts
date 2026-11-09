@@ -178,31 +178,46 @@ describe("Access owner check", () => {
 });
 
 describe("Access signing keys", () => {
-  it.each(["fail", "junk", "invalid-key", "invalid-json", "redirect"] as const)(
-    "shows an Access outage for %s certs and changes nothing",
+  it.each([
+    "fail",
+    "junk",
+    "invalid-key",
+    "weak-key",
+    "no-kty",
+    "invalid-json",
+    "redirect",
+  ] as const)("shows an Access outage for %s certs and changes nothing", async (mode) => {
+    access.mode = mode;
+    const browser = new Browser();
+    await browser.authenticate();
+    const before = await dump();
+    const response = await browser.get("/accounts");
+    expect(response.status).toBe(503);
+    const text = textOf(await response.text());
+    expect(text).toContain(ACCESS_UNAVAILABLE.title);
+    expect(text).toContain(ACCESS_UNAVAILABLE.line);
+    expect(text).not.toContain(OWNER_EMAIL);
+    expect(await dump()).toEqual(before);
+  });
+
+  it.each(["invalid-key", "weak-key", "no-kty"] as const)(
+    "recovers on the next request after the certs endpoint returns an unusable key (%s)",
     async (mode) => {
       access.mode = mode;
-      const browser = new Browser();
-      await browser.authenticate();
-      const before = await dump();
-      const response = await browser.get("/accounts");
-      expect(response.status).toBe(503);
-      const text = textOf(await response.text());
-      expect(text).toContain(ACCESS_UNAVAILABLE.title);
-      expect(text).toContain(ACCESS_UNAVAILABLE.line);
-      expect(text).not.toContain(OWNER_EMAIL);
-      expect(await dump()).toEqual(before);
+      const owner = new Browser();
+      await owner.authenticate();
+      expect((await owner.get("/accounts")).status).toBe(503);
+      access.mode = "ok";
+      expect((await owner.get("/accounts")).status).toBe(200);
+      expect(access.requests).toHaveLength(2);
     },
   );
 
-  it("recovers on the next request after the certs endpoint returns a corrupt key", async () => {
-    access.mode = "invalid-key";
-    const owner = new Browser();
-    await owner.authenticate();
-    expect((await owner.get("/accounts")).status).toBe(503);
-    access.mode = "ok";
-    expect((await owner.get("/accounts")).status).toBe(200);
-    expect(access.requests).toHaveLength(2);
+  it("fetches the certs once when a cold isolate meets an unknown key", async () => {
+    const browser = new Browser();
+    browser.assertion = await signAccessJwt({}, { kid: "unknown", foreign: true });
+    expect((await browser.get("/accounts")).status).toBe(403);
+    expect(access.requests).toHaveLength(1);
   });
 
   it("aborts a slow cert fetch after a bounded wait and leaves D1 unchanged", async () => {

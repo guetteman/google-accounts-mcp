@@ -17,6 +17,15 @@ function testKeys() {
     foreign: await crypto.subtle.generateKey(algorithm, true, ["sign", "verify"]),
   }))());
 }
+let weak: Promise<CryptoKeyPair> | undefined;
+async function weakJwks() {
+  weak ??= crypto.subtle.generateKey({ ...algorithm, modulusLength: 1024 }, true, [
+    "sign",
+    "verify",
+  ]) as Promise<CryptoKeyPair>;
+  const jwk = await crypto.subtle.exportKey("jwk", (await weak).publicKey);
+  return { keys: [{ ...jwk, kid: KEY_ID, alg: "RS256", use: "sig" }] };
+}
 
 export async function accessJwks(rotated = false, alg = "RS256") {
   const { pair, foreign } = await testKeys();
@@ -25,7 +34,16 @@ export async function accessJwks(rotated = false, alg = "RS256") {
 }
 
 export const access = {
-  mode: "ok" as "ok" | "slow" | "fail" | "junk" | "invalid-key" | "invalid-json" | "redirect",
+  mode: "ok" as
+    | "ok"
+    | "slow"
+    | "fail"
+    | "junk"
+    | "invalid-key"
+    | "weak-key"
+    | "no-kty"
+    | "invalid-json"
+    | "redirect",
   rotated: false,
   keyAlgorithm: "RS256",
   requests: [] as Array<Pick<Request, "url" | "signal">>,
@@ -53,6 +71,11 @@ export const access = {
           if (this.mode === "junk") return HttpResponse.json({ message: "not a key set" });
           if (this.mode === "invalid-key")
             return HttpResponse.json({ keys: [{ kid: KEY_ID, kty: "RSA", n: "!", e: "!" }] });
+          if (this.mode === "weak-key") return HttpResponse.json(await weakJwks());
+          if (this.mode === "no-kty") {
+            const { keys } = await accessJwks();
+            return HttpResponse.json({ keys: keys.map(({ kty: _kty, ...key }) => key) });
+          }
           if (this.mode === "invalid-json") return new HttpResponse("not json");
           if (this.mode === "redirect")
             return new HttpResponse(null, {

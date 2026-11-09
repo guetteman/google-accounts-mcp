@@ -114,6 +114,22 @@ describe("owner page actions", () => {
   });
 });
 
+it("refuses a pin if another address is pinned after the gate's read and before verification completes", async () => {
+  const owner = new Browser();
+  await owner.authenticate();
+  access.mode = "slow";
+  const pending = owner.get("/accounts");
+  const { vi } = await import("vite-plus/test");
+  await vi.waitFor(() => expect(access.requests).toHaveLength(1));
+  await setOwner({ state: "pinned", generation: 1, email: "alex.new@example.com" });
+  const before = await dump();
+  access.release();
+  const response = await pending;
+  expect(response.status).toBe(503);
+  expect(textOf(await response.text())).toContain(MISMATCH.title);
+  expect(await dump()).toEqual(before);
+});
+
 it("refuses a reset whose next generation exceeds the safe integer range", () => {
   expect(() =>
     resetPlan({ state: "pinned", generation: Number.MAX_SAFE_INTEGER, instance: 1 }, Date.now()),

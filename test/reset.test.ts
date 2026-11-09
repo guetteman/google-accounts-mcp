@@ -213,7 +213,7 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
     }
   });
 
-  it("guards every cleanup statement on this reset's generation", () => {
+  it("has no cleanup yet, and any cleanup added later carries this reset's guard", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
     expect(RESET_CLEANUP).toEqual([]);
