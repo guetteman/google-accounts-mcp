@@ -103,7 +103,9 @@ export const google = {
       return new HttpResponse(null, { status: 503 });
     }
     if (typeof answer === "number") return new HttpResponse(null, { status: answer });
-    return answer === "ok" ? null : HttpResponse.json({ error: answer }, { status: 400 });
+    return answer === "ok"
+      ? null
+      : HttpResponse.json({ error: answer }, { status: answer === "invalid_client" ? 401 : 400 });
   },
   handlers() {
     return [

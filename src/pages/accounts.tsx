@@ -111,6 +111,10 @@ const fixable = (account: AccountView) =>
   account.status.kind === "needs_reconnect" || account.status.kind === "missing_access";
 function Status({ account }: { account: AccountView }) {
   const status = account.status;
+  if (status.kind === "unreadable")
+    return (
+      <span className="text-muted-foreground">Can't read its stored access. Check TOKEN_KEY.</span>
+    );
   if (status.kind === "ready") return <span className="text-muted-foreground">Ready</span>;
   const title =
     status.kind === "needs_reconnect"

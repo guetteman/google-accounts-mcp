@@ -62,8 +62,12 @@ export const withGoogle = (
       const decrypt = (context: string, value: import("../seal").Sealed) =>
         Effect.gen(function* () {
           const opened = yield* Effect.promise(() => open(deps.config.tokenKey, context, value));
-          if (!opened.ok && opened.reason === "other_key") {
-            console.error("TOKEN_KEY does not match the stored tokens");
+          if (!opened.ok && opened.reason !== "damaged") {
+            console.error(
+              opened.reason === "other_key"
+                ? "TOKEN_KEY does not match the stored tokens"
+                : "Stored Google access could not be opened",
+            );
             return yield* Effect.fail(new Unavailable());
           }
           return opened.ok ? opened.value : null;

@@ -532,7 +532,7 @@ it("reports a retryable failure when two reconnects interrupt recovery from a da
     writes++;
     if (writes === 1) {
       await finish(b, (await start(b, row.id)).url);
-      await env.DB.prepare("UPDATE accounts SET access_token = 'damaged' WHERE id = ?")
+      await env.DB.prepare("UPDATE accounts SET access_token = 'v1.damaged' WHERE id = ?")
         .bind(row.id)
         .run();
     } else if (writes === 2) {

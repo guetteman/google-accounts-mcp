@@ -30,16 +30,23 @@ export const parseAccountId = (value: unknown): AccountId | null =>
     : null;
 export const newAccountId = (): AccountId => crypto.randomUUID() as AccountId;
 export type AccountStatus =
+  | { readonly kind: "unreadable" }
   | { readonly kind: "ready" }
   | { readonly kind: "needs_reconnect" }
   | { readonly kind: "blocked_by_admin" }
   | { readonly kind: "missing_access"; readonly granted: number };
-export const accountStatus = (health: Health, scopes: GmailScopes): AccountStatus =>
-  health !== "ready"
-    ? { kind: health }
-    : scopes.length < GMAIL_SCOPES.length
-      ? { kind: "missing_access", granted: scopes.length }
-      : { kind: "ready" };
+export const accountStatus = (
+  health: Health,
+  scopes: GmailScopes,
+  readable = true,
+): AccountStatus =>
+  !readable
+    ? { kind: "unreadable" }
+    : health !== "ready"
+      ? { kind: health }
+      : scopes.length < GMAIL_SCOPES.length
+        ? { kind: "missing_access", granted: scopes.length }
+        : { kind: "ready" };
 export interface AccountView {
   readonly id: AccountId;
   readonly name: string;

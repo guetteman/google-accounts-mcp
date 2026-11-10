@@ -72,7 +72,16 @@ const tokenRequest = (config: Config, fields: Record<string, string>) =>
           }),
         });
         const body = object(await response.json());
-        if (body.error === "invalid_client") {
+        if (
+          [
+            "invalid_client",
+            "deleted_client",
+            "disabled_client",
+            "unauthorized_client",
+            "redirect_uri_mismatch",
+            "invalid_request",
+          ].includes(String(body.error))
+        ) {
           console.error("Google OAuth client credentials were refused");
           throw new ClientRefused();
         }
@@ -131,7 +140,10 @@ export const exchangeCode = (
     } catch {
       /* Untrusted token endpoint payload; no claims leave this boundary. */
     }
-    if (!identity) return yield* Effect.fail(new CodeRefused());
+    if (!identity) {
+      console.error("Google OAuth identity was refused");
+      return yield* Effect.fail(new ClientRefused());
+    }
     if (typeof body.refresh_token !== "string" || !body.refresh_token)
       return yield* Effect.fail(new NoRefreshToken());
     const token = yield* decodedToken(body, p.now);

@@ -2,7 +2,8 @@ import { Effect } from "effect";
 import { first, Unavailable, WriteUncertain } from "../db";
 import type { Owner } from "../owner/owner";
 import type { Name } from "../names";
-import type { Sealed } from "../seal";
+import { keyId, type Sealed } from "../seal";
+import type { TokenKey } from "../config";
 import { parseGrantedScopes, type Grant } from "../google/client";
 import {
   accountStatus,
@@ -38,12 +39,13 @@ export const loadCredential = (db: D1Database, owner: Owner, id: AccountId) =>
       return credential ? Effect.succeed(credential) : Effect.fail(new Unavailable());
     }),
   );
-export const listAccounts = (db: D1Database, owner: Owner) =>
+export const listAccounts = (db: D1Database, owner: Owner, tokenKey: TokenKey) =>
   Effect.tryPromise({
     try: async (): Promise<ReadonlyArray<AccountView>> => {
+      const prefix = `v1.${await keyId(tokenKey)}.`;
       const { results } = await db
         .prepare(
-          `SELECT a.id, a.name, a.email, a.hd, a.health, a.scopes FROM accounts a WHERE a.state = 'live' AND ${ownerGuard("?1", "?2")} ORDER BY a.created_at, a.id`,
+          `SELECT a.id, a.name, a.email, a.hd, a.health, a.scopes, substr(a.refresh_token,1,20) AS refresh_key, substr(a.access_token,1,20) AS access_key FROM accounts a WHERE a.state = 'live' AND ${ownerGuard("?1", "?2")} ORDER BY a.created_at, a.id`,
         )
         .bind(owner.generation, owner.email)
         .all<{
@@ -53,6 +55,8 @@ export const listAccounts = (db: D1Database, owner: Owner) =>
           hd: string | null;
           health: Health;
           scopes: string;
+          refresh_key: string | null;
+          access_key: string | null;
         }>();
       return results.map((row) => {
         const id = parseAccountId(row.id);
@@ -65,7 +69,11 @@ export const listAccounts = (db: D1Database, owner: Owner) =>
           name: row.name,
           email: row.email,
           workspace: row.hd !== null,
-          status: accountStatus(row.health, parseGrantedScopes(scopes.join(" "))),
+          status: accountStatus(
+            row.health,
+            parseGrantedScopes(scopes.join(" ")),
+            [row.refresh_key, row.access_key].every((value) => value === null || value === prefix),
+          ),
         };
       });
     },
@@ -230,8 +238,8 @@ export const storeRefreshed = (
     db,
     account,
     "access_token = ?3, access_expires_at = ?4, health = 'ready', blocked_until = NULL",
-    [token, expiresAt],
-    "AND a.health <> 'needs_reconnect'",
+    [token, expiresAt, account.health, account.blockedUntil],
+    "AND a.health = ?5 AND a.blocked_until IS ?6",
   );
 export const markNeedsReconnect = (db: D1Database, account: Credential) =>
   tokenWrite(

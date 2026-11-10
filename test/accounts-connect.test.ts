@@ -207,7 +207,9 @@ it.each([
 ])("refuses invalid identity claims %j", async (claims) => {
   const b = await ownerBrowser();
   const before = await dump();
-  expect((await finish(b, (await start(b)).url, { claims })).text).toContain(DIDNT);
+  expect((await finish(b, (await start(b)).url, { claims })).text).toContain(
+    "Google refused this server's OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Nothing changed.",
+  );
   expect(await dump()).toEqual(before);
 });
 it.each([false, true])(

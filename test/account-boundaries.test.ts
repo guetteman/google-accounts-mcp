@@ -88,7 +88,15 @@ it.each(["generation", "email"])(
       generation: field === "generation" ? 2 : 1,
       email: field === "email" ? "new.owner@example.com" : OWNER_EMAIL,
     });
-    expect(await Effect.runPromise(listAccounts(env.DB, owner))).toEqual([]);
+    expect(
+      await Effect.runPromise(
+        listAccounts(
+          env.DB,
+          owner,
+          new Uint8Array(32).fill(187) as import("../src/config").TokenKey,
+        ),
+      ),
+    ).toEqual([]);
   },
 );
 
@@ -100,7 +108,7 @@ it.each([
 ])("refuses an ID token with invalid identity claims: %j", async (claims) => {
   const b = await ownerBrowser();
   expect((await finish(b, (await start(b)).url, { claims })).text).toContain(
-    "Didn't finish. It expired, was cancelled, or started in another browser. Nothing changed. Try again.",
+    "Google refused this server's OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Nothing changed.",
   );
   expect(await accounts()).toEqual([]);
 });
@@ -210,6 +218,10 @@ it("hides accounts created after an owner reset from an earlier authorization", 
   expect(outcome(await b.get(google.issueCode(url), { env: testEnv({ DB: db }) }))).toEqual({
     kind: "didnt_finish",
   });
-  expect(await Effect.runPromise(listAccounts(env.DB, owner))).toEqual([]);
+  expect(
+    await Effect.runPromise(
+      listAccounts(env.DB, owner, new Uint8Array(32).fill(187) as import("../src/config").TokenKey),
+    ),
+  ).toEqual([]);
   expect(await accounts()).toHaveLength(1);
 });

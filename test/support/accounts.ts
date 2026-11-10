@@ -31,8 +31,11 @@ export interface AccountRow {
   access_expires_at: number | null;
 }
 /** Independent AES-GCM fixture encoder, so the token tests don't depend on production encryption. */
-export async function fixtureSeal(context: string, value: string) {
-  const bytes = Uint8Array.from({ length: 32 }, () => 187);
+export async function fixtureSeal(
+  context: string,
+  value: string,
+  bytes = Uint8Array.from({ length: 32 }, () => 187),
+) {
   const key = await crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt"]);
   const kid = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)).slice(0, 8)]
     .map((b) => b.toString(16).padStart(2, "0"))

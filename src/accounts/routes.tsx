@@ -28,7 +28,9 @@ import {
 
 export const accountRoutes = new Hono<PageEnv>();
 accountRoutes.get("/accounts", ownerOnly, async (c) => {
-  const result = await Effect.runPromise(Effect.result(listAccounts(c.env.DB, c.get("owner"))));
+  const result = await Effect.runPromise(
+    Effect.result(listAccounts(c.env.DB, c.get("owner"), c.get("config").tokenKey)),
+  );
   if (Result.isFailure(result)) return renderPage({ _tag: "Unavailable" }, { status: 503 });
   const headers = new Headers();
   const alert = takeAlert(c.req.raw, headers);
