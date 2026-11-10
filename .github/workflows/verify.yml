@@ -31,3 +31,4 @@ jobs:
       - run: pnpm exec wrangler types --check
       - run: pnpm exec playwright-core install --with-deps chromium
       - run: vp test run
+      - run: vp build
