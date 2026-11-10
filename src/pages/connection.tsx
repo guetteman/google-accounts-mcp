@@ -146,14 +146,11 @@ export function ConnectionPage(props: Props) {
           : { phase: "confirmed", value: outcome === "ok" ? wanted : state.value },
     }));
     if (outcome !== "unknown") locked.current.delete(key);
-    // Only Dismiss or the owner's next change clears a notice. Another save that was already
-    // in flight must not hide it, and a lesser failure must not replace "couldn't confirm".
+    // Only Dismiss or the owner's next change clears a notice. A save that was already in flight
+    // must not hide it; only "couldn't confirm", the one that warns of unknown access, replaces it.
     const notice = permissionMessage(outcome, connection.name);
     const uncertainNotice = permissionMessage("unknown", connection.name);
-    if (notice)
-      setMessage((current) =>
-        current === uncertainNotice && notice !== uncertainNotice ? current : notice,
-      );
+    if (notice) setMessage((current) => (current && notice !== uncertainNotice ? current : notice));
   };
   return (
     <OwnerFrame frame={props.frame}>

@@ -430,6 +430,9 @@ it.each([
   ["unavailable", "ok", unavailable],
   ["unknown", "ok", unknown],
   ["unknown", "unavailable", unknown],
+  ["unavailable", "already_ended", unavailable],
+  ["unavailable", "not_found", unavailable],
+  ["unavailable", "invalid", unavailable],
 ])(
   "keeps the %s notice when another save already in flight then answers %s",
   async (first, second, notice) => {
@@ -453,3 +456,24 @@ it.each([
     }
   },
 );
+
+it("replaces a database notice with the unconfirmed notice when a save already in flight is unconfirmed", async () => {
+  const page = await open();
+  try {
+    const routes = await pending(page);
+    for (const account of ["Northwind", "Projects"]) {
+      const sent = page.waitForRequest((r) => r.method() === "POST");
+      await segment(control(page, account), "Allowed").click();
+      await sent;
+    }
+    await answer(routes[0]!, "unavailable");
+    await page.getByText(unavailable, { exact: true }).filter({ visible: true }).waitFor();
+    await answer(routes[1]!, "unknown");
+    await page.getByText(unknown, { exact: true }).filter({ visible: true }).waitFor();
+    await frames(page);
+    expect(await page.getByText(unavailable, { exact: true }).count()).toBe(0);
+    await selected(control(page, "Projects"), null);
+  } finally {
+    await page.close();
+  }
+});
