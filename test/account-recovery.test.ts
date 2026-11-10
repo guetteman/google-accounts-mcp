@@ -1,3 +1,9 @@
+import { Effect, Result } from "effect";
+import { http, HttpResponse } from "msw";
+import { withGoogle } from "../src/accounts/tokens";
+import { readConfig } from "../src/config";
+import { readOwner } from "../src/owner/owner";
+import { network } from "./support/network";
 import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vite-plus/test";
 import { recordedConsole } from "./support/account-checks";
@@ -13,8 +19,8 @@ import {
   start,
 } from "./support/accounts";
 import { dump, observeStatements } from "./support/db";
-import { deferred, google } from "./support/google";
-import { ORIGIN, testEnv, textOf } from "./support/worker";
+import { deferred, google, GMAIL } from "./support/google";
+import { ORIGIN, testEnv, textOf, observedBodies } from "./support/worker";
 
 const CLIENT =
   "Google refused this server's OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Nothing changed.";
@@ -202,8 +208,8 @@ it("consumes the successful flow cookie and protects the short-lived alert cooki
   );
   expect(b.cookies.get(ORIGIN)!.has(`__Host-g-${url.searchParams.get("state")}`)).toBe(false);
   const alert = cookies.find((c) => c.startsWith("__Host-accounts-outcome="))!;
-  expect(alert).toContain("HttpOnly");
-  expect(alert).toContain("Max-Age=60");
+  expect(alert.split(";").map((attribute) => attribute.trim())).toContain("HttpOnly");
+  expect(alert.split(";").map((attribute) => attribute.trim())).toContain("Max-Age=60");
 });
 
 it.each(["connect", "reconnect"])("refuses a missing form before starting %s", async (action) => {
@@ -218,3 +224,56 @@ it.each(["connect", "reconnect"])("refuses a missing form before starting %s", a
   expect(response.headers.getSetCookie()).toEqual([]);
   expect(await dump()).toEqual(before);
 });
+
+it.each([200, 401])(
+  "builds a fresh service request and body for the one retry, returning the final %s",
+  async (status) => {
+    const row = await seedAccount();
+    const config = readConfig(testEnv());
+    if (Result.isFailure(config)) throw new Error("Invalid test config");
+    const owner = await Effect.runPromise(readOwner(env.DB));
+    const bodies: string[] = [];
+    network.use(
+      http.post(GMAIL, async ({ request }) => {
+        bodies.push(new TextDecoder().decode(await request.arrayBuffer()));
+        return HttpResponse.json(
+          { received: true },
+          { status: bodies.length === 1 ? 401 : status },
+        );
+      }),
+    );
+    const built: Request[] = [];
+    const controller = new AbortController();
+    const response = await Effect.runPromise(
+      withGoogle(
+        {
+          db: env.DB,
+          config: config.success,
+          owner: { generation: owner.generation, email: owner.email! },
+          now: Date.now,
+        },
+        await credential(row.id),
+        (token) => {
+          const request = new Request(GMAIL, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+            body: new URLSearchParams({ query: "example" }),
+            signal: controller.signal,
+          });
+          built.push(request);
+          return request;
+        },
+      ),
+    );
+    observedBodies.push({
+      body: await response.text(),
+      headers: [...response.headers],
+      cookies: response.headers.getSetCookie(),
+    });
+    expect(response.status).toBe(status);
+    expect(built).toHaveLength(2);
+    expect(built[0]).not.toBe(built[1]);
+    expect(bodies).toEqual(["query=example", "query=example"]);
+    expect(google.refreshTokens).toHaveLength(1);
+  },
+);

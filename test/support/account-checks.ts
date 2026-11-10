@@ -15,7 +15,7 @@ beforeEach(async () => {
   network.use(...google.handlers());
   observedBodies.length = 0;
   consoleSpies.length = 0;
-  for (const method of ["log", "warn", "error", "info", "debug"] as const)
+  for (const method of ["log", "warn", "error", "info", "debug", "dir", "trace", "table"] as const)
     consoleSpies.push(vi.spyOn(console, method).mockImplementation(() => {}));
 });
 afterEach(async () => {
@@ -24,7 +24,12 @@ afterEach(async () => {
   output.push(recordedConsole());
   const serialized = JSON.stringify(output, (_key, value) =>
     value instanceof Error
-      ? { ...Object.fromEntries(Object.entries(value)), message: value.message, stack: value.stack }
+      ? {
+          ...Object.fromEntries(Object.entries(value)),
+          message: value.message,
+          stack: value.stack,
+          cause: value.cause,
+        }
       : value,
   );
   expect(

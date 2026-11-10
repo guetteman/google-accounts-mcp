@@ -116,7 +116,7 @@ export const google = {
           form.get("client_id") !== testEnv().GOOGLE_CLIENT_ID ||
           form.get("client_secret") !== "fake"
         )
-          return HttpResponse.json({ error: "invalid_client" }, { status: 400 });
+          return HttpResponse.json({ error: "invalid_client" }, { status: 401 });
         if (form.get("grant_type") === "refresh_token") {
           this.events.push("refresh");
           this.refreshTokens.push(form.get("refresh_token")!);

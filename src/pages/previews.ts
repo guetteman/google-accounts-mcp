@@ -84,6 +84,13 @@ export const previews: Readonly<Record<string, Page>> = {
         workspace: true,
         status: { kind: "missing_access", granted: 2 },
       },
+      {
+        id: "55555555-5555-4555-8555-555555555555" as import("../accounts/model").AccountId,
+        name: "Recovery",
+        email: "recovery@example.com",
+        workspace: false,
+        status: { kind: "unreadable" },
+      },
     ],
     alert: { kind: "reconnected", address: "alex.personal@example.com" },
     _tag: "Accounts",
