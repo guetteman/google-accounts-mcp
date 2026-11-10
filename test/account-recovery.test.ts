@@ -25,6 +25,30 @@ import { ORIGIN, testEnv, textOf, observedBodies } from "./support/worker";
 const CLIENT =
   "Google refused this server's OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Nothing changed.";
 
+it("ends reconnect with an alert when an earlier owner's account holds the returned address", async () => {
+  const target = await seedAccount({ sub: "personal" });
+  await seedAccount({ generation: 0, sub: "earlier", email: "earlier@example.com" });
+  const b = await ownerBrowser();
+  const { url } = await start(b, target.id);
+  const before = await dump();
+  const response = await b.get(
+    google.issueCode(url, {
+      claims: { sub: target.sub, email: "earlier@example.com" },
+    }),
+  );
+  expect(response.status).toBe(303);
+  expect(response.headers.get("Location")).toBe("/accounts");
+  const flowCookie = `__Host-g-${url.searchParams.get("state")}`;
+  expect(
+    response.headers.getSetCookie().find((value) => value.startsWith(`${flowCookie}=`)),
+  ).toContain("Max-Age=0");
+  expect(b.cookies.get(ORIGIN)!.has(flowCookie)).toBe(false);
+  expect(textOf(await (await b.get("/accounts")).text())).toContain(
+    `Nothing changed. ${target.email} changed while you were at Google. Try again.`,
+  );
+  expect(await dump()).toEqual(before);
+});
+
 it.each(["Ready", "an expired block"])(
   "keeps a saved admin block when an earlier accepted refresh from %s arrives late",
   async (initial) => {
