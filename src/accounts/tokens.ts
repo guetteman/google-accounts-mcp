@@ -28,7 +28,7 @@ interface Access {
 }
 
 /**
- * #11 must check the pinned owner, connection permissions and account permissions, and read
+ * #15 must check the pinned owner, connection permissions and account permissions, and read
  * credentialStatement in one D1 batch immediately before calling. Load the owner's generation
  * and email to bind that statement; compare them with the owner row returned by the same batch.
  * If they changed, repeat the permission checks rather than using the credential. Pass that

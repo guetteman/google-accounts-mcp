@@ -11,7 +11,14 @@ import {
   statementFailingDb,
 } from "./support/db";
 import { NOW, onlyConnection, pinOwner, resetOwner, rows } from "./support/connections";
-import { clients, codeClient, expectOAuthError, McpClient, oauth } from "./support/oauth";
+import {
+  clients,
+  codeClient,
+  expectOAuthError,
+  McpClient,
+  oauth,
+  rpcResult,
+} from "./support/oauth";
 import { HOST, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
 
 async function expired(response: Response) {
@@ -261,7 +268,8 @@ describe("owner consent", () => {
     const state = await dump();
     for (const [table, entries] of Object.entries(state))
       if (/account|permission/i.test(table)) expect(entries).toEqual([]);
-    expect(await (await mcp.call()).text()).toContain('"tools":[]');
+    const listed = await rpcResult(await mcp.call());
+    expect(listed.tools).toEqual([expect.objectContaining({ name: "list_accounts" })]);
   });
 
   it.each(["form", "query"])(
