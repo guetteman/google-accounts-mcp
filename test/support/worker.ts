@@ -1,6 +1,7 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 
+export const observedBodies: unknown[] = [];
 export const HOST = "accounts-mcp.example.com";
 export const ORIGIN = `https://${HOST}`;
 export const OWNER_EMAIL = "alex.personal@example.com";
@@ -22,6 +23,9 @@ export function testEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {
     OWNER_EMAIL: env.OWNER_EMAIL,
     ACCESS_ISSUER: issuer,
     ACCESS_AUDIENCE: "a".repeat(64),
+    GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
+    GOOGLE_CLIENT_SECRET: "fake",
+    TOKEN_KEY: "b".repeat(64),
   };
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete base[key];
@@ -36,6 +40,12 @@ export async function callWorker(request: Request, workerEnv: Env = testEnv()): 
   const { default: worker } = await import("../../src/index");
   const response = await worker.fetch(request, workerEnv, ctx);
   await waitOnExecutionContext(ctx);
+  if (new URL(request.url).pathname.match(/^\/(accounts|google)(\/|$)/))
+    observedBodies.push({
+      body: await response.clone().text(),
+      headers: [...response.headers],
+      cookies: response.headers.getSetCookie(),
+    });
   return response;
 }
 

@@ -1,3 +1,4 @@
+import { GMAIL_SCOPES } from "../google/client";
 import { acceptAuthorize } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
 import type { Page } from "./page";
@@ -54,8 +55,54 @@ export const previews: Readonly<Record<string, Page>> = {
   "setup-incomplete-two": { _tag: "SetupIncomplete", names: ["OWNER_EMAIL", "ACCESS_ISSUER"] },
   unavailable: { _tag: "Unavailable" },
   accounts: {
+    accounts: [
+      {
+        id: "11111111-1111-4111-8111-111111111111" as import("../accounts/model").AccountId,
+        name: "Personal",
+        email: "alex.personal@example.com",
+        workspace: false,
+        status: { kind: "ready" },
+      },
+      {
+        id: "22222222-2222-4222-8222-222222222222" as import("../accounts/model").AccountId,
+        name: "Side projects",
+        email: "alex.projects@example.com",
+        workspace: false,
+        status: { kind: "needs_reconnect" },
+      },
+      {
+        id: "33333333-3333-4333-8333-333333333333" as import("../accounts/model").AccountId,
+        name: "Work",
+        email: "alex@harbor.example",
+        workspace: true,
+        status: { kind: "blocked_by_admin" },
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444444" as import("../accounts/model").AccountId,
+        name: "Research and operations shared inbox",
+        email: "research@harbor.example",
+        workspace: true,
+        status: { kind: "missing_access", granted: 2 },
+      },
+      {
+        id: "55555555-5555-4555-8555-555555555555" as import("../accounts/model").AccountId,
+        name: "Recovery",
+        email: "recovery@example.com",
+        workspace: false,
+        status: { kind: "unreadable" },
+      },
+    ],
+    alert: { kind: "reconnected", address: "alex.personal@example.com" },
     _tag: "Accounts",
+    requiredGmailScopes: GMAIL_SCOPES.length,
     frame: { host, ownerEmail: "owner@example.com", current: "accounts" },
+  },
+  "accounts-empty": {
+    _tag: "Accounts",
+    requiredGmailScopes: GMAIL_SCOPES.length,
+    frame: { host, ownerEmail: "owner@example.com", current: "accounts" },
+    accounts: [],
+    alert: null,
   },
   "client-refused": { _tag: "ClientRefused" },
   "consent-expired": { _tag: "ConsentExpired" },

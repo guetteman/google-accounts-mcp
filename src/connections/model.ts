@@ -3,7 +3,7 @@ import { GenerationSchema } from "../owner/owner";
 import { Schema } from "effect";
 
 export type ConnectionId = string & { readonly __connectionId: unique symbol };
-export type ConnectionName = string & { readonly __connectionName: unique symbol };
+import { parseName, type Name } from "../names";
 export type App = "claude-hosted" | "claude-code" | "chatgpt";
 export const APP_LABELS = {
   "claude-hosted": "Claude",
@@ -16,18 +16,12 @@ export const parseConnectionId = (raw: unknown): ConnectionId | null =>
     ? (raw as ConnectionId)
     : null;
 export const newConnectionId = (): ConnectionId => crypto.randomUUID() as ConnectionId;
-export function parseName(raw: unknown): ConnectionName | null {
-  if (typeof raw !== "string") return null;
-  const name = raw.trim();
-  const length = Array.from(name).length;
-  return length >= 1 && length <= 100 ? (name as ConnectionName) : null;
-}
 export interface GrantProps {
   readonly v: 1;
   readonly connectionId: ConnectionId;
 }
 export interface PendingGrant extends GrantProps {
-  readonly name: ConnectionName;
+  readonly name: Name;
   readonly generation: Generation;
 }
 export function decodeGrantProps(raw: unknown): GrantProps | null {
@@ -72,4 +66,3 @@ export interface ConnectionView {
   readonly lastUsed: string;
   readonly created: string;
 }
-export type Outcome = "ok" | "already_ended" | "not_found" | "invalid" | "unavailable" | "unknown";

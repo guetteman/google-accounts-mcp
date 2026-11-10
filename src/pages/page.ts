@@ -2,6 +2,9 @@ import type { AcceptedClient } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
 import type { ConfigName } from "../config";
 
+import type { AccountView } from "../accounts/model";
+import type { AccountsAlert } from "../accounts/flow";
+
 export const PRODUCT = "Google Accounts MCP";
 export interface Frame {
   readonly host: string;
@@ -9,7 +12,13 @@ export interface Frame {
   readonly current: "accounts" | "connections";
 }
 export type FramePage =
-  | { readonly _tag: "Accounts"; readonly frame: Frame }
+  | {
+      readonly _tag: "Accounts";
+      readonly requiredGmailScopes: number;
+      readonly frame: Frame;
+      readonly accounts: ReadonlyArray<AccountView>;
+      readonly alert: AccountsAlert | null;
+    }
   | {
       readonly _tag: "Connections";
       readonly frame: Frame;

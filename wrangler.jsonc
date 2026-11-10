@@ -6,7 +6,14 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   // Each deploy sets these with `wrangler secret put`; no value lives in the repository.
   "secrets": {
-    "required": ["OWNER_EMAIL", "ACCESS_ISSUER", "ACCESS_AUDIENCE"],
+    "required": [
+      "OWNER_EMAIL",
+      "ACCESS_ISSUER",
+      "ACCESS_AUDIENCE",
+      "GOOGLE_CLIENT_ID",
+      "GOOGLE_CLIENT_SECRET",
+      "TOKEN_KEY",
+    ],
   },
   // No database_id: the deploy's own configuration adds it (#7). Until then, local D1 state
   // is keyed by the binding name, and adding an ID later starts a new, empty local database.

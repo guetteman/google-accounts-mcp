@@ -14,6 +14,9 @@ const testConfig = {
   OWNER_EMAIL: "alex.personal@example.com",
   ACCESS_ISSUER: "https://example-team.cloudflareaccess.com",
   ACCESS_AUDIENCE: "a".repeat(64),
+  GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
+  GOOGLE_CLIENT_SECRET: "fake",
+  TOKEN_KEY: "b".repeat(64),
 };
 
 export default defineConfig({
@@ -48,7 +51,19 @@ export default defineConfig({
               tailwindcss(),
               cloudflareTest({
                 wrangler: { configPath: "./wrangler.jsonc" },
-                miniflare: { bindings: { ...testConfig, TEST_MIGRATIONS: testMigrations } },
+                miniflare: {
+                  bindings: { ...testConfig, TEST_MIGRATIONS: testMigrations },
+                  serviceBindings: {
+                    TEST_BROWSER: async (request) => {
+                      const { hydrateAccounts } = await import("./test/browser/hydration");
+                      return Response.json(
+                        await hydrateAccounts(
+                          (await request.json()) as Parameters<typeof hydrateAccounts>[0],
+                        ),
+                      );
+                    },
+                  },
+                },
               }),
             ],
             resolve: { alias },

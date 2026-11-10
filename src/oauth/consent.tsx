@@ -1,6 +1,7 @@
 import { AuthorizationError, CimdFetchError } from "@cloudflare/workers-oauth-provider";
+import { parseName } from "../names";
 import { Hono } from "hono";
-import { newConnectionId, parseName, type PendingGrant } from "../connections/model";
+import { newConnectionId, type PendingGrant } from "../connections/model";
 import type { PageEnv } from "../http/context";
 import { ownerOnly } from "../owner/routes";
 import { renderPage } from "../pages/render";

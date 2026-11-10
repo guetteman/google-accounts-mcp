@@ -1,19 +1,18 @@
+import type { Name } from "../names";
 import { Data, Effect } from "effect";
-import { first, Unavailable } from "../db";
+import { first, Unavailable, WriteUncertain } from "../db";
 import type { Owner, OwnerEmail } from "../owner/owner";
 import {
   APP_LABELS,
   type ActiveConnection,
   type App,
   type ConnectionId,
-  type ConnectionName,
   type ConnectionView,
   type PendingGrant,
 } from "./model";
 
 export class NotRedeemable extends Data.TaggedError("NotRedeemable") {}
 export class NotActive extends Data.TaggedError("NotActive") {}
-export class WriteUncertain extends Data.TaggedError("WriteUncertain") {}
 export const IDLE_MS = 90 * 24 * 60 * 60 * 1000;
 
 /** Placeholders are supplied by the SQL caller, never by request data. Alias connections as c. */
@@ -132,7 +131,7 @@ const action = (
   owner: Owner,
   id: ConnectionId,
   now: number,
-  change: { kind: "rename"; name: ConnectionName } | { kind: "revoke" },
+  change: { kind: "rename"; name: Name } | { kind: "revoke" },
 ) =>
   Effect.gen(function* () {
     const row = yield* Effect.tryPromise({
@@ -164,7 +163,7 @@ export const renameConnection = (
   db: D1Database,
   owner: Owner,
   id: ConnectionId,
-  name: ConnectionName,
+  name: Name,
   now: number,
 ) =>
   action(db, owner, id, now, { kind: "rename", name }).pipe(

@@ -4,6 +4,6 @@ An MCP server that lets your AI agents use several Google accounts at once: pers
 
 You deploy it to your own Cloudflare account, with your own Google Cloud OAuth client. Gmail comes first; other Google services follow.
 
-**Status:** owner sign-in through Cloudflare Access and MCP connections for Claude, Claude Code, and ChatGPT are implemented. Connections start with no Google account access. Google accounts, permissions, audit logging, and tools are still planned in the [issues](../../issues).
+**Status:** owner sign-in through Cloudflare Access and MCP connections for Claude, Claude Code, and ChatGPT are implemented. The owner can connect, reconnect, rename, and remove Google accounts. Tokens are encrypted in D1, and the token function that tools will use in [#11](../../issues/11) refreshes them when a request needs them. Connections start with no Google account access. Permissions, audit logging, and tools are still planned in the [issues](../../issues).
 
 Browser tests use Chromium. After `vp install`, run `pnpm exec playwright-core install chromium` once before `vp test run`. CI installs Chromium and its system dependencies.

@@ -125,7 +125,7 @@ describe("owner pages", () => {
 describe("unimplemented and removed routes", () => {
   it("returns 404 for unknown paths and the removed Google sign-in and session endpoints", async () => {
     const browser = new Browser();
-    for (const path of ["/nothing-here", "/assets/missing.js", "/signin", "/google/callback"])
+    for (const path of ["/nothing-here", "/assets/missing.js", "/signin"])
       expect((await browser.get(path)).status, path).toBe(404);
     for (const path of ["/signin", "/signout", "/signout/all"])
       expect((await browser.post(path)).status, path).toBe(404);

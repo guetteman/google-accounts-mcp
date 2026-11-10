@@ -242,3 +242,20 @@ it(
   },
   TIMEOUT,
 );
+
+it(
+  "deletes account ciphertexts only after a local reset is confirmed",
+  () => {
+    sql(`UPDATE owner SET state = 'pinned', generation = 1, email = '${OWNER}' WHERE id = 1;
+ INSERT INTO accounts (id,generation,sub,email,name,state,created_at,version,scopes,health,refresh_token,access_token,access_expires_at)
+ VALUES ('00000000-0000-4000-8000-000000000003',1,'personal','alex.personal@example.com','Personal','live',1,1,'[]','ready','sealed-refresh','sealed-access',9999999999999)`);
+    const before = sql("SELECT * FROM accounts");
+    expect(before).toHaveLength(1);
+    expect(ownerReset([], "no\n").status).toBe(0);
+    expect(sql("SELECT * FROM accounts")).toEqual(before);
+    const run = ownerReset([], "reset\n");
+    expect(run.status, run.stderr).toBe(0);
+    expect(sql("SELECT * FROM accounts")).toEqual([]);
+  },
+  TIMEOUT,
+);
