@@ -52,7 +52,7 @@ export function ConnectionsPage({
       <div className="flex flex-col gap-8">
         <PageHeader
           title="Connections"
-          description="Apps that signed in to this server. Each starts with no access to your accounts."
+          description="Apps that signed in to this server. Each starts with no access to your accounts. Open one to choose what it can use."
         />
         {connections.length === 0 ? (
           <ConnectionsEmpty mcpUrl={mcpUrl} />
@@ -159,11 +159,9 @@ export function ConnectionsPage({
                                   </ItemDescription>
                                 )}
                               </ItemContent>
-                              {group === "active" && (
-                                <ItemActions className="text-muted-foreground">
-                                  <ChevronRightIcon className="size-4" />
-                                </ItemActions>
-                              )}
+                              <ItemActions className="self-center text-muted-foreground">
+                                <ChevronRightIcon className="size-4" />
+                              </ItemActions>
                             </Item>
                           </div>
                         ))}

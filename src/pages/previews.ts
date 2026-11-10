@@ -10,7 +10,7 @@ const connections: ReadonlyArray<ConnectionView> = [
     appLabel: "Claude Code",
     status: { kind: "active" },
     lastUsed: "Nov 9",
-    canSee: [],
+    canSee: ["Northwind"],
     created: "Nov 1",
   },
   {
@@ -19,7 +19,7 @@ const connections: ReadonlyArray<ConnectionView> = [
     appLabel: "Claude",
     status: { kind: "active" },
     lastUsed: "Nov 8",
-    canSee: [],
+    canSee: ["Personal", "Projects"],
     created: "Nov 1",
   },
   {
