@@ -425,3 +425,31 @@ it("exposes saving and unconfirmed controls as disabled to assistive technology"
     await page.close();
   }
 });
+
+it.each([
+  ["unavailable", "ok", unavailable],
+  ["unknown", "ok", unknown],
+  ["unknown", "unavailable", unknown],
+])(
+  "keeps the %s notice when another save already in flight then answers %s",
+  async (first, second, notice) => {
+    const page = await open();
+    try {
+      const routes = await pending(page);
+      for (const account of ["Northwind", "Projects"]) {
+        const sent = page.waitForRequest((r) => r.method() === "POST");
+        await segment(control(page, account), "Allowed").click();
+        await sent;
+      }
+      await answer(routes[0]!, first!);
+      const message = page.getByText(notice!, { exact: true }).filter({ visible: true });
+      await message.waitFor();
+      await answer(routes[1]!, second!);
+      await expect.poll(() => control(page, "Projects").getAttribute("aria-busy")).not.toBe("true");
+      await frames(page);
+      expect(await message.count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  },
+);
