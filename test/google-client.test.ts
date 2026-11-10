@@ -1,9 +1,9 @@
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { http, HttpResponse } from "msw";
 import { recordedConsole } from "./support/account-checks";
 import { accounts, call, finish, NOW, ownerBrowser, seedAccount, start } from "./support/accounts";
 import { dump } from "./support/db";
-import { google, type Answer } from "./support/google";
+import { google, deferred, type Answer } from "./support/google";
 import { network } from "./support/network";
 import { testEnv, textOf } from "./support/worker";
 
@@ -152,5 +152,70 @@ it.each([302, 307])(
     expect(google.revokeRedirects).toEqual(["manual"]);
     expect(followed).toBe(0);
     expect(google.events).toEqual(["revoke"]);
+  },
+);
+
+it.each(["exchange", "refresh"])(
+  "times out the %s whose response body stalls after its headers",
+  async (action) => {
+    const b = await ownerBrowser();
+    const row = action === "refresh" ? await seedAccount({ access_expires_at: NOW }) : null;
+    const url = action === "exchange" ? (await start(b)).url : null;
+    const entered = deferred();
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    const stalled: Answer = async (signal) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            body = controller;
+            signal.addEventListener("abort", () => controller.error(new Error("aborted")), {
+              once: true,
+            });
+            entered.resolve();
+          },
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    if (action === "refresh") google.refreshAnswers = [stalled];
+    else google.exchangeAnswer = stalled;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let settled = false;
+    const pending = (row ? call(row.id) : finish(b, url!)).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(9999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      // Give the Worker response stream and D1 their normal asynchronous turns.
+      await vi.waitFor(() => expect(settled).toBe(true));
+      const result = await pending;
+      if (row) expect(result).toMatchObject({ error: "GoogleUnavailable" });
+      else expect(result).toMatchObject({ text: expect.stringContaining(DOWN) });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      body?.error(new Error("test cleanup"));
+      vi.useRealTimers();
+      await pending;
+    }
+  },
+);
+
+it.each(["ok", { status: 200, body: "invalid-json" }] as Answer[])(
+  "clears the token deadline after a completed response: %j",
+  async (answer) => {
+    const row = await seedAccount({ access_expires_at: NOW });
+    google.refreshAnswers = [answer];
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      expect(await call(row.id)).toMatchObject(
+        answer === "ok" ? { status: 200 } : { error: "GoogleUnavailable" },
+      );
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   },
 );

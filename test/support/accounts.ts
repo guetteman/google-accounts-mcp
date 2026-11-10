@@ -154,6 +154,10 @@ export async function call(
     return { error: result.failure._tag, detail: result.failure };
   }
   const body = await result.success.text();
-  observedBodies.push(body);
+  observedBodies.push({
+    body,
+    headers: [...result.success.headers],
+    cookies: result.success.headers.getSetCookie(),
+  });
   return { status: result.success.status, body };
 }

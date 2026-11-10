@@ -22,13 +22,18 @@ afterEach(async () => {
   google.release();
   const output = [await kvDump(), observedBodies];
   output.push(recordedConsole());
+  const serialized = JSON.stringify(output, (_key, value) =>
+    value instanceof Error
+      ? { ...Object.fromEntries(Object.entries(value)), message: value.message, stack: value.stack }
+      : value,
+  );
   expect(
-    JSON.stringify(output),
-    "Google tokens stay out of KV, grant props, logs, HTML, hydration props and response bodies",
+    serialized,
+    "Google tokens stay out of KV, logs, HTML, hydration props, response bodies and headers",
   ).not.toContain(MARKER);
   for (const value of issuedTokens)
     expect(
-      JSON.stringify(output),
+      serialized,
       "No issued Google token may escape, including the raw ID token",
     ).not.toContain(value);
 });

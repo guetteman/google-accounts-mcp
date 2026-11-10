@@ -41,7 +41,11 @@ export async function callWorker(request: Request, workerEnv: Env = testEnv()): 
   const response = await worker.fetch(request, workerEnv, ctx);
   await waitOnExecutionContext(ctx);
   if (new URL(request.url).pathname.match(/^\/(accounts|google)(\/|$)/))
-    observedBodies.push(await response.clone().text());
+    observedBodies.push({
+      body: await response.clone().text(),
+      headers: [...response.headers],
+      cookies: response.headers.getSetCookie(),
+    });
   return response;
 }
 

@@ -14,7 +14,7 @@ export const token = () => {
   return value;
 };
 export type Answer =
-  | (() => Promise<Response>)
+  | ((signal: AbortSignal) => Promise<Response>)
   | "ok"
   | "invalid_grant"
   | "admin_policy_enforced"
@@ -51,6 +51,7 @@ export const google = {
   refreshTokens: [] as string[],
   tokenRedirects: [] as RequestRedirect[],
   revokeRedirects: [] as RequestRedirect[],
+  revokedTokens: [] as string[],
   gmailTokens: [] as string[],
   issuedAccess: [] as string[],
   issuedRefresh: new Set<string>(),
@@ -66,6 +67,7 @@ export const google = {
     this.refreshTokens = [];
     this.tokenRedirects = [];
     this.revokeRedirects = [];
+    this.revokedTokens = [];
     this.gmailTokens = [];
     this.issuedAccess = [];
     this.issuedRefresh.clear();
@@ -90,8 +92,8 @@ export const google = {
     });
     return `/google/callback?${new URLSearchParams({ code, state: url.searchParams.get("state")! })}`;
   },
-  async answer(answer: Answer) {
-    if (typeof answer === "function") return answer();
+  async answer(answer: Answer, signal: AbortSignal) {
+    if (typeof answer === "function") return answer(signal);
     if (typeof answer === "object")
       return new HttpResponse(answer.body, { status: answer.status, headers: answer.headers });
     if (answer === "slow") {
@@ -118,7 +120,7 @@ export const google = {
           this.refreshTokens.push(form.get("refresh_token")!);
           if (!this.issuedRefresh.has(form.get("refresh_token")!))
             return HttpResponse.json({ error: "invalid_grant" }, { status: 400 });
-          const failure = await this.answer(this.refreshAnswers.shift() ?? "ok");
+          const failure = await this.answer(this.refreshAnswers.shift() ?? "ok", request.signal);
           if (failure) return failure;
           const access = token();
           this.issuedAccess.push(access);
@@ -142,7 +144,7 @@ export const google = {
           entry.redirectUri !== form.get("redirect_uri")
         )
           return HttpResponse.json({ error: "invalid_grant" }, { status: 400 });
-        const failure = await this.answer(this.exchangeAnswer);
+        const failure = await this.answer(this.exchangeAnswer, request.signal);
         if (failure) return failure;
         const access = entry.accessToken ?? token();
         if (access) issuedTokens.add(access);
@@ -170,13 +172,16 @@ export const google = {
       http.post("https://oauth2.googleapis.com/revoke", async ({ request }) => {
         this.revokeRedirects.push(request.redirect);
         this.events.push("revoke");
-        if (
-          !new URLSearchParams(new TextDecoder().decode(await request.arrayBuffer()))
-            .get("token")
-            ?.includes(MARKER)
-        )
-          throw new Error("Revoke needs a plaintext test token");
-        return (await this.answer(this.revokeAnswer)) ?? new HttpResponse(null, { status: 200 });
+        const revoked = new URLSearchParams(
+          new TextDecoder().decode(await request.arrayBuffer()),
+        ).get("token");
+        if (!revoked || !this.issuedRefresh.has(revoked))
+          return HttpResponse.json({ error: "invalid_token" }, { status: 400 });
+        this.revokedTokens.push(revoked);
+        return (
+          (await this.answer(this.revokeAnswer, request.signal)) ??
+          new HttpResponse(null, { status: 200 })
+        );
       }),
       http.get(GMAIL, ({ request }) => {
         this.events.push("gmail");
