@@ -29,8 +29,9 @@ interface Access {
 
 /**
  * The caller records the call and reads its allowed credential in one atomic D1 batch.
- * Every statement is guarded on the pinned owner's generation and address, an active
- * connection, and a live account with permission. A changed owner reads nothing.
+ * Both statements require the pinned owner's generation and address and an active
+ * connection. The credential lookup also requires a live account with permission.
+ * A changed owner reads nothing.
  * Pass that owner in deps. A fresh token causes no D1 read here: the verified snapshot
  * is used as is, so permission changes take effect on the next call.
  *

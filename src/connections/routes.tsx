@@ -113,7 +113,7 @@ connectionRoutes.get("/connections/:id", ownerOnly, async (c) => {
         const snapshot = yield* Effect.tryPromise({
           try: async () => {
             const rows = await c.env.DB.batch([
-              connectionsStatement(c.env.DB, owner, now),
+              connectionsStatement(c.env.DB, owner, now, id),
               accountsStatement(c.env.DB, owner),
               permissionsStatement(c.env.DB, owner, id, now),
             ]);
@@ -133,7 +133,7 @@ connectionRoutes.get("/connections/:id", ownerOnly, async (c) => {
           },
           catch: () => new Unavailable(),
         });
-        const connection = snapshot.connections.find((row) => row.id === id);
+        const connection = snapshot.connections[0];
         if (!connection) return null;
         const active = connection.status.kind === "active";
         const accounts = active ? snapshot.accounts : [];

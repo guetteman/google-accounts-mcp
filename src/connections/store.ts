@@ -102,7 +102,12 @@ function date(value: number, now: number): string {
     timeZone: "UTC",
   }).format(value);
 }
-export const connectionsStatement = (db: D1Database, owner: Owner, now: number) =>
+export const connectionsStatement = (
+  db: D1Database,
+  owner: Owner,
+  now: number,
+  id?: ConnectionId,
+) =>
   db
     .prepare(`SELECT listed.*,
         (SELECT json_group_array(name) FROM (SELECT a.name FROM accounts a
@@ -110,9 +115,10 @@ export const connectionsStatement = (db: D1Database, owner: Owner, now: number) 
           ORDER BY a.created_at, a.id)) AS can_see
         FROM connections listed WHERE listed.generation = ?1
         AND EXISTS (SELECT 1 FROM owner o WHERE o.id = 1 AND o.state = 'pinned' AND o.generation = listed.generation AND o.email = ?2)
+        ${id === undefined ? "" : "AND listed.id = ?4"}
         ORDER BY CASE WHEN listed.state = 'active' AND listed.expires_at > ?3 THEN 0 ELSE 1 END,
         CASE WHEN listed.state = 'active' AND listed.expires_at > ?3 THEN listed.created_at ELSE COALESCE(listed.revoked_at, listed.expires_at) END DESC, listed.id`)
-    .bind(owner.generation, owner.email, now);
+    .bind(owner.generation, owner.email, now, ...(id === undefined ? [] : [id]));
 export const decodeConnections = (results: Row[], now: number): ReadonlyArray<ConnectionView> =>
   results.map((r) => ({
     id: r.id,
