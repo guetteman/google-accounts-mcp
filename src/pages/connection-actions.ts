@@ -16,3 +16,10 @@ export function outcomeMessage(outcome: Outcome, name: string): string | null {
       return "Couldn't confirm the change. Reload the page to see whether it happened.";
   }
 }
+
+export function permissionMessage(outcome: Outcome, name: string): string | null {
+  if (outcome === "not_found")
+    return "This connection or account no longer exists. Nothing changed. Reload the page.";
+  if (outcome === "invalid") return "Nothing changed. Reload the page.";
+  return outcomeMessage(outcome, name);
+}

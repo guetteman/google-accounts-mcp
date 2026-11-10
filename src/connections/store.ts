@@ -1,3 +1,4 @@
+import { permittedWhere } from "../permissions/store";
 import type { Name } from "../names";
 import { Data, Effect } from "effect";
 import { first, Unavailable, WriteUncertain } from "../db";
@@ -89,6 +90,7 @@ interface Row {
   expires_at: number;
   revoked_at: number | null;
   last_used_at: number | null;
+  can_see: string;
 }
 function date(value: number, now: number): string {
   return new Intl.DateTimeFormat("en-US", {
@@ -100,30 +102,36 @@ function date(value: number, now: number): string {
     timeZone: "UTC",
   }).format(value);
 }
+export const connectionsStatement = (db: D1Database, owner: Owner, now: number) =>
+  db
+    .prepare(`SELECT listed.*,
+        (SELECT json_group_array(name) FROM (SELECT a.name FROM accounts a
+          WHERE a.generation = listed.generation AND ${permittedWhere({ connection: "listed.id", now: "?3", ownerEmail: "?2" })}
+          ORDER BY a.created_at, a.id)) AS can_see
+        FROM connections listed WHERE listed.generation = ?1
+        AND EXISTS (SELECT 1 FROM owner o WHERE o.id = 1 AND o.state = 'pinned' AND o.generation = listed.generation AND o.email = ?2)
+        ORDER BY CASE WHEN listed.state = 'active' AND listed.expires_at > ?3 THEN 0 ELSE 1 END,
+        CASE WHEN listed.state = 'active' AND listed.expires_at > ?3 THEN listed.created_at ELSE COALESCE(listed.revoked_at, listed.expires_at) END DESC, listed.id`)
+    .bind(owner.generation, owner.email, now);
+export const decodeConnections = (results: Row[], now: number): ReadonlyArray<ConnectionView> =>
+  results.map((r) => ({
+    id: r.id,
+    canSee: JSON.parse(r.can_see) as string[],
+    name: r.name,
+    appLabel: APP_LABELS[r.app],
+    status:
+      r.state === "revoked"
+        ? { kind: "revoked", on: date(r.revoked_at!, now) }
+        : r.expires_at <= now
+          ? { kind: "expired", on: date(r.expires_at, now) }
+          : { kind: "active" },
+    lastUsed: r.last_used_at === null ? "Never" : date(r.last_used_at, now),
+    created: date(r.created_at, now),
+  }));
 export const listConnections = (db: D1Database, owner: Owner, now: number) =>
   Effect.tryPromise({
-    try: async (): Promise<ReadonlyArray<ConnectionView>> => {
-      const { results } = await db
-        .prepare(`SELECT c.* FROM connections c WHERE c.generation = ?1
-      AND EXISTS (SELECT 1 FROM owner o WHERE o.id = 1 AND o.state = 'pinned' AND o.generation = c.generation AND o.email = ?2)
-      ORDER BY CASE WHEN c.state = 'active' AND c.expires_at > ?3 THEN 0 ELSE 1 END,
-      CASE WHEN c.state = 'active' AND c.expires_at > ?3 THEN c.created_at ELSE COALESCE(c.revoked_at, c.expires_at) END DESC, c.id`)
-        .bind(owner.generation, owner.email, now)
-        .all<Row>();
-      return results.map((r) => ({
-        id: r.id,
-        name: r.name,
-        appLabel: APP_LABELS[r.app],
-        status:
-          r.state === "revoked"
-            ? { kind: "revoked", on: date(r.revoked_at!, now) }
-            : r.expires_at <= now
-              ? { kind: "expired", on: date(r.expires_at, now) }
-              : { kind: "active" },
-        lastUsed: r.last_used_at === null ? "Never" : date(r.last_used_at, now),
-        created: date(r.created_at, now),
-      }));
-    },
+    try: async () =>
+      decodeConnections((await connectionsStatement(db, owner, now).all<Row>()).results, now),
     catch: () => new Unavailable(),
   });
 const action = (

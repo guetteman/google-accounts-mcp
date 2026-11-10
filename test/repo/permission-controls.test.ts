@@ -174,9 +174,9 @@ it("moves keyboard focus with arrows and Tab without changing a permission", asy
     await segment(group, "Not allowed").focus();
     const initial = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
     await page.keyboard.press("ArrowLeft");
-    expect(await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).not.toBe(
-      initial,
-    );
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
+      .not.toBe(initial);
     for (const key of ["ArrowRight", "ArrowUp", "ArrowDown", "Tab", "Shift+Tab"])
       await page.keyboard.press(key);
     await frames(page);
@@ -288,7 +288,7 @@ it.each([
   ["already_ended", "Claude already ended. Nothing changed."],
   ["not_found", "This connection or account no longer exists. Nothing changed. Reload the page."],
   ["invalid", "Nothing changed. Reload the page."],
-])("shows the exact permission message for %s", async ([outcome, message]) => {
+])("shows the exact permission message for %s", async (outcome, message) => {
   const page = await open();
   try {
     await page.route("**/connections/*/permissions", (route) => answer(route, outcome!));
@@ -332,7 +332,7 @@ it("never changes permissions when clicking names, addresses, problem text or gr
     expect(await control(page).isVisible()).toBe(false);
     await header.click();
     await selected(control(page), "Not allowed");
-    await page.getByText("Projects", { exact: true }).click();
+    await page.getByText("Projects", { exact: true }).filter({ visible: true }).click();
     await frames(page);
     expect(routes).toEqual([]);
     await selected(control(page, "Personal"), "Allowed");

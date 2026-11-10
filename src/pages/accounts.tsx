@@ -108,7 +108,7 @@ function alertMessage(alert: AccountsAlert | null): string | null {
 }
 const fixable = (account: AccountView) =>
   account.status.kind === "needs_reconnect" || account.status.kind === "missing_access";
-function Status({
+export function AccountStatusText({
   account,
   requiredGmailScopes,
 }: {
@@ -135,9 +135,7 @@ function Status({
         : `Google granted ${status.granted} of the ${requiredGmailScopes} permissions Gmail needs. Reconnect and check every box.`;
   return (
     <span className="text-muted-foreground">
-      <span className={fixable(account) ? "text-red-700 dark:text-red-300" : "text-foreground"}>
-        {title}.
-      </span>{" "}
+      <span className={fixable(account) ? "text-destructive" : "text-foreground"}>{title}.</span>{" "}
       {detail}
     </span>
   );
@@ -292,7 +290,10 @@ export function AccountsPage({
                         <Address account={account} />
                       </TableCell>
                       <TableCell className="max-w-64 py-4 align-top whitespace-normal">
-                        <Status account={account} requiredGmailScopes={requiredGmailScopes} />
+                        <AccountStatusText
+                          account={account}
+                          requiredGmailScopes={requiredGmailScopes}
+                        />
                       </TableCell>
                       <TableCell className="py-4 pr-0 align-top">
                         <div className="flex items-center justify-end gap-2">
@@ -323,7 +324,10 @@ export function AccountsPage({
                     {account.status.kind !== "ready" && (
                       <ItemContent className="basis-full gap-3">
                         <ItemDescription className="line-clamp-none">
-                          <Status account={account} requiredGmailScopes={requiredGmailScopes} />
+                          <AccountStatusText
+                            account={account}
+                            requiredGmailScopes={requiredGmailScopes}
+                          />
                         </ItemDescription>
                         {fixable(account) && reconnect(account, true)}
                       </ItemContent>

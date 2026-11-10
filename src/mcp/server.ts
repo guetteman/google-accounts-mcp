@@ -1,20 +1,26 @@
-import { McpServer } from "@modelcontextprotocol/server";
-import type { ActiveConnection } from "../connections/model";
-
-// The connection identity is checked in D1. #15 adds permission checks and tool call records.
-export function createMcpServer(_connection: ActiveConnection): McpServer {
-  const server = new McpServer(
+import { Server, type Tool as McpTool } from "@modelcontextprotocol/server";
+import { Schema } from "effect";
+import { runCall, type CallContext } from "./call";
+import { TOOLS } from "./tools";
+export function createMcpServer(ctx: CallContext): Server {
+  const server = new Server(
     { name: "google-accounts-mcp", version: "0.0.0" },
     { capabilities: { tools: { listChanged: false } } },
   );
-  server.registerTool(
-    "list_accounts",
-    {
-      description:
-        "Lists the Google accounts this connection can use, as a JSON array. An empty array means the owner has not given this connection access to any account.",
+  server.setRequestHandler("tools/list", () => ({
+    tools: TOOLS.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
       annotations: { readOnlyHint: true },
-    },
-    () => ({ content: [{ type: "text", text: "[]" }] }),
+      // Effect's empty struct is not an object JSON Schema. Keep the existing contract.
+      inputSchema:
+        tool.kind === "plain"
+          ? { type: "object", properties: {} }
+          : (Schema.toJsonSchemaDocument(tool.input).schema as McpTool["inputSchema"]),
+    })),
+  }));
+  server.setRequestHandler("tools/call", (request) =>
+    runCall(ctx, request.params.name, request.params.arguments),
   );
   return server;
 }

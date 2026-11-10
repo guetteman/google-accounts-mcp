@@ -65,7 +65,7 @@ it.each([390, 1280])(
   async (width) => {
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     try {
-      await page.route("**/connections/*", (route) =>
+      await page.route("**/connections/*/*", (route) =>
         route.fulfill({
           contentType: "application/json",
           body: JSON.stringify({ outcome: "already_ended" }),
@@ -154,7 +154,7 @@ it("renames the connection page after confirmation and removes all controls afte
   const page = await browser.newPage();
   page.setDefaultTimeout(1500);
   try {
-    await page.route("**/connections/*", (route) =>
+    await page.route("**/connections/*/*", (route) =>
       route.fulfill({ contentType: "application/json", body: JSON.stringify({ outcome: "ok" }) }),
     );
     await page.goto(origin);
@@ -173,7 +173,7 @@ it("renames the connection page after confirmation and removes all controls afte
     await page.getByRole("button", { name: "Actions for Renamed agent", exact: true }).click();
     await page.getByRole("menuitem", { name: "Revoke", exact: true }).click();
     await page.getByRole("button", { name: "Revoke", exact: true }).click();
-    await expect.poll(() => page.getByRole("radiogroup").count()).toBe(0);
+    await expect.poll(() => page.getByRole("radiogroup", { includeHidden: true }).count()).toBe(0);
     expect(await page.getByText(/ended connection cannot be given access/i).count()).toBe(1);
   } finally {
     await page.close();

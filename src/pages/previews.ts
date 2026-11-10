@@ -10,6 +10,7 @@ const connections: ReadonlyArray<ConnectionView> = [
     appLabel: "Claude Code",
     status: { kind: "active" },
     lastUsed: "Nov 9",
+    canSee: [],
     created: "Nov 1",
   },
   {
@@ -18,6 +19,7 @@ const connections: ReadonlyArray<ConnectionView> = [
     appLabel: "Claude",
     status: { kind: "active" },
     lastUsed: "Nov 8",
+    canSee: [],
     created: "Nov 1",
   },
   {
@@ -26,6 +28,7 @@ const connections: ReadonlyArray<ConnectionView> = [
     appLabel: "ChatGPT",
     status: { kind: "active" },
     lastUsed: "Never",
+    canSee: [],
     created: "Nov 1",
   },
   {
@@ -34,6 +37,7 @@ const connections: ReadonlyArray<ConnectionView> = [
     appLabel: "Claude Code",
     status: { kind: "expired", on: "Nov 6" },
     lastUsed: "Aug 8",
+    canSee: [],
     created: "Aug 8",
   },
   {
@@ -42,11 +46,81 @@ const connections: ReadonlyArray<ConnectionView> = [
     appLabel: "Claude Code",
     status: { kind: "revoked", on: "Sep 14" },
     lastUsed: "Sep 14",
+    canSee: [],
     created: "Sep 1",
   },
 ];
 const host = "accounts-mcp.example.com";
+const permissionAccounts: ReadonlyArray<import("../accounts/model").AccountView> = [
+  {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-000000000001" as import("../accounts/model").AccountId,
+    name: "Personal",
+    email: "alex.personal@example.com",
+    workspace: false,
+    status: { kind: "ready" },
+  },
+  {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-000000000002" as import("../accounts/model").AccountId,
+    name: "Northwind",
+    email: "alex@northwind.example",
+    workspace: true,
+    status: { kind: "ready" },
+  },
+  {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-000000000003" as import("../accounts/model").AccountId,
+    name: "Projects",
+    email: "alex.projects@example.com",
+    workspace: false,
+    status: { kind: "needs_reconnect" },
+  },
+  {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-000000000004" as import("../accounts/model").AccountId,
+    name: "Fabrikam Holdings International, Finance and Legal Operations",
+    email: "alexandra.personal-archive@fabrikam-holdings.example",
+    workspace: true,
+    status: { kind: "ready" },
+  },
+];
+const connectionPreview = (scenario: string): Page => {
+  const accounts = ["no-accounts", "ended-connection"].includes(scenario) ? [] : permissionAccounts;
+  const allowed = accounts.filter(
+    (_, i) =>
+      scenario === "all-allowed" ||
+      (["some-allowed", "save-failed"].includes(scenario) && [0, 2].includes(i)),
+  );
+  return {
+    _tag: "Connection",
+    ...(scenario === "save-failed"
+      ? { permissionNotice: "Couldn't reach the database. Nothing changed. Try again in a minute." }
+      : {}),
+    frame: { host, ownerEmail: "owner@example.com", current: "connections" },
+    connection: {
+      ...connections[scenario === "ended-connection" ? 4 : 1]!,
+      canSee: allowed.map((a) => a.name),
+    },
+    accounts,
+    allowed: allowed.map((a) => `${a.id}:list_labels` as const),
+    tools: [
+      {
+        name: "list_labels",
+        label: "List labels",
+        description: "See the names of this account's Gmail labels.",
+      },
+    ],
+    requiredGmailScopes: GMAIL_SCOPES.length,
+  };
+};
 export const previews: Readonly<Record<string, Page>> = {
+  ...Object.fromEntries(
+    [
+      "new-connection",
+      "some-allowed",
+      "all-allowed",
+      "no-accounts",
+      "ended-connection",
+      "save-failed",
+    ].map((scenario) => [`connection-${scenario}`, connectionPreview(scenario)]),
+  ),
   "access-refused": { _tag: "AccessRefused", host },
   "access-unavailable": { _tag: "AccessUnavailable" },
   "not-owner": { _tag: "NotOwner", host, address: "someone.else@example.net" },

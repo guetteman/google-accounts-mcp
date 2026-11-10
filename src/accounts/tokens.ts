@@ -28,11 +28,11 @@ interface Access {
 }
 
 /**
- * #15 must check the pinned owner, connection permissions and account permissions, and read
- * credentialStatement in one D1 batch immediately before calling. Load the owner's generation
- * and email to bind that statement; compare them with the owner row returned by the same batch.
- * If they changed, repeat the permission checks rather than using the credential. Pass that
- * verified owner in deps. A fresh token causes no D1 read here: stale snapshots are used as is.
+ * The caller records the call and reads its allowed credential in one atomic D1 batch.
+ * Every statement is guarded on the pinned owner's generation and address, an active
+ * connection, and a live account with permission. A changed owner reads nothing.
+ * Pass that owner in deps. A fresh token causes no D1 read here: the verified snapshot
+ * is used as is, so permission changes take effect on the next call.
  *
  * build may run twice. Each call must create a fresh Request and body, with the caller's
  * cancellation signal. This function sets no deadline for the service request. After a refresh,

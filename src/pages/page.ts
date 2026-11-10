@@ -13,6 +13,20 @@ export interface Frame {
 }
 export type FramePage =
   | {
+      readonly _tag: "Connection";
+      readonly permissionNotice?: string;
+      readonly frame: Frame;
+      readonly connection: ConnectionView;
+      readonly accounts: ReadonlyArray<AccountView>;
+      readonly tools: ReadonlyArray<{
+        name: import("../mcp/tools").AccountTool;
+        label: string;
+        description: string;
+      }>;
+      readonly allowed: ReadonlyArray<`${import("../accounts/model").AccountId}:${import("../mcp/tools").AccountTool}`>;
+      readonly requiredGmailScopes: number;
+    }
+  | {
       readonly _tag: "Accounts";
       readonly requiredGmailScopes: number;
       readonly frame: Frame;
@@ -45,4 +59,4 @@ export type Page =
   | FramePage;
 
 export const isFramePage = (page: Page): page is FramePage =>
-  page._tag === "Accounts" || page._tag === "Connections";
+  page._tag === "Accounts" || page._tag === "Connections" || page._tag === "Connection";

@@ -91,3 +91,20 @@ export function decodeCredential(raw: unknown): Credential | null {
     accessExpiresAt: row.access_expires_at,
   };
 }
+
+export const accountMessage = (
+  status: Exclude<AccountStatus["kind"], "ready">,
+  email: string,
+  origin: string,
+): string => {
+  switch (status) {
+    case "needs_reconnect":
+      return `Ask the owner to reconnect ${email} at ${origin}/accounts.`;
+    case "blocked_by_admin":
+      return `A Google Workspace admin blocked this server for ${email}. The owner can see the details at ${origin}/accounts.`;
+    case "missing_access":
+      return `Google did not grant all the Gmail access this server asks for on ${email}. Ask the owner to reconnect it at ${origin}/accounts and check every box.`;
+    case "unreadable":
+      return `The server cannot read its stored access to ${email}. Ask the owner to check ${origin}/accounts.`;
+  }
+};

@@ -57,6 +57,7 @@ export interface ActiveConnection {
   readonly app: App;
 }
 export interface ConnectionView {
+  readonly canSee: ReadonlyArray<string>;
   readonly id: ConnectionId;
   readonly name: string;
   readonly appLabel: string;

@@ -34,7 +34,16 @@ export const mcpHandler = {
       return connection.failure._tag === "NotActive"
         ? inactive(request)
         : new Response("Service unavailable", { status: 503 });
-    const handler = createMcpHandler(() => createMcpServer(connection.success));
+    const handler = createMcpHandler(() =>
+      createMcpServer({
+        db: env.DB,
+        config: config.success,
+        connection: connection.success,
+        owner: { generation: env.ownerGeneration, email: config.success.ownerEmail },
+        origin: new URL(request.url).origin,
+        now: Date.now,
+      }),
+    );
     return handler.fetch(request);
   },
 };

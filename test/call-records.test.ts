@@ -378,7 +378,7 @@ it("cannot overwrite a new owner's reused record ID with an outcome from before 
     await release.promise;
     return HttpResponse.json(LABELS_RESPONSE);
   });
-  const pending = toolCall(f.mcp, "list_labels", { account: PERSONAL });
+  const pending = toolCall(f.mcp, "list_labels", { account: PERSONAL }).then(rpcMessages);
   try {
     await Promise.race([
       entered.promise,

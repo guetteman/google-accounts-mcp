@@ -88,8 +88,11 @@ it("formats connection dates in UTC and links rows without action menus", async 
   const cells = [...active.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map((cell) =>
     textOf(cell[1]!),
   );
-  expect(cells[3]).toBe("Nov 6, 2025");
-  expect(cells[4]).toMatch(/no access yet/i);
+  const headers = [...html.matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/g)].map((cell) =>
+    textOf(cell[1]!),
+  );
+  expect(cells[headers.indexOf("Last used")]).toBe("Nov 6, 2025");
+  expect(cells[headers.indexOf("Can see")]).toMatch(/no access yet/i);
   expect(active).toMatch(/href="\/connections\/[^"]+"/);
   expect(active).not.toMatch(/<button\b|role="menu"/);
   const detail = await (await ownerBrowser()).get(`/connections/${activeConnection.id}`);
