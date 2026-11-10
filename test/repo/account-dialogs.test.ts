@@ -39,7 +39,7 @@ beforeAll(async () => {
   const styles = outputs.filter((asset) => asset.fileName.endsWith(".css"));
   const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">${styles.map((asset) => `<link rel="stylesheet" href="/${asset.fileName}">`).join("")}</head><body><div id="root"></div><script type="module" src="/${entry.fileName}"></script></body></html>`;
   server = createServer((request, response) => {
-    const path = request.url!;
+    const path = new URL(request.url!, "http://localhost").pathname;
     if (path === "/" || path === "/consent") {
       response.setHeader("Content-Type", "text/html");
       response.end(html);
@@ -140,7 +140,13 @@ it.each([390, 1280])(
           page.on("request", (request) => {
             if (request.isNavigationRequest()) navigations.push(request.url());
           });
-          await page
+          const controls =
+            action === "Reconnect"
+              ? page
+                  .locator(width < 768 ? '[data-slot="item"]' : "tbody tr")
+                  .filter({ hasText: "Projects" })
+              : page;
+          await controls
             .getByRole("button", { name: action, exact: true })
             .filter({ visible: true })
             .click();
@@ -234,3 +240,137 @@ it.each(["light", "dark"] as const)(
   },
   15000,
 );
+
+it.each([390, 1280])(
+  "explains each account status and places Reconnect in its row or menu at %s px",
+  async (width) => {
+    const page = await browser.newPage({ viewport: { width, height: 1100 } });
+    try {
+      await page.goto(origin);
+      const rows = page.locator(width < 768 ? '[data-slot="item"]' : "tbody tr");
+      const cases = [
+        ["Personal", "Ready", false],
+        [
+          "Projects",
+          "Needs reconnect. Google stopped accepting this server's access. Reconnect to restore it.",
+          true,
+        ],
+        [
+          "Work",
+          "Blocked by admin. The organization's admin blocked this app. The server checks again at most every 10 minutes, when an agent uses this account.",
+          false,
+        ],
+        [
+          "Research",
+          "Missing access. Google granted 2 of the 5 permissions Gmail needs. Reconnect and check every box.",
+          true,
+        ],
+      ] as const;
+      for (const [name, status, fixable] of cases) {
+        const row = rows.filter({
+          has: page.getByRole("button", { name: `Actions for ${name}`, exact: true }),
+        });
+        await row.waitFor();
+        expect(await row.innerText()).toContain(status);
+        expect(await row.getByRole("button", { name: "Reconnect", exact: true }).count()).toBe(
+          fixable ? 1 : 0,
+        );
+        await row.getByRole("button", { name: `Actions for ${name}`, exact: true }).click();
+        expect(await page.getByRole("menuitem", { name: "Reconnect", exact: true }).count()).toBe(
+          fixable ? 0 : 1,
+        );
+        await page.keyboard.press("Escape");
+      }
+    } finally {
+      await page.close();
+    }
+  },
+);
+
+it("marks failure alerts as warnings and keeps success alerts neutral", async () => {
+  const page = await browser.newPage();
+  try {
+    for (const kind of [
+      "didnt_finish",
+      "google_down",
+      "no_refresh_token",
+      "unconfirmed",
+      "address_taken",
+      "wrong_account",
+      "changed",
+      "client_refused",
+      "removed_unconfirmed",
+      "connected",
+      "reconnected",
+      "removed",
+    ]) {
+      await page.goto(`${origin}/?alert=${kind}`);
+      const alert = page.getByRole("status");
+      await alert.waitFor();
+      expect(await alert.getAttribute("class"), kind).toContain(
+        ["connected", "reconnected", "removed"].includes(kind) ? "bg-card" : "bg-warning",
+      );
+    }
+    for (const outcome of ["not_found", "unavailable", "unknown"]) {
+      await page.route("**/accounts/connect", (route) =>
+        route.fulfill({ contentType: "application/json", body: JSON.stringify({ outcome }) }),
+      );
+      await page.goto(origin);
+      await page.getByRole("button", { name: "Connect a Google account" }).click();
+      const alert = page.getByRole("status");
+      await alert.waitFor();
+      expect(await alert.getAttribute("class"), outcome).toContain("bg-warning");
+      await page.unroute("**/accounts/connect");
+    }
+  } finally {
+    await page.close();
+  }
+}, 15000);
+
+it("enables Connect again when Back restores the page from the browser cache", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.route("**/accounts/connect", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ outcome: "ok", url: "https://google.example/authorize" }),
+      }),
+    );
+    await page.route("https://google.example/**", (route) => route.fulfill({ status: 204 }));
+    await page.goto(origin);
+    const connect = page.getByRole("button", { name: "Connect a Google account" });
+    const navigation = page.waitForRequest("https://google.example/authorize");
+    await connect.click();
+    await navigation;
+    expect(await connect.isDisabled()).toBe(true);
+    await page.evaluate(() =>
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })),
+    );
+    await expect.poll(() => connect.isEnabled(), { timeout: 500 }).toBe(true);
+  } finally {
+    await page.close();
+  }
+});
+
+it("removes the account without disconnecting Google when the box stays unchecked", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.route("**/accounts/**", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ outcome: "not_found" }),
+      }),
+    );
+    await page.goto(origin);
+    await page
+      .getByRole("button", { name: "Actions for Personal", exact: true })
+      .filter({ visible: true })
+      .click();
+    await page.getByRole("menuitem", { name: "Remove", exact: true }).click();
+    const posted = page.waitForRequest((request) => request.method() === "POST");
+    await page.getByRole("button", { name: "Remove", exact: true }).click();
+    expect(Object.fromEntries(new URLSearchParams((await posted).postData() ?? ""))).toEqual({});
+  } finally {
+    await page.close();
+  }
+});

@@ -1,5 +1,5 @@
 import { GMAIL_SCOPES } from "../google/client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { EllipsisIcon, MailIcon } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -122,7 +122,7 @@ function Status({ account }: { account: AccountView }) {
     status.kind === "needs_reconnect"
       ? "Google stopped accepting this server's access. Reconnect to restore it."
       : status.kind === "blocked_by_admin"
-        ? "The organization's admin blocked this app. The server retries every 10 minutes."
+        ? "The organization's admin blocked this app. The server checks again at most every 10 minutes, when an agent uses this account."
         : `Google granted ${status.granted} of the ${GMAIL_SCOPES.length} permissions Gmail needs. Reconnect and check every box.`;
   return (
     <span className="text-muted-foreground">
@@ -150,11 +150,24 @@ export function AccountsPage({
   readonly accounts: ReadonlyArray<AccountView>;
   readonly alert: AccountsAlert | null;
 }) {
-  const [message, setMessage] = useState(alertMessage(alert));
+  const [message, setMessage] = useState(
+    () =>
+      alert && {
+        text: alertMessage(alert),
+        warning: !["connected", "reconnected", "removed", "already_connected"].includes(alert.kind),
+      },
+  );
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<{ account: AccountView; action: "name" | "remove" } | null>(
     null,
   );
+  useEffect(() => {
+    const restore = (event: PageTransitionEvent) => {
+      if (event.persisted) setBusy(false);
+    };
+    window.addEventListener("pageshow", restore);
+    return () => window.removeEventListener("pageshow", restore);
+  }, []);
   const begin = async (account?: AccountView) => {
     setBusy(true);
     const result = await postAction(
@@ -164,7 +177,10 @@ export function AccountsPage({
       window.location.assign(result.url);
       return;
     }
-    setMessage(actionMessage(result.outcome === "ok" ? "unknown" : result.outcome));
+    setMessage({
+      text: actionMessage(result.outcome === "ok" ? "unknown" : result.outcome),
+      warning: true,
+    });
     setBusy(false);
   };
   const reconnect = (account: AccountView, mobile = false) => (
@@ -220,8 +236,8 @@ export function AccountsPage({
           </Button>
         </div>
         {message && (
-          <Alert role="status">
-            <AlertDescription>{message}</AlertDescription>
+          <Alert role="status" variant={message.warning ? "warning" : "default"}>
+            <AlertDescription>{message.text}</AlertDescription>
           </Alert>
         )}
         {accounts.length === 0 ? (
@@ -345,7 +361,7 @@ function AccountDialog({
     setBusy(false);
   };
   const feedback = message && (
-    <Alert role="status">
+    <Alert role="status" variant="warning">
       <AlertDescription>{message}</AlertDescription>
     </Alert>
   );
