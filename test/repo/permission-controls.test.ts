@@ -232,6 +232,7 @@ it.each(["unavailable", "503 HTML", "unknown", "lost response"])(
   async (outcome) => {
     const page = await open(390);
     try {
+      await page.clock.install();
       const routes = await pending(page);
       const group = control(page, "Personal");
       const sent = page.waitForRequest((r) => r.method() === "POST");
@@ -258,7 +259,6 @@ it.each(["unavailable", "503 HTML", "unknown", "lost response"])(
         expect(routes).toHaveLength(1);
         await selected(group, null);
       }
-      await page.clock.install();
       await page.clock.fastForward(60_000);
       for (const position of [0, 100000]) {
         await page.evaluate((y) => window.scrollTo(0, y), position);
@@ -379,6 +379,48 @@ it("names each permission and its state accessibly, provides tooltips and distin
     expect(await page.getByText("Allowed", { exact: true }).filter({ visible: true }).count()).toBe(
       1,
     );
+  } finally {
+    await page.close();
+  }
+});
+
+it("accepts only one permission activation before React commits the saving state", async () => {
+  const page = await open();
+  try {
+    const routes = await pending(page);
+    const group = control(page);
+    const sent = page.waitForRequest((r) => r.method() === "POST");
+    await segment(group, "Allowed").evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await sent;
+    await frames(page);
+    expect(routes).toHaveLength(1);
+    await answer(routes[0]!, "ok");
+    await expect.poll(() => segment(group, "Allowed").getAttribute("aria-checked")).toBe("true");
+  } finally {
+    await page.close();
+  }
+});
+
+it("exposes saving and unconfirmed controls as disabled to assistive technology", async () => {
+  const page = await open();
+  try {
+    const routes = await pending(page);
+    const group = control(page);
+    const sent = page.waitForRequest((r) => r.method() === "POST");
+    await segment(group, "Allowed").click();
+    await sent;
+    const disabled = async () => {
+      expect(await group.getAttribute("aria-disabled")).toBe("true");
+      for (const label of ["Allowed", "Not allowed"] as const)
+        expect(await segment(group, label).getAttribute("aria-disabled")).toBe("true");
+    };
+    await disabled();
+    await answer(routes[0]!, "unknown");
+    await expect.poll(() => group.getAttribute("aria-busy")).toBe("false");
+    await disabled();
   } finally {
     await page.close();
   }
