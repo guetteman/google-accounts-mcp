@@ -25,7 +25,10 @@ import { seedConnection } from "./support/connections";
 it.each(["success", "block"])(
   "keeps a newer %s when an earlier admin rejection arrives late",
   async (newer) => {
-    const row = await seedAccount({ access_expires_at: NOW });
+    const row = await seedAccount({
+      access_expires_at: NOW,
+      ...(newer === "block" ? { access_token: null } : {}),
+    });
     const snapshot = await credential(row.id);
     const entered = deferred(),
       release = deferred();
@@ -65,10 +68,15 @@ it.each(["success", "block"])(
   },
 );
 
-it.each(["fresh", "expired"])(
+it.each(["fresh", "expired", "expired admin block"])(
   "preserves a %s credential when TOKEN_KEY is wrong and recovers when restored",
   async (age) => {
-    const row = await seedAccount({ access_expires_at: age === "fresh" ? NOW + 3000000 : NOW });
+    const row = await seedAccount({
+      access_expires_at: age === "fresh" ? NOW + 3000000 : NOW,
+      ...(age === "expired admin block"
+        ? ({ health: "blocked_by_admin", blocked_until: NOW - 1 } as const)
+        : {}),
+    });
     const before = await dump();
     expect(
       await call(row.id, env.DB, undefined, testEnv({ TOKEN_KEY: "c".repeat(64) })),
@@ -190,3 +198,16 @@ it.each(["account rename", "account remove", "connection rename", "connection re
     expect(google.events).toEqual([]);
   },
 );
+
+it("erases the cached access token when Google blocks the account", async () => {
+  const row = await seedAccount({ access_expires_at: NOW });
+  expect(row.access_token).not.toBeNull();
+  google.refreshAnswers = ["admin_policy_enforced"];
+  expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
+  expect((await accounts())[0]).toMatchObject({
+    access_token: null,
+    access_expires_at: null,
+    health: "blocked_by_admin",
+    blocked_until: NOW + 600000,
+  });
+});

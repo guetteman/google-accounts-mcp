@@ -73,9 +73,6 @@ export const withGoogle = (
       if (snapshot.health === "blocked_by_admin") {
         if (snapshot.blockedUntil === null || snapshot.blockedUntil > deps.now())
           return yield* Effect.fail(new BlockedByAdmin({ email: snapshot.email }));
-        const claimedAt = deps.now();
-        if (!(yield* claimBlockSlot(deps.db, snapshot, claimedAt))) return yield* reload();
-        snapshot = { ...snapshot, blockedUntil: claimedAt + 600000 };
       } else if (
         !force &&
         snapshot.accessToken &&
@@ -89,6 +86,11 @@ export const withGoogle = (
         ? yield* decrypt(`${snapshot.id}:refresh`, snapshot.refreshToken)
         : null;
       if (refreshToken === null) return yield* damaged();
+      if (snapshot.health === "blocked_by_admin") {
+        const claimedAt = deps.now();
+        if (!(yield* claimBlockSlot(deps.db, snapshot, claimedAt))) return yield* reload();
+        snapshot = { ...snapshot, blockedUntil: claimedAt + 600000 };
+      }
       const result = yield* Effect.result(refresh(deps.config, refreshToken, deps.now()));
       if (Result.isFailure(result)) {
         if (result.failure._tag === "GoogleUnavailable") return yield* Effect.fail(result.failure);
