@@ -1,11 +1,6 @@
-import { env } from "cloudflare:workers";
-import { Effect, Result } from "effect";
 import { expect, it, vi } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
-import { readConfig, type Config } from "../src/config";
-import { readOwner, type Owner } from "../src/owner/owner";
-import { parseConnectionId, type ActiveConnection } from "../src/connections/model";
 import { google, deferred } from "./support/google";
 import {
   callRows,
@@ -16,34 +11,13 @@ import {
   unavailableMessage,
   toolCall,
 } from "./support/permissions";
-import { ORIGIN, testEnv } from "./support/worker";
+import { rpcResult } from "./support/oauth";
 
-// Resolve at test time so the absent implementation fails this seam, not collection of the suite.
-const modules = import.meta.glob<{
-  runCall: (
-    ctx: {
-      db: D1Database;
-      config: Config;
-      owner: Owner;
-      connection: ActiveConnection;
-      origin: string;
-      now: () => number;
-    },
-    name: string,
-    args: Record<string, unknown>,
-  ) => Promise<unknown>;
-}>("../src/mcp/call.ts");
 it.each(["headers", "body"])(
-  "ends a Gmail request after ten seconds when its %s never finish",
+  "ends a Gmail request after ten seconds while waiting for its %s",
   async (stage) => {
-    const load = modules["../src/mcp/call.ts"];
-    expect(load, "runCall must exist at the accepted deadline seam").toBeDefined();
-    const { runCall } = await load!();
     const f = await fixture();
     await permission(f);
-    const config = readConfig(testEnv());
-    if (Result.isFailure(config)) throw new Error("invalid test config");
-    const owner = await Effect.runPromise(readOwner(env.DB));
     const entered = deferred();
     google.labelAnswers.push((request) => {
       entered.resolve();
@@ -69,18 +43,7 @@ it.each(["headers", "body"])(
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let settled = false;
-    const call = runCall(
-      {
-        db: env.DB,
-        config: config.success,
-        owner: { generation: owner.generation, email: owner.email! },
-        connection: { connectionId: parseConnectionId(f.connection.id)!, app: f.connection.app },
-        origin: ORIGIN,
-        now: Date.now,
-      },
-      "list_labels",
-      { account: PERSONAL },
-    );
+    const call = toolCall(f.mcp, "list_labels", { account: PERSONAL }).then(rpcResult);
     void call.then(
       () => {
         settled = true;

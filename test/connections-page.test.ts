@@ -66,10 +66,10 @@ it("lists every current-generation connection with active newest first then most
   for (const row of listed) expect(row).toContain("Never");
 });
 
-it("formats last use in UTC and links connections without action menus", async () => {
+it("formats connection dates in UTC and links rows without action menus", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await pinOwner();
-  await seedConnection({
+  const activeConnection = await seedConnection({
     name: "Active laptop",
     created_at: Date.parse("2030-11-06T00:30:00Z"),
     last_used_at: Date.parse("2025-11-06T23:30:00Z"),
@@ -92,6 +92,9 @@ it("formats last use in UTC and links connections without action menus", async (
   expect(cells[4]).toMatch(/no access yet/i);
   expect(active).toMatch(/href="\/connections\/[^"]+"/);
   expect(active).not.toMatch(/<button\b|role="menu"/);
+  const detail = await (await ownerBrowser()).get(`/connections/${activeConnection.id}`);
+  expect(detail.status).toBe(200);
+  expect(textOf(await detail.text())).toContain("Created Nov 6");
   for (const [name, status] of [
     ["Revoked laptop", "Revoked Sep 14"],
     ["Expired laptop", "Expired Nov 6"],
