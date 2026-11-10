@@ -61,15 +61,15 @@ it("lists every current-generation connection with active newest first then most
   expect(listed[1]).toContain("Shared name Claude Code Active");
   expect(listed[2]).toContain("Ended recently");
   expect(listed[3]).toContain("Ended earlier Claude Revoked");
-  for (const title of ["Name", "App", "Status", "Last used", "Created"])
+  for (const title of ["Name", "App", "Status", "Last used", "Can see"])
     expect(textOf(html)).toContain(title);
   for (const row of listed) expect(row).toContain("Never");
 });
 
-it("formats dates in UTC and leaves ended connections without action menus", async () => {
+it("formats connection dates in UTC and links rows without action menus", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await pinOwner();
-  await seedConnection({
+  const activeConnection = await seedConnection({
     name: "Active laptop",
     created_at: Date.parse("2030-11-06T00:30:00Z"),
     last_used_at: Date.parse("2025-11-06T23:30:00Z"),
@@ -88,9 +88,16 @@ it("formats dates in UTC and leaves ended connections without action menus", asy
   const cells = [...active.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map((cell) =>
     textOf(cell[1]!),
   );
-  expect(cells[3]).toBe("Nov 6, 2025");
-  expect(cells[4]).toBe("Nov 6");
-  expect(active).toMatch(/<button\b/);
+  const headers = [...html.matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/g)].map((cell) =>
+    textOf(cell[1]!),
+  );
+  expect(cells[headers.indexOf("Last used")]).toBe("Nov 6, 2025");
+  expect(cells[headers.indexOf("Can see")]).toMatch(/no access yet/i);
+  expect(active).toMatch(/href="\/connections\/[^"]+"/);
+  expect(active).not.toMatch(/<button\b|role="menu"/);
+  const detail = await (await ownerBrowser()).get(`/connections/${activeConnection.id}`);
+  expect(detail.status).toBe(200);
+  expect(textOf(await detail.text())).toContain("Created Nov 6");
   for (const [name, status] of [
     ["Revoked laptop", "Revoked Sep 14"],
     ["Expired laptop", "Expired Nov 6"],

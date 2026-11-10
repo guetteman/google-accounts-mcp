@@ -84,7 +84,7 @@ describe("owner pages", () => {
     [
       "/connections",
       "Connections",
-      "Apps that signed in to this server. Each starts with no access to your accounts.",
+      "Apps that signed in to this server. Each starts with no access to your accounts. Open one to choose what it can use.",
     ],
   ])(
     "renders %s in the frame with one Access sign-out link and escaped hydration props",

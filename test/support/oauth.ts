@@ -225,6 +225,25 @@ export class McpClient {
     return this.token({ token: this.tokens!.refresh_token, token_type_hint: "refresh_token" });
   }
 
+  /** Raw envelopes for batches, notifications and SDK validation failures. */
+  raw(body: unknown, workerEnv: Env = testEnv(), extra: Record<string, string> = {}) {
+    expect(this.tokens).toBeDefined();
+    return callWorker(
+      new Request(`${this.origin}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.tokens!.access_token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": "2025-11-25",
+          ...extra,
+        },
+        body: JSON.stringify(body),
+      }),
+      workerEnv,
+    );
+  }
+
   call(
     method = "tools/list",
     workerEnv: Env = testEnv(),
@@ -285,4 +304,25 @@ export async function rpcResult(response: Response): Promise<Record<string, unkn
   expect(message.error).toBeUndefined();
   expect(message.result).toBeDefined();
   return message.result!;
+}
+
+/** Read every JSON-RPC message, retaining errors and original response bytes. */
+export async function rpcMessages(response: Response) {
+  const body = await response.text();
+  const values: unknown[] = response.headers.get("Content-Type")?.includes("text/event-stream")
+    ? body
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => JSON.parse(line.slice(6)))
+    : body
+      ? [JSON.parse(body)]
+      : [];
+  return {
+    body,
+    messages: values.flat() as Array<{
+      id?: number;
+      result?: Record<string, unknown>;
+      error?: { code: number; message: string };
+    }>,
+  };
 }

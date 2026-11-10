@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { DAY, NOW, onlyConnection, resetOwner, rows } from "./support/connections";
 import { brokenDb, dump, failingKv, kvDump, restoreKv, statementFailingDb } from "./support/db";
 import { clients, expectOAuthError, McpClient, rpcResult } from "./support/oauth";
-import { callWorker, ORIGIN, testEnv, textOf } from "./support/worker";
+import { callWorker, ORIGIN, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
 
 it("refuses a revoked connection even with stale KV while another connection keeps working", async () => {
   const revoked = await new McpClient().connect("Work laptop");
@@ -94,7 +94,7 @@ const mcpModules = import.meta.glob<{ createMcpServer: (...args: unknown[]) => u
   "../src/mcp/server.ts",
 );
 it.each(clients)(
-  "initializes with list_accounts and passes the stored $app identity to the MCP factory",
+  "initializes both tools and passes the stored $app identity in the call context",
   async (client) => {
     const mcp = await new McpClient(client).connect();
     const row = await onlyConnection();
@@ -117,16 +117,30 @@ it.each(clients)(
         connectionId: crypto.randomUUID(),
       }),
     );
-    expect(listed.tools).toEqual([expect.objectContaining({ name: "list_accounts" })]);
+    expect(listed.tools).toEqual([
+      expect.objectContaining({ name: "list_accounts" }),
+      expect.objectContaining({ name: "list_labels" }),
+    ]);
     expect(spy).toHaveBeenCalledTimes(2);
     for (const args of spy.mock.calls)
-      expect(args[0]).toEqual({ connectionId: row.id, app: client.app });
+      expect(args[0]).toEqual(
+        expect.objectContaining({
+          connection: { connectionId: row.id, app: client.app },
+          db: expect.anything(),
+          config: expect.anything(),
+          owner: expect.objectContaining({ generation: 1, email: OWNER_EMAIL }),
+          origin: ORIGIN,
+          now: expect.any(Function),
+        }),
+      );
     const changedApp = client.app === "chatgpt" ? "claude-code" : "chatgpt";
     await env.DB.prepare("UPDATE connections SET app = ? WHERE id = ?")
       .bind(changedApp, row.id)
       .run();
     expect((await mcp.call("tools/list", undefined, { app: client.app })).status).toBe(200);
-    expect(spy).toHaveBeenLastCalledWith({ connectionId: row.id, app: changedApp });
+    expect(spy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ connection: { connectionId: row.id, app: changedApp } }),
+    );
   },
 );
 

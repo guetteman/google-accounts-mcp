@@ -269,7 +269,10 @@ describe("owner consent", () => {
     for (const [table, entries] of Object.entries(state))
       if (/account|permission/i.test(table)) expect(entries).toEqual([]);
     const listed = await rpcResult(await mcp.call());
-    expect(listed.tools).toEqual([expect.objectContaining({ name: "list_accounts" })]);
+    expect(listed.tools).toEqual([
+      expect.objectContaining({ name: "list_accounts" }),
+      expect.objectContaining({ name: "list_labels" }),
+    ]);
   });
 
   it.each(["form", "query"])(

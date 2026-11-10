@@ -1,3 +1,7 @@
+import type { CallContext } from "../mcp/call";
+import type { AccountTool } from "../mcp/tools";
+import { permittedWhere } from "../permissions/store";
+import type { OwnerEmail } from "../owner/owner";
 import { Effect } from "effect";
 import { first, Unavailable, WriteUncertain } from "../db";
 import type { Owner } from "../owner/owner";
@@ -39,46 +43,83 @@ export const loadCredential = (db: D1Database, owner: Owner, id: AccountId) =>
       return credential ? Effect.succeed(credential) : Effect.fail(new Unavailable());
     }),
   );
-export const listAccounts = (db: D1Database, owner: Owner, tokenKey: TokenKey) =>
+// Lists expose only key prefixes, never token ciphertext.
+const viewColumns = `a.id, a.name, a.email, a.hd, a.health, a.scopes,
+  substr(a.refresh_token,1,20) AS refresh_key, substr(a.access_token,1,20) AS access_key`;
+interface ViewRow {
+  id: string;
+  name: string;
+  email: string;
+  hd: string | null;
+  health: Health;
+  scopes: string;
+  refresh_key: string | null;
+  access_key: string | null;
+}
+function decodeView(row: ViewRow, prefix: string): AccountView {
+  const id = parseAccountId(row.id);
+  if (!id) throw new Error("Invalid account ID");
+  const scopes: unknown = JSON.parse(row.scopes);
+  if (!Array.isArray(scopes) || !scopes.every((s) => typeof s === "string"))
+    throw new Error("Invalid account scopes");
+  return {
+    id,
+    name: row.name,
+    email: row.email,
+    workspace: row.hd !== null,
+    status: accountStatus(
+      row.health,
+      parseGrantedScopes(scopes.join(" ")),
+      [row.refresh_key, row.access_key].every((value) => value === null || value === prefix),
+    ),
+  };
+}
+const listing = (db: D1Database, owner: Owner, where = "", values: (string | number)[] = []) =>
+  db
+    .prepare(`SELECT ${viewColumns} FROM accounts a WHERE a.state = 'live'
+    AND ${ownerGuard("?1", "?2")} ${where} ORDER BY a.created_at, a.id`)
+    .bind(owner.generation, owner.email, ...values);
+export const accountsStatement = (db: D1Database, owner: Owner) => listing(db, owner);
+export const decodeAccounts = async (results: ViewRow[], tokenKey: TokenKey) => {
+  const prefix = `v1.${await keyId(tokenKey)}.`;
+  return results.map((row) => decodeView(row, prefix));
+};
+const decodeListing = (statement: D1PreparedStatement, tokenKey: TokenKey) =>
   Effect.tryPromise({
-    try: async (): Promise<ReadonlyArray<AccountView>> => {
-      const prefix = `v1.${await keyId(tokenKey)}.`;
-      const { results } = await db
-        .prepare(
-          `SELECT a.id, a.name, a.email, a.hd, a.health, a.scopes, substr(a.refresh_token,1,20) AS refresh_key, substr(a.access_token,1,20) AS access_key FROM accounts a WHERE a.state = 'live' AND ${ownerGuard("?1", "?2")} ORDER BY a.created_at, a.id`,
-        )
-        .bind(owner.generation, owner.email)
-        .all<{
-          id: string;
-          name: string;
-          email: string;
-          hd: string | null;
-          health: Health;
-          scopes: string;
-          refresh_key: string | null;
-          access_key: string | null;
-        }>();
-      return results.map((row) => {
-        const id = parseAccountId(row.id);
-        if (!id) throw new Error("Invalid account ID");
-        const scopes: unknown = JSON.parse(row.scopes);
-        if (!Array.isArray(scopes) || !scopes.every((s) => typeof s === "string"))
-          throw new Error("Invalid account scopes");
-        return {
-          id,
-          name: row.name,
-          email: row.email,
-          workspace: row.hd !== null,
-          status: accountStatus(
-            row.health,
-            parseGrantedScopes(scopes.join(" ")),
-            [row.refresh_key, row.access_key].every((value) => value === null || value === prefix),
-          ),
-        };
-      });
-    },
+    try: async () => decodeAccounts((await statement.all<ViewRow>()).results, tokenKey),
     catch: () => new Unavailable(),
   });
+export const listAccounts = (db: D1Database, owner: Owner, tokenKey: TokenKey) =>
+  decodeListing(listing(db, owner), tokenKey);
+export const listVisibleAccounts = (ctx: CallContext) =>
+  decodeListing(
+    listing(
+      ctx.db,
+      ctx.owner,
+      `AND ${permittedWhere({ connection: "?3", now: "?4", ownerEmail: "?2" })}`,
+      [ctx.connection.connectionId, ctx.now()],
+    ),
+    ctx.config.tokenKey,
+  );
+export const allowedAccountStatement = (ctx: CallContext, tool: AccountTool, account: OwnerEmail) =>
+  ctx.db
+    .prepare(`SELECT ${viewColumns}, a.version, a.blocked_until, a.refresh_token, a.access_token, a.access_expires_at
+    FROM accounts a WHERE a.email = ?3 AND ${ownerGuard("?1", "?2")}
+    AND ${permittedWhere({ connection: "?4", tool: "?5", now: "?6", ownerEmail: "?2" })}`)
+    .bind(
+      ctx.owner.generation,
+      ctx.owner.email,
+      account,
+      ctx.connection.connectionId,
+      tool,
+      ctx.now(),
+    );
+export const decodeAllowedAccount = async (row: unknown, tokenKey: TokenKey) => {
+  const credential = decodeCredential(row);
+  if (!credential) throw new Error("Invalid allowed credential");
+  const view = decodeView(row as ViewRow, `v1.${await keyId(tokenKey)}.`);
+  return { credential, status: view.status };
+};
 interface IdentityRow {
   id: AccountId;
   sub: string;

@@ -8,6 +8,7 @@ export async function hydrateAccounts(input: {
   url: string;
   html: string;
   headers: Record<string, string>;
+  connection?: boolean;
 }) {
   const bundle = await build({
     configFile: false,
@@ -71,6 +72,25 @@ export async function hydrateAccounts(input: {
       await route.abort();
     });
     await page.goto(input.url);
+    if (input.connection) {
+      const controls = page.getByRole("radiogroup");
+      const before = await controls.evaluateAll((els) =>
+        els.map((el) => ({
+          name: el.getAttribute("aria-label"),
+          selected: el.querySelector('[aria-checked="true"]')?.getAttribute("aria-label"),
+        })),
+      );
+      let collapsed = false;
+      try {
+        await page.getByRole("button", { name: /Personal.*1 tool/ }).click();
+        collapsed = !(await page
+          .getByRole("radiogroup", { name: "List labels on Personal for Claude", exact: true })
+          .isVisible());
+      } catch (error) {
+        errors.push(String(error));
+      }
+      return { clientLoads, controls: before, collapsed, errors };
+    }
     // An interactive dialog proves hydration finished; merely reading SSR text would pass without JS.
     try {
       await page
