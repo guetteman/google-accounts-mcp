@@ -51,7 +51,19 @@ export default defineConfig({
               tailwindcss(),
               cloudflareTest({
                 wrangler: { configPath: "./wrangler.jsonc" },
-                miniflare: { bindings: { ...testConfig, TEST_MIGRATIONS: testMigrations } },
+                miniflare: {
+                  bindings: { ...testConfig, TEST_MIGRATIONS: testMigrations },
+                  serviceBindings: {
+                    TEST_BROWSER: async (request) => {
+                      const { hydrateAccounts } = await import("./test/browser/hydration");
+                      return Response.json(
+                        await hydrateAccounts(
+                          (await request.json()) as Parameters<typeof hydrateAccounts>[0],
+                        ),
+                      );
+                    },
+                  },
+                },
               }),
             ],
             resolve: { alias },
