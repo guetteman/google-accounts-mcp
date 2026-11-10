@@ -72,6 +72,12 @@ it.each([390, 1280])(
         }),
       );
       await page.goto(origin);
+      await expect
+        .poll(
+          () => page.getByRole("button", { name: "Actions for Work laptop", exact: true }).count(),
+          { timeout: 1500 },
+        )
+        .toBe(1);
       const menu = page
         .getByRole("button", { name: "Actions for Work laptop", exact: true })
         .filter({ visible: true });
@@ -88,6 +94,9 @@ it.each([390, 1280])(
         name: "Personal laptop",
       });
       await page.getByRole("status").waitFor();
+      expect(await page.getByRole("status").innerText()).toBe(
+        "Work laptop already ended. Nothing changed.",
+      );
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
       await menu.click();
       await page.getByRole("menuitem", { name: "Revoke", exact: true }).click();
@@ -112,6 +121,13 @@ it.each(["consent", "rename"])(
     try {
       await page.goto(`${origin}${kind === "consent" ? "/consent" : "/"}`);
       if (kind === "rename") {
+        await expect
+          .poll(
+            () =>
+              page.getByRole("button", { name: "Actions for Work laptop", exact: true }).count(),
+            { timeout: 1500 },
+          )
+          .toBe(1);
         await page
           .getByRole("button", { name: "Actions for Work laptop", exact: true })
           .filter({ visible: true })
@@ -133,3 +149,33 @@ it.each(["consent", "rename"])(
     }
   },
 );
+
+it("renames the connection page after confirmation and removes all controls after revoke", async () => {
+  const page = await browser.newPage();
+  page.setDefaultTimeout(1500);
+  try {
+    await page.route("**/connections/*", (route) =>
+      route.fulfill({ contentType: "application/json", body: JSON.stringify({ outcome: "ok" }) }),
+    );
+    await page.goto(origin);
+    await expect
+      .poll(
+        () => page.getByRole("button", { name: "Actions for Work laptop", exact: true }).count(),
+        { timeout: 1500 },
+      )
+      .toBe(1);
+    await page.getByRole("button", { name: "Actions for Work laptop", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+    await page.getByRole("textbox", { name: "Name", exact: true }).fill("Renamed agent");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("heading", { name: "Renamed agent", exact: true }).waitFor();
+    expect(await page.getByRole("radiogroup").count()).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Actions for Renamed agent", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Revoke", exact: true }).click();
+    await page.getByRole("button", { name: "Revoke", exact: true }).click();
+    await expect.poll(() => page.getByRole("radiogroup").count()).toBe(0);
+    expect(await page.getByText(/ended connection cannot be given access/i).count()).toBe(1);
+  } finally {
+    await page.close();
+  }
+});

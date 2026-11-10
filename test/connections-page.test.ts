@@ -61,12 +61,12 @@ it("lists every current-generation connection with active newest first then most
   expect(listed[1]).toContain("Shared name Claude Code Active");
   expect(listed[2]).toContain("Ended recently");
   expect(listed[3]).toContain("Ended earlier Claude Revoked");
-  for (const title of ["Name", "App", "Status", "Last used", "Created"])
+  for (const title of ["Name", "App", "Status", "Last used", "Can see"])
     expect(textOf(html)).toContain(title);
   for (const row of listed) expect(row).toContain("Never");
 });
 
-it("formats dates in UTC and leaves ended connections without action menus", async () => {
+it("formats last use in UTC and links connections without action menus", async () => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   await pinOwner();
   await seedConnection({
@@ -89,8 +89,9 @@ it("formats dates in UTC and leaves ended connections without action menus", asy
     textOf(cell[1]!),
   );
   expect(cells[3]).toBe("Nov 6, 2025");
-  expect(cells[4]).toBe("Nov 6");
-  expect(active).toMatch(/<button\b/);
+  expect(cells[4]).toMatch(/no access yet/i);
+  expect(active).toMatch(/href="\/connections\/[^"]+"/);
+  expect(active).not.toMatch(/<button\b|role="menu"/);
   for (const [name, status] of [
     ["Revoked laptop", "Revoked Sep 14"],
     ["Expired laptop", "Expired Nov 6"],

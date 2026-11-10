@@ -3,7 +3,7 @@ import { seedAccount } from "./support/accounts";
 import { clients, McpClient, rpcResult } from "./support/oauth";
 
 it.each(clients)(
-  "offers only the read-only list_accounts tool to $label without promising tool list notifications",
+  "offers exactly the two read-only account tools to $label without promising tool list notifications",
   async (client) => {
     const mcp = await new McpClient(client).connect();
     const listed = await rpcResult(await mcp.call("tools/list"));
@@ -13,6 +13,17 @@ it.each(clients)(
         description:
           "Lists the Google accounts this connection can use, as a JSON array. An empty array means the owner has not given this connection access to any account.",
         inputSchema: { type: "object", properties: {} },
+        annotations: { readOnlyHint: true },
+      },
+      {
+        name: "list_labels",
+        description:
+          "Lists the Gmail labels of one Google account. `account` is the address of an account that list_accounts returns.",
+        inputSchema: expect.objectContaining({
+          type: "object",
+          properties: { account: { type: "string" } },
+          required: ["account"],
+        }),
         annotations: { readOnlyHint: true },
       },
     ]);
@@ -37,7 +48,7 @@ it.each([
     label: "with an account argument",
     params: { name: "list_accounts", arguments: { account: "alex.personal@example.com" } },
   },
-])("reveals no connected account names or addresses $label", async ({ params }) => {
+])("reveals no connected account without a permission $label", async ({ params }) => {
   const mcp = await new McpClient().connect();
   await seedAccount({ name: "Personal", email: "alex.personal@example.com" });
   await seedAccount({ name: "Northwind", email: "alex@northwind.example" });

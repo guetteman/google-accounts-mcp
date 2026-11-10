@@ -7,6 +7,27 @@ export const SCOPES = ["gmail.readonly", "gmail.compose", "gmail.send", "gmail.m
   .map((s) => `https://www.googleapis.com/auth/${s}`)
   .concat("https://mail.google.com/");
 export const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
+export const LABELS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/labels";
+// https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.labels/list
+// Include documented visibility fields, which the tool must omit.
+export const LABELS_RESPONSE = {
+  labels: [
+    {
+      id: "INBOX",
+      name: "INBOX",
+      type: "system",
+      messageListVisibility: "show",
+      labelListVisibility: "labelShow",
+    },
+    {
+      id: "Label_12",
+      name: "Receipts",
+      type: "user",
+      messageListVisibility: "hide",
+      labelListVisibility: "labelShowIfUnread",
+    },
+  ],
+};
 export const issuedTokens = new Set<string>();
 export const token = () => {
   const value = `${MARKER}${crypto.randomUUID()}`;
@@ -42,6 +63,13 @@ export function deferred() {
   return { promise, resolve };
 }
 export const google = {
+  labelRequests: [] as Array<{
+    url: string;
+    method: string;
+    authorization: string | null;
+    redirect: RequestRedirect;
+  }>,
+  labelAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
   codes: new Map<string, Code>(),
   exchangeAnswer: "ok" as Answer,
   refreshAnswers: [] as Answer[],
@@ -59,6 +87,8 @@ export const google = {
   reset() {
     this.release();
     this.codes.clear();
+    this.labelRequests = [];
+    this.labelAnswers = [];
     this.exchangeAnswer = "ok";
     this.revokeAnswer = "ok";
     this.refreshAnswers = [];
@@ -184,6 +214,15 @@ export const google = {
           (await this.answer(this.revokeAnswer, request.signal)) ??
           new HttpResponse(null, { status: 200 })
         );
+      }),
+      http.get(LABELS_URL, async ({ request }) => {
+        this.labelRequests.push({
+          url: request.url,
+          method: request.method,
+          authorization: request.headers.get("Authorization"),
+          redirect: request.redirect,
+        });
+        return this.labelAnswers.shift()?.(request) ?? HttpResponse.json(LABELS_RESPONSE);
       }),
       http.get(GMAIL, ({ request }) => {
         this.events.push("gmail");
