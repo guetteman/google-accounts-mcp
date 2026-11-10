@@ -1,3 +1,4 @@
+import { GMAIL_SCOPES } from "../google/client";
 import { acceptAuthorize } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
 import type { Page } from "./page";
@@ -86,10 +87,12 @@ export const previews: Readonly<Record<string, Page>> = {
     ],
     alert: { kind: "reconnected", address: "alex.personal@example.com" },
     _tag: "Accounts",
+    requiredGmailScopes: GMAIL_SCOPES.length,
     frame: { host, ownerEmail: "owner@example.com", current: "accounts" },
   },
   "accounts-empty": {
     _tag: "Accounts",
+    requiredGmailScopes: GMAIL_SCOPES.length,
     frame: { host, ownerEmail: "owner@example.com", current: "accounts" },
     accounts: [],
     alert: null,

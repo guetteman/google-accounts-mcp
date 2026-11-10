@@ -215,7 +215,7 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
     }
   });
 
-  it("deletes connections with exactly this reset's guard", () => {
+  it("deletes connections and accounts with exactly this reset's guard", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
     expect(RESET_CLEANUP.map((cleanup) => cleanup({ guard, now: NOW }))).toEqual([

@@ -34,7 +34,7 @@ it("preserves ciphertext when key import fails and recovers after the local fail
   const { vi } = await import("vite-plus/test");
   const context = "11111111-1111-4111-8111-111111111111:refresh";
   const uniqueKey = crypto.getRandomValues(new Uint8Array(32)) as import("../src/config").TokenKey;
-  const sealed = await fixtureSeal(context, "synthetic secret", uniqueKey);
+  const sealed = (await fixtureSeal(context, "synthetic secret", uniqueKey)) as Sealed;
   const failure = vi
     .spyOn(crypto.subtle, "importKey")
     .mockRejectedValue(new Error("local key service failed"));

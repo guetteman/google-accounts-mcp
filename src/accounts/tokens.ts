@@ -28,13 +28,24 @@ interface Access {
 }
 
 /**
- * Read credentialStatement in the caller's authorization batch immediately before this call.
- * A fresh token costs no D1 read: a stale snapshot is used as supplied. Decode failures are
- * Unavailable. NeedsReconnect and BlockedByAdmin describe Google access; GoogleUnavailable
- * covers token endpoint failures (including a refused client); AccountGone means a reload
- * found no live row. Unavailable is a retryable local failure, including an exhausted reload
- * budget. RequestLost means fetch got no response and may have taken effect: do not blindly
- * resend. A throwing request builder is a caller defect, not RequestLost.
+ * #11 must check the pinned owner, connection permissions and account permissions, and read
+ * credentialStatement in one D1 batch immediately before calling. Load the owner's generation
+ * and email to bind that statement; compare them with the owner row returned by the same batch.
+ * If they changed, repeat the permission checks rather than using the credential. Pass that
+ * verified owner in deps. A fresh token causes no D1 read here: stale snapshots are used as is.
+ *
+ * build may run twice. Each call must create a fresh Request and body, with the caller's
+ * cancellation signal. This function sets no deadline for the service request. After a refresh,
+ * even a 401 is returned as the final Response; the caller must handle its status.
+ *
+ * NeedsReconnect means Google revoked access or stored ciphertext is damaged.
+ * BlockedByAdmin means Google blocked the app. GoogleUnavailable covers token endpoint failures,
+ * including refused OAuth clients. AccountGone means a reload found no live row. Unavailable
+ * covers local failures: D1/crypto service failures or a second lost write race may be retried;
+ * wrong keys, unsupported token formats and unreadable rows need configuration or data repair.
+ * Do not retry Unavailable automatically without knowing its cause. RequestLost means fetch
+ * rejected and the request may have taken effect; do not blindly resend. A throwing build is
+ * a caller defect, not RequestLost.
  */
 export const withGoogle = (
   deps: Deps,
@@ -75,7 +86,7 @@ export const withGoogle = (
       if (snapshot.health === "needs_reconnect")
         return yield* Effect.fail(new NeedsReconnect({ email: snapshot.email }));
       if (snapshot.health === "blocked_by_admin") {
-        if (snapshot.blockedUntil === null || snapshot.blockedUntil > deps.now())
+        if (snapshot.blockedUntil! > deps.now())
           return yield* Effect.fail(new BlockedByAdmin({ email: snapshot.email }));
       } else if (
         !force &&

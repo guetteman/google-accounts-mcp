@@ -14,6 +14,7 @@ export interface Frame {
 export type FramePage =
   | {
       readonly _tag: "Accounts";
+      readonly requiredGmailScopes: number;
       readonly frame: Frame;
       readonly accounts: ReadonlyArray<AccountView>;
       readonly alert: AccountsAlert | null;

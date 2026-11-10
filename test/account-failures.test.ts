@@ -121,7 +121,7 @@ it.each([
   { GOOGLE_CLIENT_SECRET: " fake" },
   { TOKEN_KEY: "a".repeat(32) },
   { GOOGLE_CLIENT_ID: "test-client" },
-])("rejects malformed Google settings without echoing their value: %j", async (overrides) => {
+])("names malformed Google settings on the setup page: %j", async (overrides) => {
   const b = await ownerBrowser();
   const r = await b.get("/accounts", { env: testEnv(overrides) });
   expect(r.status).toBe(503);

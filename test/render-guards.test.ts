@@ -11,7 +11,7 @@ describe("hydration props", () => {
       const frame = { host, current, ownerEmail: OWNER_EMAIL };
       const page: import("../src/pages/page").Page =
         current === "accounts"
-          ? { _tag: "Accounts", frame, accounts: [], alert: null }
+          ? { _tag: "Accounts", frame, accounts: [], alert: null, requiredGmailScopes: 5 }
           : { _tag: "Connections", frame, connections: [], mcpUrl: `https://${host}/mcp` };
       const html = await renderPage(page).text();
       expect(html).not.toContain("<script>alert(1)</script>");

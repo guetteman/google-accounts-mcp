@@ -5,6 +5,7 @@ import type { AccountsAlert } from "../../src/accounts/flow";
 import type { Frame } from "../../src/pages/page";
 import "../../src/styles.css";
 const props = {
+  requiredGmailScopes: Number(new URLSearchParams(location.search).get("required") ?? 5),
   frame: {
     host: "accounts-mcp.example.com",
     ownerEmail: "owner@example.com",
@@ -38,6 +39,13 @@ const props = {
       email: "research@example.com",
       workspace: false,
       status: { kind: "missing_access" as const, granted: 2 },
+    },
+    {
+      id: "55555555-5555-4555-8555-555555555555" as AccountView["id"],
+      name: "Recovery",
+      email: "recovery@example.com",
+      workspace: false,
+      status: { kind: "unreadable" as const },
     },
   ],
   alert: (() => {

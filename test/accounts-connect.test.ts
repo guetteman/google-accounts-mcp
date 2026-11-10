@@ -127,7 +127,7 @@ it.each(["anonymous", "other owner", "cross-site"])(
   },
 );
 it.each(["missing", "other state", "expired", "replayed", "cancelled", "refused code"])(
-  "rejects a %s callback and clears its own flow cookie",
+  "rejects a %s callback and clears the cookie named by its state",
   async (kind) => {
     const b = await ownerBrowser();
     const { url } = await start(b);

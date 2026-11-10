@@ -1,3 +1,4 @@
+import { Unavailable } from "../db";
 import { readForm } from "../http/form";
 import { Effect, Result } from "effect";
 import { Hono } from "hono";
@@ -5,7 +6,7 @@ import type { PageEnv } from "../http/context";
 import { ownerOnly } from "../owner/routes";
 import { renderPage } from "../pages/render";
 import { parseName } from "../names";
-import { authorizationUrl, exchangeCode, revoke } from "../google/client";
+import { authorizationUrl, exchangeCode, revoke, GMAIL_SCOPES } from "../google/client";
 import { open, seal } from "../seal";
 import { newAccountId, parseAccountId } from "./model";
 import {
@@ -37,6 +38,7 @@ accountRoutes.get("/accounts", ownerOnly, async (c) => {
   return renderPage(
     {
       _tag: "Accounts",
+      requiredGmailScopes: GMAIL_SCOPES.length,
       frame: {
         host: new URL(c.req.url).host,
         ownerEmail: c.get("owner").email,
@@ -139,7 +141,7 @@ accountRoutes.get("/google/callback", ownerOnly, async (c) => {
             refreshToken: await seal(config.tokenKey, `${id}:refresh`, grant.refreshToken),
             accessToken: await seal(config.tokenKey, `${id}:access`, grant.accessToken),
           }),
-          catch: () => ({ _tag: "SealFailed" as const }),
+          catch: () => new Unavailable(),
         });
         const sealed = { ...grant, ...tokens, id };
         if (flow.purpose === "add") return yield* addAccount(c.env.DB, owner, sealed, Date.now());

@@ -1,7 +1,7 @@
 import { Data, Effect, Schema } from "effect";
 import { decodeJwt } from "jose";
 import type { Config } from "../config";
-import { normalizeEmail, type OwnerEmail } from "../owner/owner";
+import { normalizeEmail } from "../owner/owner";
 
 export const GMAIL_SCOPES = ["gmail.readonly", "gmail.compose", "gmail.send", "gmail.modify"]
   .map((scope) => `https://www.googleapis.com/auth/${scope}`)
@@ -11,9 +11,10 @@ export const parseGrantedScopes = (scope: unknown): GmailScopes =>
   GMAIL_SCOPES.filter(
     (s) => typeof scope === "string" && scope.split(/\s+/).includes(s),
   ) as unknown as GmailScopes;
+export type GoogleAccountEmail = string & { readonly __googleAccountEmail: unique symbol };
 export interface GoogleIdentity {
   readonly sub: string;
-  readonly email: OwnerEmail;
+  readonly email: GoogleAccountEmail;
   readonly hd: string | null;
 }
 export interface Grant {
@@ -113,11 +114,7 @@ export const exchangeCode = (
       redirect_uri: `${p.origin}/google/callback`,
     });
     if (status !== 200)
-      return yield* Effect.fail(
-        status === 400 && body.error !== "invalid_client"
-          ? new CodeRefused()
-          : new GoogleUnavailable(),
-      );
+      return yield* Effect.fail(status === 400 ? new CodeRefused() : new GoogleUnavailable());
     let identity: GoogleIdentity | null = null;
     try {
       const claims = decodeJwt(String(body.id_token));
@@ -134,7 +131,7 @@ export const exchangeCode = (
       )
         identity = {
           sub: claims.sub,
-          email,
+          email: String(email) as GoogleAccountEmail,
           hd: typeof claims.hd === "string" && claims.hd.length > 0 ? claims.hd : null,
         };
     } catch {

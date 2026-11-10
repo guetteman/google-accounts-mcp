@@ -6,6 +6,7 @@ import { chromium, type Browser } from "playwright-core";
 import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
+let clientBundle: string;
 let browser: Browser;
 let origin: string;
 let server: ReturnType<typeof createServer>;
@@ -29,6 +30,10 @@ beforeAll(async () => {
   const outputs = (Array.isArray(bundle) ? bundle : [bundle]).flatMap((result) =>
     "output" in result ? result.output : [],
   );
+  clientBundle = outputs
+    .filter((asset) => asset.type === "chunk")
+    .map((asset) => asset.code)
+    .join("\n");
   const assets = new Map(
     outputs.map((asset) => [
       `/${asset.fileName}`,
@@ -374,3 +379,98 @@ it("removes the account without disconnecting Google when the box stays unchecke
     await page.close();
   }
 });
+
+it("keeps Google and owner server code out of the Accounts browser bundle", () => {
+  expect(clientBundle).not.toContain("ClientRefused");
+  expect(clientBundle).not.toContain("NotOwner");
+});
+
+it("uses the server's required Gmail permission count", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${origin}/?required=7`);
+    const row = page.locator("tbody tr").filter({ hasText: "Research" });
+    await row.waitFor();
+    expect(await row.innerText()).toContain("Google granted 2 of the 7 permissions Gmail needs.");
+  } finally {
+    await page.close();
+  }
+});
+
+it.each([390, 1280])(
+  "reconnects the account chosen in the menu and restores controls after refusal at %s px",
+  async (width) => {
+    const page = await browser.newPage({ viewport: { width, height: 1000 } });
+    try {
+      await page.route("**/accounts/**", (route) =>
+        route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({ outcome: "not_found" }),
+        }),
+      );
+      for (const [name, id] of [
+        ["Personal", "11111111-1111-4111-8111-111111111111"],
+        ["Work", "33333333-3333-4333-8333-333333333333"],
+      ]) {
+        await page.goto(origin);
+        const menu = page
+          .getByRole("button", { name: `Actions for ${name}`, exact: true })
+          .filter({ visible: true });
+        await menu.click();
+        const sent = page.waitForRequest((request) => request.method() === "POST");
+        await page.getByRole("menuitem", { name: "Reconnect", exact: true }).click();
+        expect(new URL((await sent).url()).pathname).toBe(`/accounts/${id}/reconnect`);
+        await page.getByRole("status").waitFor();
+        expect(await menu.isEnabled()).toBe(true);
+        expect(
+          await page.getByRole("button", { name: "Connect a Google account" }).isEnabled(),
+        ).toBe(true);
+      }
+    } finally {
+      await page.close();
+    }
+  },
+);
+
+it("shows a warning in the account dialog after a failed removal", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.route("**/accounts/**", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ outcome: "not_found" }),
+      }),
+    );
+    await page.goto(origin);
+    await page
+      .getByRole("button", { name: "Actions for Personal", exact: true })
+      .filter({ visible: true })
+      .click();
+    await page.getByRole("menuitem", { name: "Remove", exact: true }).click();
+    await page.getByRole("button", { name: "Remove", exact: true }).click();
+    const alert = page.getByRole("alertdialog").getByRole("status");
+    await alert.waitFor();
+    expect(await alert.getAttribute("class")).toContain("bg-warning");
+  } finally {
+    await page.close();
+  }
+});
+
+it.each([390, 1280])(
+  "explains unreadable stored access without suggesting reconnect as a fix at %s px",
+  async (width) => {
+    const page = await browser.newPage({ viewport: { width, height: 1200 } });
+    try {
+      await page.goto(origin);
+      const row = page
+        .locator(width < 768 ? '[data-slot="item"]' : "tbody tr")
+        .filter({ hasText: "recovery@example.com" });
+      await row.waitFor();
+      expect(await row.innerText()).toContain("Can't read its stored access. Check TOKEN_KEY.");
+      expect(await row.getByRole("button", { name: "Reconnect", exact: true }).count()).toBe(0);
+      expect(await row.locator('[class*="text-red-"]').count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  },
+);

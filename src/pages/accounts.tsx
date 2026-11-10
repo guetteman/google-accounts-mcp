@@ -1,4 +1,3 @@
-import { GMAIL_SCOPES } from "../google/client";
 import { useEffect, useState } from "react";
 import { EllipsisIcon, MailIcon } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -109,7 +108,13 @@ function alertMessage(alert: AccountsAlert | null): string | null {
 }
 const fixable = (account: AccountView) =>
   account.status.kind === "needs_reconnect" || account.status.kind === "missing_access";
-function Status({ account }: { account: AccountView }) {
+function Status({
+  account,
+  requiredGmailScopes,
+}: {
+  account: AccountView;
+  requiredGmailScopes: number;
+}) {
   const status = account.status;
   if (status.kind === "unreadable")
     return (
@@ -127,7 +132,7 @@ function Status({ account }: { account: AccountView }) {
       ? "Google stopped accepting this server's access. Reconnect to restore it."
       : status.kind === "blocked_by_admin"
         ? "The organization's admin blocked this app. The server checks again at most every 10 minutes, when an agent uses this account."
-        : `Google granted ${status.granted} of the ${GMAIL_SCOPES.length} permissions Gmail needs. Reconnect and check every box.`;
+        : `Google granted ${status.granted} of the ${requiredGmailScopes} permissions Gmail needs. Reconnect and check every box.`;
   return (
     <span className="text-muted-foreground">
       <span className={fixable(account) ? "text-red-700 dark:text-red-300" : "text-foreground"}>
@@ -149,10 +154,12 @@ export function AccountsPage({
   frame,
   accounts,
   alert,
+  requiredGmailScopes,
 }: {
   readonly frame: Frame;
   readonly accounts: ReadonlyArray<AccountView>;
   readonly alert: AccountsAlert | null;
+  readonly requiredGmailScopes: number;
 }) {
   const [message, setMessage] = useState(
     () =>
@@ -285,7 +292,7 @@ export function AccountsPage({
                         <Address account={account} />
                       </TableCell>
                       <TableCell className="max-w-64 py-4 align-top whitespace-normal">
-                        <Status account={account} />
+                        <Status account={account} requiredGmailScopes={requiredGmailScopes} />
                       </TableCell>
                       <TableCell className="py-4 pr-0 align-top">
                         <div className="flex items-center justify-end gap-2">
@@ -316,7 +323,7 @@ export function AccountsPage({
                     {account.status.kind !== "ready" && (
                       <ItemContent className="basis-full gap-3">
                         <ItemDescription className="line-clamp-none">
-                          <Status account={account} />
+                          <Status account={account} requiredGmailScopes={requiredGmailScopes} />
                         </ItemDescription>
                         {fixable(account) && reconnect(account, true)}
                       </ItemContent>

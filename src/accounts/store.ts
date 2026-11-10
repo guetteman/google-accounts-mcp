@@ -176,9 +176,9 @@ export const reconnectAccount = (
       return { _tag: "WrongAccount", signedIn: grant.identity.email, target: row.email } as const;
     if (!row || row.state !== "live" || row.version !== target.version)
       return { _tag: "Changed", address: row?.email ?? grant.identity.email } as const;
-    const clash = results[2]!.results[0];
-    if (clash) return { _tag: "AddressTaken", address: clash.email, name: clash.name } as const;
-    return { _tag: "Changed", address: row.email } as const;
+    // The same batch found the unchanged live target; only an address conflict can prevent this update.
+    const clash = results[2]!.results[0]!;
+    return { _tag: "AddressTaken", address: clash.email, name: clash.name } as const;
   });
 export const renameAccount = (db: D1Database, owner: Owner, id: AccountId, name: Name) =>
   Effect.tryPromise({
