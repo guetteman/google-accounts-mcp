@@ -89,12 +89,12 @@ describe("ninety days without refreshing", () => {
 });
 
 // This is the only observation seam: calls still enter the Worker's default fetch. Spy on the
-// actual factory, retaining its implementation, so #11's input is observable without a fake tool.
+// actual factory, retaining its implementation, so #15's input is observable without a fake tool.
 const mcpModules = import.meta.glob<{ createMcpServer: (...args: unknown[]) => unknown }>(
   "../src/mcp/server.ts",
 );
 it.each(clients)(
-  "initializes with no tools and passes the stored $app identity to the MCP factory",
+  "initializes with list_accounts and passes the stored $app identity to the MCP factory",
   async (client) => {
     const mcp = await new McpClient(client).connect();
     const row = await onlyConnection();
@@ -117,7 +117,7 @@ it.each(clients)(
         connectionId: crypto.randomUUID(),
       }),
     );
-    expect(listed.tools).toEqual([]);
+    expect(listed.tools).toEqual([expect.objectContaining({ name: "list_accounts" })]);
     expect(spy).toHaveBeenCalledTimes(2);
     for (const args of spy.mock.calls)
       expect(args[0]).toEqual({ connectionId: row.id, app: client.app });
