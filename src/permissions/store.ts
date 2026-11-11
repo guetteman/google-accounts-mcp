@@ -1,6 +1,6 @@
 import { endApprovals, changeGuard } from "../approvals/store";
 import { Effect } from "effect";
-import { WriteUncertain } from "../db";
+import { first, Unavailable, WriteUncertain } from "../db";
 import type { Owner } from "../owner/owner";
 import type { AccountId } from "../accounts/model";
 import type { ConnectionId } from "../connections/model";
@@ -102,3 +102,31 @@ export const decodePermissions = (
       row.ask === 1 ? ("ask" as const) : ("allow" as const),
     ]),
   );
+
+/** The tool names granted to a connection, as stored. The caller keeps the ones the server has. */
+export const readListedTools = (
+  db: D1Database,
+  owner: Owner,
+  connection: ConnectionId,
+  now: number,
+): Effect.Effect<{ active: boolean; tools: ReadonlyArray<string> }, Unavailable> =>
+  Effect.gen(function* () {
+    const row = yield* first<{ active: number; tools: string }>(
+      db,
+      `SELECT EXISTS (SELECT 1 FROM connections c WHERE c.id = ?1 AND c.generation = ?2 AND ${activeWhere({ now: "?4", ownerEmail: "?3" })}) AS active,
+      (SELECT json_group_array(tool) FROM (SELECT DISTINCT p.tool FROM accounts a
+        JOIN permissions p ON p.account_id = a.id AND p.connection_id = ?1
+        WHERE a.generation = ?2 AND ${permittedWhere({ connection: "?1", tool: "p.tool", now: "?4", ownerEmail: "?3" })} ORDER BY p.tool)) AS tools`,
+      [connection, owner.generation, owner.email, now],
+    );
+    return yield* Effect.try({
+      try: () => {
+        if (!row) throw new Error("Missing tool list");
+        const tools: unknown = JSON.parse(row.tools);
+        if (!Array.isArray(tools) || !tools.every((name) => typeof name === "string"))
+          throw new Error("Invalid tool list");
+        return { active: row.active === 1, tools };
+      },
+      catch: () => new Unavailable(),
+    });
+  });

@@ -244,6 +244,51 @@ export class McpClient {
     );
   }
 
+  async listen(workerEnv: Env = testEnv()) {
+    const response = await this.call(
+      "subscriptions/listen",
+      workerEnv,
+      {
+        notifications: { toolsListChanged: true },
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+      {
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "subscriptions/listen",
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    return {
+      async read(): Promise<ReadableStreamReadResult<unknown>> {
+        for (;;) {
+          const boundary = buffer.indexOf("\n\n");
+          if (boundary !== -1) {
+            const frame = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            const data = frame
+              .split("\n")
+              .filter((line) => line.startsWith("data: "))
+              .map((line) => line.slice(6))
+              .join("\n");
+            if (data) return { done: false, value: JSON.parse(data) as unknown };
+          } else {
+            const chunk = await reader.read();
+            if (chunk.done) return { done: true, value: undefined };
+            buffer += decoder.decode(chunk.value, { stream: true });
+          }
+        }
+      },
+      cancel: () => reader.cancel(),
+    };
+  }
+
   call(
     method = "tools/list",
     workerEnv: Env = testEnv(),

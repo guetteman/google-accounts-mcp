@@ -5,6 +5,7 @@ import type { Unavailable } from "../db";
 import { accountMessage } from "../accounts/model";
 import { listVisibleAccounts } from "../accounts/store";
 import { listLabels } from "../google/gmail";
+import { readListedTools } from "../permissions/store";
 import type { CallContext } from "./call";
 import type { ToolFailure } from "./failures";
 export class ViewUnavailable extends Data.TaggedError("ViewUnavailable") {}
@@ -104,3 +105,15 @@ export const parseAccountTool = (raw: unknown): AccountTool | null => {
   const tool = TOOLS.find((t) => t.kind === "account" && t.name === raw);
   return tool?.kind === "account" ? tool.name : null;
 };
+
+export type ListedTools = {
+  readonly active: boolean;
+  readonly tools: ReadonlyArray<Tool>;
+};
+export const listedTools = (ctx: CallContext): Effect.Effect<ListedTools, Unavailable> =>
+  readListedTools(ctx.db, ctx.owner, ctx.connection.connectionId, ctx.now()).pipe(
+    Effect.map(({ active, tools }) => ({
+      active,
+      tools: TOOLS.filter((tool) => tool.kind === "plain" || tools.includes(tool.name)),
+    })),
+  );

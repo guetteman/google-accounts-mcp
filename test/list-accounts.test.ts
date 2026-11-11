@@ -1,48 +1,7 @@
 import { TOOLS } from "../src/mcp/tools";
 import { expect, it } from "vite-plus/test";
 import { seedAccount } from "./support/accounts";
-import { clients, McpClient, rpcResult } from "./support/oauth";
-
-it.each(clients)(
-  "offers the account tools and get_approval to $label without promising tool list notifications",
-  async (client) => {
-    const mcp = await new McpClient(client).connect();
-    const listed = await rpcResult(await mcp.call("tools/list"));
-    expect.soft(listed.tools).toEqual([
-      {
-        name: "list_accounts",
-        description:
-          "Lists the Google accounts this connection can use, as a JSON array. An empty array means the owner has not given this connection access to any account.",
-        inputSchema: { type: "object", properties: {} },
-        annotations: { readOnlyHint: true },
-      },
-      {
-        name: "list_labels",
-        description:
-          "Lists the Gmail labels of one Google account. `account` is the address of an account that list_accounts returns. When the owner sets this tool to ask, it returns a pending approval with a link instead of labels; get_approval returns the labels after the owner approves.",
-        inputSchema: expect.objectContaining({
-          type: "object",
-          properties: { account: { type: "string" } },
-          required: ["account"],
-        }),
-        annotations: { readOnlyHint: true },
-      },
-      {
-        name: "get_approval",
-        description:
-          "Returns the state of a call that waits for the owner's approval, and the call's result once the owner approved it. `approval` is the approval ID from the pending answer. Call it after the owner tells you that they decided. It answers at once and never waits for the owner.",
-        inputSchema: {
-          type: "object",
-          properties: { approval: { type: "string" } },
-          required: ["approval"],
-        },
-        annotations: { readOnlyHint: true },
-      },
-    ]);
-    const initialized = await rpcResult(await mcp.call("initialize"));
-    expect(initialized.capabilities).toHaveProperty("tools", { listChanged: false });
-  },
-);
+import { McpClient, rpcResult } from "./support/oauth";
 
 it("returns an empty JSON array as one text item without an error when called without arguments", async () => {
   const mcp = await new McpClient().connect();

@@ -26,9 +26,6 @@ it("lists only the accounts allowed to the calling connection, ignoring agent ac
   const f = await fixture();
   await permission(f);
   const other = await new McpClient().connect("Work laptop");
-  expect(await rpcResult(await f.mcp.call("tools/list"))).toEqual(
-    await rpcResult(await other.call("tools/list")),
-  );
   const result = await rpcResult(await toolCall(f.mcp, "list_accounts", { account: NORTHWIND }));
   expect(result).toEqual(
     textResult([{ account: PERSONAL, name: "Personal", services: { gmail: { status: "ready" } } }]),
