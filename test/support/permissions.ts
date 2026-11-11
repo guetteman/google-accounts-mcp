@@ -59,7 +59,7 @@ export async function permission(
   const response = await f.mcp.browser.post(`/connections/${f.connection.id}/permissions`, {
     account: account.id,
     tool: "list_labels",
-    allowed: String(allowed),
+    setting: allowed ? "allow" : "deny",
   });
   expect(response.status, "the owner can set a permission through the Worker").toBe(200);
   expect(await response.json()).toEqual({ outcome: "ok" });

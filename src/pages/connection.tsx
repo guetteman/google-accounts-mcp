@@ -1,7 +1,9 @@
+import type { Setting } from "../permissions/store";
 import { useRef, useState } from "react";
 import {
   BanIcon,
   CircleCheckIcon,
+  CircleQuestionMarkIcon,
   ChevronDownIcon,
   EllipsisIcon,
   MailIcon,
@@ -73,11 +75,19 @@ import { outcomeMessage, permissionMessage } from "./connection-actions";
 
 type Props = Omit<Extract<FramePage, { _tag: "Connection" }>, "_tag">;
 type Action = "name" | "revoke";
-type ControlState = { value: boolean; phase: "confirmed" | "saving" } | { phase: "unconfirmed" };
+type ControlState = { value: Setting; phase: "confirmed" | "saving" } | { phase: "unconfirmed" };
 const values = [
-  { value: "true", label: "Allowed", icon: CircleCheckIcon },
-  { value: "false", label: "Not allowed", icon: BanIcon },
+  { value: "deny", label: "Not allowed", icon: BanIcon },
+  { value: "ask", label: "Ask first", icon: CircleQuestionMarkIcon },
+  { value: "allow", label: "Allowed", icon: CircleCheckIcon },
 ] as const;
+const labelOf = (setting: Setting) => values.find((value) => value.value === setting)!.label;
+const selected: Record<Setting, string> = {
+  deny: "aria-checked:bg-background aria-checked:text-foreground aria-checked:shadow-xs aria-checked:hover:bg-background",
+  ask: "aria-checked:bg-background aria-checked:text-foreground aria-checked:shadow-xs aria-checked:ring-1 aria-checked:ring-foreground aria-checked:ring-inset aria-checked:hover:bg-background",
+  allow:
+    "aria-checked:bg-primary aria-checked:text-primary-foreground aria-checked:hover:bg-primary aria-checked:hover:text-primary-foreground",
+};
 
 export function ConnectionPage(props: Props) {
   const [connection, setConnection] = useState(props.connection);
@@ -87,7 +97,7 @@ export function ConnectionPage(props: Props) {
       props.accounts.flatMap((a) =>
         props.tools.map((t) => {
           const key = `${a.id}:${t.name}` as const;
-          return [key, { phase: "confirmed", value: props.allowed.includes(key) }];
+          return [key, { phase: "confirmed", value: props.settings[key] ?? "deny" }];
         }),
       ),
     ),
@@ -100,7 +110,7 @@ export function ConnectionPage(props: Props) {
   const visible = props.accounts.filter((a) =>
     props.tools.some((t) => {
       const state = controls[`${a.id}:${t.name}`];
-      return state && state.phase !== "unconfirmed" && state.value;
+      return state && state.phase !== "unconfirmed" && state.value !== "deny";
     }),
   );
   const uncertain = Object.values(controls).some((s) => s.phase === "unconfirmed");
@@ -124,7 +134,7 @@ export function ConnectionPage(props: Props) {
   const save = async (
     account: Props["accounts"][number],
     tool: Props["tools"][number],
-    wanted: boolean,
+    wanted: Setting,
   ) => {
     const key = `${account.id}:${tool.name}`;
     const state = controls[key];
@@ -136,7 +146,7 @@ export function ConnectionPage(props: Props) {
     const { outcome } = await postAction(`/connections/${connection.id}/permissions`, {
       account: account.id,
       tool: tool.name,
-      allowed: String(wanted),
+      setting: wanted,
     });
     setControls((previous) => ({
       ...previous,
@@ -253,21 +263,25 @@ export function ConnectionPage(props: Props) {
                 <div className="flex max-w-2xl flex-col gap-1 pb-2">
                   <h2 className="text-base font-medium">Tool permissions</h2>
                   <p className="text-sm text-muted-foreground">
-                    Choose which tools {connection.name} can use on each Google account.{" "}
-                    {connection.name} sees an account only after you allow a tool on it. A change
-                    applies to its next request.
+                    Choose what {connection.name} can use on each Google account. With Ask first,
+                    each call waits until you approve it. {connection.name} sees an account once one
+                    of its tools is set to Ask first or Allowed. A change applies to its next
+                    request.
                   </p>
                 </div>
                 {props.accounts.map((account) => {
                   const open = !closed.has(account.id);
                   const states = props.tools.map((t) => controls[`${account.id}:${t.name}`]!);
+                  const common = new Set(
+                    states.flatMap((state) => (state.phase === "unconfirmed" ? [] : [state.value])),
+                  );
                   const word = states.some((s) => s.phase === "unconfirmed")
                     ? "Unconfirmed"
                     : states.some((s) => s.phase === "saving")
                       ? "Saving…"
-                      : states.every((s) => s.phase !== "unconfirmed" && s.value)
-                        ? "Allowed"
-                        : "Not allowed";
+                      : common.size === 1
+                        ? labelOf([...common][0]!)
+                        : "Mixed";
                   return (
                     <Collapsible
                       key={account.id}
@@ -302,7 +316,7 @@ export function ConnectionPage(props: Props) {
                             </CollapsibleTrigger>
                           </h3>
                           {!open && (
-                            <span className="w-20 shrink-0 text-right text-sm text-muted-foreground">
+                            <span className="w-24 shrink-0 text-right text-sm text-muted-foreground">
                               {word}
                             </span>
                           )}
@@ -317,7 +331,8 @@ export function ConnectionPage(props: Props) {
                               account={account}
                               requiredGmailScopes={props.requiredGmailScopes}
                             />{" "}
-                            If you allow a tool, {connection.name} sees this problem too.{" "}
+                            If a tool is set to Ask first or Allowed, {connection.name} sees this
+                            problem too.{" "}
                             <a
                               href="/accounts"
                               className="text-foreground underline underline-offset-4"
@@ -417,9 +432,9 @@ function PermissionControl({
 }: {
   label: string;
   state: ControlState;
-  choose: (value: boolean) => void;
+  choose: (value: Setting) => void;
 }) {
-  const value = state.phase === "unconfirmed" ? "" : String(state.value);
+  const value = state.phase === "unconfirmed" ? "" : state.value;
   const blocked = state.phase !== "confirmed";
   return (
     <ToggleGroup
@@ -433,7 +448,7 @@ function PermissionControl({
       spacing={0.5}
       className={cn("shrink-0 rounded-lg bg-muted p-0.5", state.phase === "saving" && "opacity-50")}
       onValueChange={(next) => {
-        if (!blocked && next) choose(next === "true");
+        if (!blocked && next) choose(next as Setting);
       }}
     >
       {values.map((segment) => (
@@ -447,9 +462,7 @@ function PermissionControl({
               aria-disabled={blocked}
               className={cn(
                 "rounded-md text-muted-foreground hover:bg-transparent",
-                segment.value === "true"
-                  ? "aria-checked:bg-primary aria-checked:text-primary-foreground aria-checked:hover:bg-primary aria-checked:hover:text-primary-foreground"
-                  : "aria-checked:bg-background aria-checked:text-foreground aria-checked:shadow-xs aria-checked:hover:bg-background",
+                selected[segment.value],
               )}
               onClick={(event) => {
                 if (blocked) event.preventDefault();

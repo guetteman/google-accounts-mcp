@@ -64,7 +64,7 @@ it("does not restore a removed account's permissions when the same Google identi
       await f.mcp.browser.post(`/connections/${f.connection.id}/permissions`, {
         account: live!.id,
         tool: "list_labels",
-        allowed: "true",
+        setting: "allow",
       })
     ).json(),
   ).toEqual({ outcome: "ok" });
@@ -131,7 +131,7 @@ it.each(["no Access token", "another origin", "MCP access token", "another signe
       await browser.authenticate({ email: "stranger@example.com" });
     const response = await browser.post(
       `/connections/${f.connection.id}/permissions`,
-      { account: f.personal.id, tool: "list_labels", allowed: "true" },
+      { account: f.personal.id, tool: "list_labels", setting: "allow" },
       {
         ...(kind === "another origin" ? { origin: "https://attacker.example" } : {}),
         ...(kind === "MCP access token"
@@ -152,11 +152,11 @@ it.each([
   "unknown account",
   "unknown tool",
   "malformed",
-])("refuses both allow and deny for %s without changing stored permissions", async (kind) => {
+])("refuses deny, ask and allow for %s without changing stored permissions", async (kind) => {
   const f = await fixture();
   await permission(f);
   let connectionId = f.connection.id;
-  const fields = { account: f.personal.id as string, tool: "list_labels", allowed: "true" };
+  const fields = { account: f.personal.id as string, tool: "list_labels", setting: "allow" };
   if (kind === "revoked") await f.mcp.browser.post(`/connections/${connectionId}/revoke`);
   if (kind === "expired")
     await env.DB.prepare("UPDATE connections SET expires_at = ? WHERE id = ?")
@@ -167,10 +167,10 @@ it.each([
   if (kind === "unknown account") fields.account = crypto.randomUUID();
   if (kind === "unknown tool") fields.tool = "send_everything";
   const before = await dump();
-  for (const allowed of ["true", "false"]) {
+  for (const setting of ["deny", "ask", "allow"]) {
     const response = await f.mcp.browser.post(`/connections/${connectionId}/permissions`, {
       ...fields,
-      allowed: kind === "malformed" ? "toggle" : allowed,
+      setting: kind === "malformed" ? "toggle" : setting,
     });
     const expected = ["revoked", "expired"].includes(kind)
       ? "already_ended"
@@ -223,7 +223,7 @@ it.each([false, true])(
       : statementFailingDb(pattern);
     const response = await f.mcp.browser.post(
       `/connections/${f.connection.id}/permissions`,
-      { account: f.personal.id, tool: "list_labels", allowed: "true" },
+      { account: f.personal.id, tool: "list_labels", setting: "allow" },
       { env: testEnv({ DB: db }) },
     );
     expect(response.status).toBe(503);
@@ -237,7 +237,7 @@ it("returns the owner's unavailable HTML when D1 is down before a permission wri
   const before = await dump();
   const response = await f.mcp.browser.post(
     `/connections/${f.connection.id}/permissions`,
-    { account: f.personal.id, tool: "list_labels", allowed: "true" },
+    { account: f.personal.id, tool: "list_labels", setting: "allow" },
     { env: testEnv({ DB: brokenDb() }) },
   );
   expect(response.status).toBe(503);

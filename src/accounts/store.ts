@@ -1,3 +1,4 @@
+import { purgeApprovals } from "../approvals/store";
 import type { CallContext } from "../mcp/call";
 import type { AccountTool } from "../mcp/tools";
 import { permittedWhere } from "../permissions/store";
@@ -101,9 +102,11 @@ export const listVisibleAccounts = (ctx: CallContext) =>
     ),
     ctx.config.tokenKey,
   );
+export const allowedAccountColumns = `${viewColumns}, a.version, a.blocked_until, a.refresh_token, a.access_token, a.access_expires_at`;
 export const allowedAccountStatement = (ctx: CallContext, tool: AccountTool, account: OwnerEmail) =>
   ctx.db
-    .prepare(`SELECT ${viewColumns}, a.version, a.blocked_until, a.refresh_token, a.access_token, a.access_expires_at
+    .prepare(`SELECT ${allowedAccountColumns},
+    (SELECT p.ask FROM permissions p WHERE p.account_id = a.id AND p.connection_id = ?4 AND p.tool = ?5) AS ask
     FROM accounts a WHERE a.email = ?3 AND ${ownerGuard("?1", "?2")}
     AND ${permittedWhere({ connection: "?4", tool: "?5", now: "?6", ownerEmail: "?2" })}`)
     .bind(
@@ -243,13 +246,27 @@ export const removalTarget = (db: D1Database, owner: Owner, id: AccountId) =>
   );
 export const removeAccount = (db: D1Database, owner: Owner, id: AccountId, now: number) =>
   Effect.tryPromise({
-    try: () =>
-      db
-        .prepare(
-          `UPDATE accounts AS a SET state = 'removed', removed_at = ?4, refresh_token = NULL, access_token = NULL, access_expires_at = NULL, blocked_until = NULL WHERE a.id = ?1 AND a.state = 'live' AND ${ownerGuard()} RETURNING email`,
-        )
-        .bind(id, owner.generation, owner.email, now)
-        .first<{ email: string }>(),
+    try: async () => {
+      const values = [now, id, owner.generation, owner.email];
+      const batch = await db.batch<{ email: string }>([
+        ...purgeApprovals(db, {
+          where:
+            "EXISTS (SELECT 1 FROM json_each(approvals.uses) u WHERE json_extract(u.value,'$.account') = ?2)",
+          guard: `EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?2 AND a.state = 'live' AND ${ownerGuard("?3", "?4")})`,
+          generation: "?3",
+          email: "?4",
+          now: "?1",
+          by: "account",
+          values,
+        }),
+        db
+          .prepare(
+            `UPDATE accounts AS a SET state = 'removed', removed_at = ?1, refresh_token = NULL, access_token = NULL, access_expires_at = NULL, blocked_until = NULL WHERE a.id = ?2 AND a.state = 'live' AND ${ownerGuard("?3", "?4")} RETURNING email`,
+          )
+          .bind(...values),
+      ]);
+      return batch.at(-1)!.results[0] ?? null;
+    },
     catch: () => new WriteUncertain(),
   }).pipe(
     Effect.map((row) =>

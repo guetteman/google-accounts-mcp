@@ -79,9 +79,9 @@ connectionRoutes.post("/connections/:id/permissions", ownerOnly, readForm, async
   const form = c.get("form");
   const accountId = parseAccountId(form.get("account"));
   const tool = parseAccountTool(form.get("tool"));
-  const allowed = form.get("allowed");
+  const setting = form.get("setting");
   if (!connectionId || !accountId) return c.json({ outcome: "not_found" }, 404);
-  if (!tool || (allowed !== "true" && allowed !== "false"))
+  if (!tool || (setting !== "deny" && setting !== "ask" && setting !== "allow"))
     return c.json({ outcome: "invalid" }, 400);
   const result = await Effect.runPromise(
     Effect.result(
@@ -92,7 +92,7 @@ connectionRoutes.post("/connections/:id/permissions", ownerOnly, readForm, async
           connectionId,
           accountId,
           tool,
-          allowed: allowed === "true",
+          setting,
         },
         Date.now(),
       ),
@@ -126,7 +126,7 @@ connectionRoutes.get("/connections/:id", ownerOnly, async (c) => {
                 rows[1]!.results as Parameters<typeof decodeAccounts>[0],
                 c.get("config").tokenKey,
               ),
-              allowed: decodePermissions(
+              settings: decodePermissions(
                 rows[2]!.results as Parameters<typeof decodePermissions>[0],
               ),
             };
@@ -137,8 +137,8 @@ connectionRoutes.get("/connections/:id", ownerOnly, async (c) => {
         if (!connection) return null;
         const active = connection.status.kind === "active";
         const accounts = active ? snapshot.accounts : [];
-        const allowed = active ? snapshot.allowed : [];
-        return { connection, accounts, allowed };
+        const settings = active ? snapshot.settings : {};
+        return { connection, accounts, settings };
       }),
     ),
   );

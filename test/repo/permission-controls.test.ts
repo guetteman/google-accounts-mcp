@@ -60,10 +60,10 @@ afterAll(async () => {
 
 const control = (page: Page, account = "Northwind") =>
   page.getByRole("radiogroup", { name: `List labels on ${account} for Claude`, exact: true });
-const segment = (group: Locator, name: "Allowed" | "Not allowed") =>
+const segment = (group: Locator, name: "Allowed" | "Not allowed" | "Ask first") =>
   group.getByRole("radio", { name, exact: true });
-async function selected(group: Locator, value: "Allowed" | "Not allowed" | null) {
-  for (const name of ["Allowed", "Not allowed"] as const)
+async function selected(group: Locator, value: "Allowed" | "Not allowed" | "Ask first" | null) {
+  for (const name of ["Not allowed", "Ask first", "Allowed"] as const)
     expect(await segment(group, name).getAttribute("aria-checked")).toBe(String(value === name));
 }
 async function open(width = 1280) {
@@ -126,7 +126,7 @@ it.each(["pointer", "Space", "Enter"])(
       expect(Object.fromEntries(new URLSearchParams(request.postData()!))).toEqual({
         account: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         tool: "list_labels",
-        allowed: "true",
+        setting: "allow",
       });
       expect(await group.getAttribute("aria-busy")).toBe("true");
       expect(await segment(group, "Allowed").getAttribute("aria-checked")).not.toBe("true");
@@ -154,7 +154,7 @@ it.each(["pointer", "Space", "Enter"])(
       expect(Object.fromEntries(new URLSearchParams((await denied).postData()!))).toEqual({
         account: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         tool: "list_labels",
-        allowed: "false",
+        setting: "deny",
       });
       await answer(routes[1]!, "ok");
       await expect
@@ -357,19 +357,19 @@ it("names each permission and its state accessibly, provides tooltips and distin
     await selected(group, "Allowed");
     const icons: string[] = [];
     const fills: string[] = [];
-    for (const name of ["Allowed", "Not allowed"] as const) {
+    for (const name of ["Not allowed", "Ask first", "Allowed"] as const) {
       const button = segment(group, name);
       icons.push(await button.locator("svg").innerHTML());
       fills.push(await button.evaluate((el) => getComputedStyle(el).backgroundColor));
       await button.hover();
       await page.getByRole("tooltip", { name, exact: true }).waitFor();
     }
-    expect(icons[0]).not.toBe(icons[1]);
-    expect(fills[0]).not.toBe(fills[1]);
+    expect(new Set(icons).size).toBe(3);
+    expect(fills[0]).not.toBe(fills[2]);
     // Text is in the tooltip and accessible name, never repeated beside an open control.
     await page.mouse.move(0, 0);
     await page.keyboard.press("Escape");
-    for (const word of ["Allowed", "Not allowed"])
+    for (const word of ["Not allowed", "Ask first", "Allowed"])
       await expect
         .poll(() => page.getByText(word, { exact: true }).filter({ visible: true }).count())
         .toBe(0);
@@ -414,7 +414,7 @@ it("exposes saving and unconfirmed controls as disabled to assistive technology"
     await sent;
     const disabled = async () => {
       expect(await group.getAttribute("aria-disabled")).toBe("true");
-      for (const label of ["Allowed", "Not allowed"] as const)
+      for (const label of ["Not allowed", "Ask first", "Allowed"] as const)
         expect(await segment(group, label).getAttribute("aria-disabled")).toBe("true");
     };
     await disabled();
@@ -473,6 +473,41 @@ it("replaces a database notice with the unconfirmed notice when a save already i
     await frames(page);
     expect(await page.getByText(unavailable, { exact: true }).count()).toBe(0);
     await selected(control(page, "Projects"), null);
+  } finally {
+    await page.close();
+  }
+});
+
+it("offers least-to-most access and confirms Ask first only after the server saves it", async () => {
+  const page = await open(390);
+  try {
+    const routes = await pending(page);
+    const group = control(page);
+    expect(
+      await group
+        .getByRole("radio")
+        .evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
+    ).toEqual(["Not allowed", "Ask first", "Allowed"]);
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await segment(group, "Ask first").click();
+    expect(Object.fromEntries(new URLSearchParams((await sent).postData()!))).toEqual({
+      account: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      tool: "list_labels",
+      setting: "ask",
+    });
+    await selected(group, "Not allowed");
+    await answer(routes[0]!, "ok");
+    await expect.poll(() => segment(group, "Ask first").getAttribute("aria-checked")).toBe("true");
+    await selected(group, "Ask first");
+    await page.getByRole("button", { name: /Northwind.*1 tool/ }).click();
+    expect(
+      await page.getByText("Ask first", { exact: true }).filter({ visible: true }).count(),
+    ).toBe(1);
+    expect(
+      await page
+        .getByText(/sees an account once one of its tools is set to Ask first or Allowed/)
+        .count(),
+    ).toBe(1);
   } finally {
     await page.close();
   }

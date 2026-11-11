@@ -1,3 +1,4 @@
+import { purgeApprovals } from "../approvals/store";
 import { Effect } from "effect";
 import { WriteUncertain } from "../db";
 import type { Owner } from "../owner/owner";
@@ -5,6 +6,8 @@ import type { AccountId } from "../accounts/model";
 import type { ConnectionId } from "../connections/model";
 import { activeWhere } from "../connections/store";
 import type { AccountTool } from "../mcp/tools";
+
+export type Setting = "deny" | "ask" | "allow";
 
 /** SQL expressions come from callers, never request text. Accounts are aliased as a. */
 export const permittedWhere = ({
@@ -27,7 +30,7 @@ export const permittedWhere = ({
 export const setPermission = (
   db: D1Database,
   owner: Owner,
-  change: { connectionId: ConnectionId; accountId: AccountId; tool: AccountTool; allowed: boolean },
+  change: { connectionId: ConnectionId; accountId: AccountId; tool: AccountTool; setting: Setting },
   now: number,
 ) =>
   Effect.gen(function* () {
@@ -45,10 +48,22 @@ export const setPermission = (
     const results = yield* Effect.tryPromise({
       try: () =>
         db.batch<{ state: string; expires_at: number; account_exists: number }>([
+          ...(change.setting === "deny"
+            ? purgeApprovals(db, {
+                where:
+                  "approvals.connection_id = ?1 AND EXISTS (SELECT 1 FROM json_each(approvals.uses) u WHERE json_extract(u.value,'$.account') = ?2 AND json_extract(u.value,'$.tool') = ?3)",
+                guard,
+                generation: "?4",
+                email: "?5",
+                now: "?6",
+                by: "tool",
+                values,
+              })
+            : []),
           db
             .prepare(
-              change.allowed
-                ? `INSERT INTO permissions (connection_id,account_id,tool) SELECT ?1,?2,?3 WHERE ${guard} ON CONFLICT DO NOTHING`
+              change.setting !== "deny"
+                ? `INSERT INTO permissions (connection_id,account_id,tool,ask) SELECT ?1,?2,?3,${change.setting === "ask" ? 1 : 0} WHERE ${guard} ON CONFLICT(connection_id,account_id,tool) DO UPDATE SET ask = excluded.ask`
                 : `DELETE FROM permissions WHERE connection_id = ?1 AND account_id = ?2 AND tool = ?3 AND ${guard}`,
             )
             .bind(...values),
@@ -61,7 +76,7 @@ export const setPermission = (
         ]),
       catch: () => new WriteUncertain(),
     });
-    const row = results[1]?.results[0];
+    const row = results.at(-1)?.results[0];
     if (!row) return "not_found" as const;
     if (row.state !== "active" || Number(row.expires_at) <= now) return "already_ended" as const;
     return row.account_exists ? ("ok" as const) : ("not_found" as const);
@@ -74,9 +89,16 @@ export const permissionsStatement = (
   now: number,
 ) =>
   db
-    .prepare(`SELECT a.id AS account_id, p.tool FROM accounts a
+    .prepare(`SELECT a.id AS account_id, p.tool, p.ask FROM accounts a
     JOIN permissions p ON p.account_id = a.id AND p.connection_id = ?1
     WHERE a.generation = ?2 AND ${permittedWhere({ connection: "?1", tool: "p.tool", now: "?4", ownerEmail: "?3" })}`)
     .bind(connection, owner.generation, owner.email, now);
-export const decodePermissions = (rows: { account_id: AccountId; tool: AccountTool }[]) =>
-  rows.map((row) => `${row.account_id}:${row.tool}` as const);
+export const decodePermissions = (
+  rows: { account_id: AccountId; tool: AccountTool; ask: number }[],
+) =>
+  Object.fromEntries(
+    rows.map((row) => [
+      `${row.account_id}:${row.tool}`,
+      row.ask === 1 ? ("ask" as const) : ("allow" as const),
+    ]),
+  );

@@ -101,7 +101,7 @@ it.each([true, false])(
     });
     const response = await f.mcp.browser.post(
       `/connections/${f.connection.id}/permissions`,
-      { account: f.personal.id, tool: "list_labels", allowed: String(allowed) },
+      { account: f.personal.id, tool: "list_labels", setting: allowed ? "allow" : "deny" },
       { env: testEnv({ DB: db }) },
     );
     expect(await response.json()).toEqual({ outcome: "not_found" });
