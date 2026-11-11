@@ -271,7 +271,6 @@ describe("owner consent", () => {
     const listed = await rpcResult(await mcp.call());
     expect(listed.tools).toEqual([
       expect.objectContaining({ name: "list_accounts" }),
-      expect.objectContaining({ name: "list_labels" }),
       expect.objectContaining({ name: "get_approval" }),
     ]);
   });

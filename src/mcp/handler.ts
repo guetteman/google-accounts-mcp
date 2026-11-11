@@ -4,6 +4,8 @@ import { readConfig } from "../config";
 import { decodeGrantProps } from "../connections/model";
 import { touchCall } from "../connections/store";
 import type { GatedEnv } from "../owner/gate";
+import type { CallContext } from "./call";
+import { watchToolList } from "./watch";
 import { createMcpServer } from "./server";
 
 function inactive(request: Request) {
@@ -34,16 +36,17 @@ export const mcpHandler = {
       return connection.failure._tag === "NotActive"
         ? inactive(request)
         : new Response("Service unavailable", { status: 503 });
-    const handler = createMcpHandler(() =>
-      createMcpServer({
-        db: env.DB,
-        config: config.success,
-        connection: connection.success,
-        owner: { generation: env.ownerGeneration, email: config.success.ownerEmail },
-        origin: new URL(request.url).origin,
-        now: Date.now,
-      }),
-    );
+    const context: CallContext = {
+      db: env.DB,
+      config: config.success,
+      connection: connection.success,
+      owner: { generation: env.ownerGeneration, email: config.success.ownerEmail },
+      origin: new URL(request.url).origin,
+      now: Date.now,
+    };
+    const handler = createMcpHandler(() => createMcpServer(context), {
+      bus: watchToolList(context, () => void handler.close()),
+    });
     return handler.fetch(request);
   },
 };
