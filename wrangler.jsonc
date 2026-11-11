@@ -19,5 +19,6 @@
   // is keyed by the binding name, and adding an ID later starts a new, empty local database.
   "d1_databases": [{ "binding": "DB" }],
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  "triggers": { "crons": ["*/10 * * * *"] },
   "observability": { "enabled": true },
 }

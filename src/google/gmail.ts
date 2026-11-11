@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import type { Send } from "../mcp/tools";
-import { ToolFailure } from "../mcp/call";
+import { ToolFailure } from "../mcp/failures";
 const Labels = Schema.Struct({
   labels: Schema.optionalKey(
     Schema.Array(

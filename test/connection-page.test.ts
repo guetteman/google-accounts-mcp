@@ -9,7 +9,11 @@ import { textOf } from "./support/worker";
 function pageProps(html: string) {
   const json = /<script\b[^>]*id="page-props"[^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];
   expect(json, "the server must provide the real connection page's hydration props").toBeDefined();
-  return JSON.parse(json!) as { _tag: string; accounts: Array<{ id: string }>; allowed: string[] };
+  return JSON.parse(json!) as {
+    _tag: string;
+    accounts: Array<{ id: string }>;
+    settings: Record<string, "ask" | "allow">;
+  };
 }
 
 it("links each connection to its own permissions page and shows only the accounts it can see", async () => {
@@ -35,7 +39,7 @@ it("links each connection to its own permissions page and shows only the account
   const props = pageProps(html);
   expect(props._tag).toBe("Connection");
   expect(props.accounts.map((a) => a.id)).toEqual([f.personal.id, f.northwind.id]);
-  expect(props.allowed).toEqual([`${f.personal.id}:list_labels`]);
+  expect(props.settings).toEqual({ [`${f.personal.id}:list_labels`]: "allow" });
   for (const account of [f.personal, f.northwind])
     expect(html).toContain(`aria-label="List labels on ${account.name} for Claude"`);
   const groups = [...html.matchAll(/role="radiogroup"[^>]*>([\s\S]*?)<\/div>/g)];

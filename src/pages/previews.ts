@@ -1,3 +1,4 @@
+import type { ApprovalPageProps } from "../approvals/model";
 import { GMAIL_SCOPES } from "../google/client";
 import { acceptAuthorize } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
@@ -99,7 +100,12 @@ const connectionPreview = (scenario: string): Page => {
       canSee: allowed.map((a) => a.name),
     },
     accounts,
-    allowed: allowed.map((a) => `${a.id}:list_labels` as const),
+    settings: Object.fromEntries(
+      allowed.map((a, i) => [
+        `${a.id}:list_labels`,
+        scenario === "some-allowed" && i === 0 ? "ask" : "allow",
+      ]),
+    ),
     tools: [
       {
         name: "list_labels",
@@ -110,7 +116,80 @@ const connectionPreview = (scenario: string): Page => {
     requiredGmailScopes: GMAIL_SCOPES.length,
   };
 };
+const approvalBase: ApprovalPageProps = {
+  _tag: "Approval",
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-000000000010",
+  request: {
+    connection: { id: connections[0]!.id, name: "Laptop", app: "Claude Code" },
+    account: { name: "Personal", email: "alex.personal@example.com", workspace: false },
+    tool: {
+      label: "List labels",
+      action: "list the Gmail labels",
+      joiner: "of",
+      empty: "This call has no other values. The sentence above is the whole call.",
+    },
+    values: [],
+  },
+  times: {
+    asked: "19:15 UTC",
+    askedOn: "Nov 10 at 19:15 UTC",
+    expires: "20:15 UTC",
+    expiresOn: "Nov 10 at 20:15 UTC",
+    minutesSinceAsked: 4,
+    minutesLeft: 56,
+    decidedOn: "Nov 10 at 19:19 UTC",
+  },
+  state: { kind: "waiting", shown: true, changed: false, digest: "preview" },
+};
+const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
+  "approval-waiting": approvalBase,
+  "approval-waiting-long-names": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      connection: {
+        ...approvalBase.request.connection,
+        name: "Claude Code on the Fabrikam finance team's shared build machine (do not revoke)",
+      },
+      account: {
+        name: "Fabrikam Holdings International, Finance and Legal Operations",
+        email: "alexandra.personal-archive@fabrikam-holdings.example",
+        workspace: true,
+      },
+    },
+  },
+  "approval-cannot-show": {
+    ...approvalBase,
+    state: { kind: "waiting", shown: false, changed: false, digest: null },
+  },
+  "approval-changed": {
+    ...approvalBase,
+    state: { kind: "waiting", shown: true, changed: true, digest: "changed" },
+  },
+  ...Object.fromEntries(
+    (["running", "succeeded", "unknown", "rejected", "expired"] as const).map((kind) => [
+      `approval-${kind}`,
+      { ...approvalBase, state: { kind } },
+    ]),
+  ),
+  "approval-failed": {
+    ...approvalBase,
+    state: {
+      kind: "failed",
+      message:
+        "Google could not complete the request for alex.personal@example.com. Try again later.",
+    },
+  },
+  ...Object.fromEntries(
+    (["tool", "connection", "account"] as const).map((by) => [
+      `approval-ended-${by}`,
+      { ...approvalBase, state: { kind: "ended" as const, by } },
+    ]),
+  ),
+  "approval-unconfirmed": { ...approvalBase, unconfirmed: true },
+};
 export const previews: Readonly<Record<string, Page>> = {
+  ...approvalPreviews,
   ...Object.fromEntries(
     [
       "new-connection",

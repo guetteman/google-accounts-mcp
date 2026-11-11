@@ -2,8 +2,8 @@ import { ConsentPage } from "./consent";
 import { ClientRefusedPage } from "./client-refused";
 import { ConsentExpiredPage } from "./consent-expired";
 import { renderToString } from "react-dom/server";
-import { isFramePage, PRODUCT, type Page } from "./page";
-import { frameElement } from "./registry";
+import { isHydratedPage, PRODUCT, type Page } from "./page";
+import { hydratedElement } from "./registry";
 import { AccessRefusedPage } from "./access-refused";
 import { AccessUnavailablePage } from "./access-unavailable";
 import { NotOwnerPage } from "./not-owner";
@@ -19,7 +19,7 @@ const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 function pageElement(page: Page) {
-  if (isFramePage(page)) return frameElement(page);
+  if (isHydratedPage(page)) return hydratedElement(page);
   switch (page._tag) {
     case "Consent":
       return <ConsentPage {...page} />;
@@ -55,7 +55,7 @@ export function renderPage(
   page: Page,
   init?: ResponseInit & { formAction?: ReadonlyArray<string> },
 ): Response {
-  const hydrate = isFramePage(page);
+  const hydrate = isHydratedPage(page);
   const body = renderToString(pageElement(page));
   const html = renderToString(
     <html lang="en">

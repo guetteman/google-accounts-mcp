@@ -1,3 +1,4 @@
+import type { ApprovalPageProps } from "../approvals/model";
 import type { AcceptedClient } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
 import type { ConfigName } from "../config";
@@ -23,7 +24,7 @@ export type FramePage =
         label: string;
         description: string;
       }>;
-      readonly allowed: ReadonlyArray<`${import("../accounts/model").AccountId}:${import("../mcp/tools").AccountTool}`>;
+      readonly settings: Readonly<Record<string, "ask" | "allow">>;
       readonly requiredGmailScopes: number;
     }
   | {
@@ -56,7 +57,12 @@ export type Page =
   | { readonly _tag: "Mismatch" }
   | { readonly _tag: "SetupIncomplete"; readonly names: ConfigName[] }
   | { readonly _tag: "Unavailable" }
-  | FramePage;
+  | FramePage
+  | ApprovalPageProps;
 
 export const isFramePage = (page: Page): page is FramePage =>
   page._tag === "Accounts" || page._tag === "Connections" || page._tag === "Connection";
+
+export type HydratedPage = FramePage | ApprovalPageProps;
+export const isHydratedPage = (page: Page): page is HydratedPage =>
+  isFramePage(page) || page._tag === "Approval";

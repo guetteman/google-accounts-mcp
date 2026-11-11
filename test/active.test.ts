@@ -120,6 +120,7 @@ it.each(clients)(
     expect(listed.tools).toEqual([
       expect.objectContaining({ name: "list_accounts" }),
       expect.objectContaining({ name: "list_labels" }),
+      expect.objectContaining({ name: "get_approval" }),
     ]);
     expect(spy).toHaveBeenCalledTimes(2);
     for (const args of spy.mock.calls)

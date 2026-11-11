@@ -215,17 +215,18 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
     }
   });
 
-  it("deletes connections, accounts, permissions and calls with exactly this reset's guard", () => {
+  it("deletes connections, accounts, permissions, calls and approvals with exactly this reset's guard", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
     const cleanup = RESET_CLEANUP.map((statement) => statement({ guard, now: NOW }));
-    expect(cleanup).toHaveLength(4);
+    expect(cleanup).toHaveLength(5);
     expect(cleanup).toEqual(
       expect.arrayContaining([
         `DELETE FROM connections WHERE ${guard}`,
         `DELETE FROM accounts WHERE ${guard}`,
         `DELETE FROM permissions WHERE ${guard}`,
         `DELETE FROM calls WHERE ${guard}`,
+        `DELETE FROM approvals WHERE ${guard}`,
       ]),
     );
   });

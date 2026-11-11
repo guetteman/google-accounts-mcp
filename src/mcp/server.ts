@@ -15,7 +15,7 @@ export function createMcpServer(ctx: CallContext): Server {
       // Effect's empty struct is not an object JSON Schema. Keep the existing contract.
       inputSchema:
         tool.kind === "plain"
-          ? { type: "object", properties: {} }
+          ? (tool.inputSchema ?? { type: "object", properties: {} })
           : (Schema.toJsonSchemaDocument(tool.input).schema as McpTool["inputSchema"]),
     })),
   }));

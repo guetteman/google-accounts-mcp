@@ -55,6 +55,6 @@ export const connectionPage = {
       description: "See the names of this account's Gmail labels.",
     },
   ],
-  allowed: [`${parseAccountId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!}:list_labels` as const],
+  settings: { "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:list_labels": "allow" as const },
   requiredGmailScopes: 5,
 };

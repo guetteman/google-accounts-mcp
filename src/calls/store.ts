@@ -5,7 +5,7 @@ import type { OwnerEmail } from "../owner/owner";
 import type { CallContext } from "../mcp/call";
 import type { Tool } from "../mcp/tools";
 export type CallId = number & { readonly __callId: unique symbol };
-export type Outcome = "success" | "refused" | "failed";
+export type Outcome = "success" | "refused" | "failed" | "pending" | "rejected" | "expired";
 
 // Resolve the account in SQL and return only the record ID. Callers must not learn
 // whether an unavailable address belongs to a hidden account. Never store agent text.

@@ -1,3 +1,4 @@
+import { endApprovals, changeGuard } from "../approvals/store";
 import { permittedWhere } from "../permissions/store";
 import type { Name } from "../names";
 import { Data, Effect } from "effect";
@@ -149,19 +150,34 @@ const action = (
 ) =>
   Effect.gen(function* () {
     const row = yield* Effect.tryPromise({
-      try: () =>
-        db
+      try: async () => {
+        const values = [
+          change.kind === "rename" ? change.name : now,
+          id,
+          owner.generation,
+          ...(change.kind === "rename" ? [now] : []),
+          owner.email,
+        ];
+        const time = change.kind === "rename" ? "?4" : "?1";
+        const email = change.kind === "rename" ? "?5" : "?4";
+        const guard = changeGuard("connection", {
+          connection: "?2",
+          generation: "?3",
+          ownerEmail: email,
+          now: time,
+        });
+        const statement = db
           .prepare(
-            `UPDATE connections AS c SET ${change.kind === "rename" ? "name = ?1" : "state = 'revoked', revoked_at = ?1"} WHERE c.id = ?2 AND c.generation = ?3 AND ${activeWhere({ now: "?4", ownerEmail: "?5" })} RETURNING grant_id`,
+            `UPDATE connections AS c SET ${change.kind === "rename" ? "name = ?1" : "state = 'revoked', revoked_at = ?1"} WHERE c.id = ?2 AND ${guard} RETURNING grant_id`,
           )
-          .bind(
-            change.kind === "rename" ? change.name : now,
-            id,
-            owner.generation,
-            now,
-            owner.email,
-          )
-          .first<{ grant_id: string }>(),
+          .bind(...values);
+        if (change.kind === "rename") return statement.first<{ grant_id: string }>();
+        const batch = await db.batch<{ grant_id: string }>([
+          ...endApprovals(db, owner, { connection: id }, now),
+          statement,
+        ]);
+        return batch.at(-1)!.results[0] ?? null;
+      },
       catch: () => new WriteUncertain(),
     });
     if (row) return { grantId: row.grant_id };

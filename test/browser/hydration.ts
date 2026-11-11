@@ -1,3 +1,4 @@
+import type { ApprovalPageProps } from "../../src/approvals/model";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import { chromium } from "playwright-core";
@@ -9,6 +10,16 @@ export async function hydrateAccounts(input: {
   html: string;
   headers: Record<string, string>;
   connection?: boolean;
+  approval?: {
+    action: "approve" | "reject";
+    response: ApprovalPageProps;
+    protection?: "double" | "identity" | "digest";
+    nextResponse?: ApprovalPageProps;
+    failure?: "lost" | "503";
+  };
+  width?: number;
+  dark?: boolean;
+  layout?: boolean;
 }) {
   const bundle = await build({
     configFile: false,
@@ -35,18 +46,45 @@ export async function hydrateAccounts(input: {
   );
   const browser = await chromium.launch({ headless: true, channel: "chromium" });
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const page = await browser.newPage({
+      viewport: { width: input.width ?? 1280, height: 900 },
+      colorScheme: input.dark ? "dark" : "light",
+    });
     page.setDefaultTimeout(2000);
     const errors: string[] = [];
     let clientLoads = 0;
+    const submissions: Record<string, string>[] = [];
     page.on("console", (message) => {
       if (message.type() === "error") errors.push(message.text());
     });
     page.on("pageerror", (error) => errors.push(error.message));
+    let releaseDecision!: () => void;
+    const decisionHeld = new Promise<void>((resolve) => {
+      releaseDecision = resolve;
+    });
     await page.route("**/*", async (route) => {
       const url = new URL(route.request().url());
       if (url.href === input.url)
         return route.fulfill({ body: input.html, headers: input.headers });
+      if (input.approval && url.pathname.endsWith(`/${input.approval.action}`)) {
+        submissions.push(Object.fromEntries(new URLSearchParams(route.request().postData() ?? "")));
+        await decisionHeld;
+        if (input.approval.failure === "lost") return route.abort("failed");
+        return route.fulfill({
+          status: input.approval.failure === "503" ? 503 : 200,
+          contentType: "application/json",
+          body: JSON.stringify(
+            input.approval.failure
+              ? { outcome: "unknown" }
+              : {
+                  approval:
+                    submissions.length > 1 && input.approval.nextResponse
+                      ? input.approval.nextResponse
+                      : input.approval.response,
+                },
+          ),
+        });
+      }
       // Worker tests render development asset URLs; serve the real compiled entry at either URL.
       const path =
         url.pathname === "/src/pages/client.tsx"
@@ -72,6 +110,97 @@ export async function hydrateAccounts(input: {
       await route.abort();
     });
     await page.goto(input.url);
+    if (input.dark) await page.locator("html").evaluate((el) => el.classList.add("dark"));
+    if (input.approval) {
+      await page.evaluate(() => document.fonts.ready);
+      const before = await page.locator("main").boundingBox();
+      const buttonsBefore = await page.getByRole("button").evaluateAll((buttons) =>
+        buttons.map((button) => {
+          const r = button.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        }),
+      );
+      const actionButton = page.getByRole("button", {
+        name: input.approval.action === "approve" ? "Approve" : "Reject",
+        exact: true,
+      });
+      if (input.approval.protection === "double") {
+        await actionButton.evaluate((button) => {
+          (button as HTMLButtonElement).click();
+          (button as HTMLButtonElement).click();
+        });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+            ),
+        );
+      } else await actionButton.click();
+      const busyButton = page.getByRole("button", {
+        name: input.approval.action === "approve" ? "Approving…" : "Reject",
+        exact: true,
+      });
+      await busyButton.waitFor();
+      const inFlight = {
+        text: await page.locator("main").innerText(),
+        busy: await busyButton.getAttribute("aria-busy"),
+        spinner: await busyButton.locator("svg").count(),
+        before,
+        after: await page.locator("main").boundingBox(),
+        buttonsBefore,
+        buttonsAfter: await page.getByRole("button").evaluateAll((buttons) =>
+          buttons.map((button) => {
+            const r = button.getBoundingClientRect();
+            return { x: r.x, y: r.y, width: r.width, height: r.height };
+          }),
+        ),
+      };
+      releaseDecision();
+      if (input.approval.protection === "identity")
+        await page
+          .getByRole("link", { name: "Reload", exact: true })
+          .or(page.getByRole("heading", { name: "Approved. The call succeeded.", exact: true }))
+          .waitFor();
+      else if (input.approval.failure)
+        await page.getByRole("link", { name: "Reload", exact: true }).waitFor();
+      else if (input.approval.response.state.kind === "waiting")
+        await page.getByText("Nothing ran. The request changed.", { exact: true }).waitFor();
+      else
+        await page
+          .getByRole("heading", {
+            level: 1,
+            name:
+              input.approval.response.state.kind === "rejected"
+                ? "Rejected. Nothing ran."
+                : "Approved. The call succeeded.",
+            exact: true,
+          })
+          .waitFor();
+      if (input.approval.protection === "digest") {
+        await page.getByRole("button", { name: "Approve", exact: true }).click();
+        await page
+          .getByRole("heading", { name: "Approved. The call succeeded.", exact: true })
+          .waitFor();
+      }
+      return {
+        clientLoads,
+        submissions,
+        inFlight,
+        heading: await page.getByRole("heading", { level: 1 }).innerText(),
+        reload: await page.getByRole("link", { name: "Reload", exact: true }).count(),
+        errors: errors.filter(
+          (error) => !input.approval?.failure || !error.startsWith("Failed to load resource"),
+        ),
+      };
+    }
+    if (input.layout) {
+      await page.evaluate(() => document.fonts.ready);
+      return {
+        clientLoads,
+        overflow: await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+        errors,
+      };
+    }
     if (input.connection) {
       const controls = page.getByRole("radiogroup");
       const before = await controls.evaluateAll((els) =>

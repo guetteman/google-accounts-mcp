@@ -2,11 +2,13 @@ import type { TokenKey } from "./config";
 export type Sealed = string & { readonly __sealed: unique symbol };
 const encoder = new TextEncoder();
 const imported = new Map<string, CryptoKey>();
-const encode = (bytes: Uint8Array) =>
-  btoa(String.fromCharCode(...bytes))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
+// Spreading a large array into one call overflows the stack, so convert in chunks.
+const encode = (bytes: Uint8Array) => {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+};
 const decode = (value: string) =>
   Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
 export async function keyId(bytes: TokenKey): Promise<string> {
