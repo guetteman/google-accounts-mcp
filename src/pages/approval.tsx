@@ -12,7 +12,10 @@ import type { ApprovalPageProps, ApprovalRequest, ApprovalState } from "../appro
 const isHidden = (character: string) =>
   character !== "\n" &&
   character !== "\t" &&
-  /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\p{Cc}\u2028\u2029]/u.test(character);
+  character !== " " &&
+  /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\p{Cc}\p{Zs}\p{Cf}\u2800\u2028\u2029]/u.test(
+    character,
+  );
 const hasHidden = (text: string) => Array.from(text).some(isHidden);
 
 /** Plain text, with every hidden character replaced by a marked token such as `U+202E`. */
@@ -354,7 +357,7 @@ function DecidedView({
               Approved. <span className="text-destructive">The call failed.</span>
             </>
           ),
-          detail: `You approved this on ${times.decidedOn}. The call ran once and failed.`,
+          detail: `You approved this on ${times.decidedOn}. The call failed.`,
           next: tell("approved"),
         };
       case "unknown":
@@ -400,7 +403,7 @@ function DecidedView({
           detail: (
             <>
               While this request waited, the connection <Value>{connection.name}</Value> ended. It
-              was revoked, or it expired.
+              was revoked.
             </>
           ),
           next: (
@@ -431,9 +434,9 @@ function DecidedView({
         };
       case "unconfirmed":
         return {
-          headline: "The answer was lost. Reload this page.",
+          headline: "Couldn't confirm your decision. Reload this page.",
           detail:
-            "You pressed Approve or Reject, but the server's answer did not arrive. This page cannot know whether your decision counted.",
+            "This page could not confirm whether your decision counted. Check what the server recorded before deciding again.",
           next: "Reload to see what the server recorded.",
         };
     }

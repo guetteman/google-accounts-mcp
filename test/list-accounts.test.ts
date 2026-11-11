@@ -19,7 +19,7 @@ it.each(clients)(
       {
         name: "list_labels",
         description:
-          "Lists the Gmail labels of one Google account. `account` is the address of an account that list_accounts returns.",
+          "Lists the Gmail labels of one Google account. `account` is the address of an account that list_accounts returns. When the owner sets this tool to ask, it returns a pending approval with a link instead of labels; get_approval returns the labels after the owner approves.",
         inputSchema: expect.objectContaining({
           type: "object",
           properties: { account: { type: "string" } },

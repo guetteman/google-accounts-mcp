@@ -83,6 +83,7 @@ export const failures = {
 export class ToolFailure extends Data.TaggedError("ToolFailure")<{
   code: keyof typeof failures;
   unknown?: boolean;
+  reason?: "arguments_too_large";
 }> {}
 const tokenFailure = (error: TokenError): ToolFailure => {
   switch (error._tag) {
@@ -177,7 +178,7 @@ export async function runCall(
         if (decoded._tag === "None") throw new ToolFailure({ code: "invalid_arguments" });
         const json = JSON.stringify(decoded.value);
         if (new TextEncoder().encode(json).byteLength > 256 * 1024)
-          throw new ToolFailure({ code: "invalid_arguments" });
+          throw new ToolFailure({ code: "invalid_arguments", reason: "arguments_too_large" });
         const row = batch[1]?.results[0];
         if (!row) throw new ToolFailure({ code: "account_not_available" });
         const allowed: Allowed = await decodeAllowedAccount(row, ctx.config.tokenKey);
@@ -192,7 +193,7 @@ export async function runCall(
             });
           const approval = crypto.randomUUID() as ApprovalId;
           const argumentsSealed = await seal(ctx.config.tokenKey, `${approval}:arguments`, json);
-          // Once the batch starts, its lost response must never close the audit record (D3).
+          // Once the batch starts, its lost response must never close the audit record.
           close = false;
           const created = await Effect.runPromise(
             Effect.result(
@@ -232,7 +233,10 @@ export async function runCall(
           type: "text",
           text: JSON.stringify({
             code: failure.code,
-            message: entry.message(input, email, ctx.origin),
+            message:
+              failure.reason === "arguments_too_large"
+                ? "The arguments are too large. The limit is 256 KB."
+                : entry.message(input, email, ctx.origin),
           }),
         },
       ],

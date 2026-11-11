@@ -13,7 +13,7 @@ import { readOwner } from "../src/owner/owner";
 import { NOW } from "./support/accounts";
 import { observeStatements } from "./support/db";
 import { fixture } from "./support/permissions";
-import { ask, approve, page, post, setting } from "./support/approvals";
+import { ask, approve, page, post, setting, winningClaim } from "./support/approvals";
 import { testEnv } from "./support/worker";
 
 const context = async (db = env.DB) => {
@@ -42,7 +42,15 @@ it("looks up calls by primary key in every approval audit statement", async () =
   await approve(f, id, workerEnv);
   operation = "finish";
   await Effect.runPromise(
-    finishApproval(await context(db), parseApprovalId(id)!, NOW, "success", "success", null, false),
+    finishApproval(
+      await context(db),
+      await winningClaim(id),
+      NOW,
+      "success",
+      "success",
+      null,
+      false,
+    ),
   );
   const rejected = await ask(f);
   operation = "reject";
@@ -93,9 +101,9 @@ it("changes no rows when scheduled cleanup runs again after cleaning everything"
   await ask(f);
   const ctx = await context();
   const first = await Effect.runPromise(cleanupApprovals(ctx, NOW + 3_600_000));
-  expect(first.map((result) => result.meta.changes)).toEqual([1, 1, 1]);
+  expect(first.map((result) => result.meta.changes)).toEqual([1, 1, 0, 1]);
   const second = await Effect.runPromise(cleanupApprovals(ctx, NOW + 3_600_000));
-  expect(second.map((result) => result.meta.changes)).toEqual([0, 0, 0]);
+  expect(second.map((result) => result.meta.changes)).toEqual([0, 0, 0, 0]);
   const index = await env.DB.prepare(
     "SELECT sql FROM sqlite_master WHERE name = 'approvals_results'",
   ).first<{ sql: string }>();

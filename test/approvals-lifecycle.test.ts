@@ -2,7 +2,12 @@ import { env } from "cloudflare:workers";
 import { Effect } from "effect";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
-import { cleanupApprovals, finishApproval, readApproval } from "../src/approvals/store";
+import {
+  cleanupApprovals,
+  decideApproval,
+  finishApproval,
+  readApproval,
+} from "../src/approvals/store";
 import { parseApprovalId } from "../src/approvals/model";
 import { readOwner } from "../src/owner/owner";
 import { scheduled } from "../src/approvals/scheduled";
@@ -22,6 +27,7 @@ import {
   row,
   rows,
   setting,
+  winningClaim,
 } from "./support/approvals";
 import { OWNER_EMAIL, testEnv } from "./support/worker";
 import { McpClient } from "./support/oauth";
@@ -254,10 +260,24 @@ it("checks every used account in the decision batch", async () => {
       id,
     )
     .run();
-  expect((await approve(f, id)).state).toMatchObject({ kind: "waiting", changed: true });
+  const ctx = await context();
+  const stored = (await Effect.runPromise(readApproval(ctx, parseApprovalId(id)!, NOW)))!;
+  const decide = () =>
+    Effect.runPromise(
+      decideApproval(ctx, {
+        id: stored.id,
+        at: NOW,
+        claim: crypto.randomUUID(),
+        action: "approve",
+        snapshot: { connection: stored.connection_name, accounts: JSON.parse(stored.accounts) },
+      }),
+    );
+  expect(await decide()).toEqual({ won: false, credentials: [] });
   expect(google.labelRequests).toEqual([]);
   await setting(f, "allow", f.northwind);
-  expect((await approve(f, id)).state.kind).toBe("succeeded");
+  const allowed = await decide();
+  expect(allowed.won).toBe(true);
+  expect(allowed.credentials).toHaveLength(2);
 });
 it.each(["page", "get_approval"])(
   "persists expiry before answering from %s and refuses a later Approve",
@@ -320,7 +340,7 @@ it("limits the outcome batch to thirty seconds even without a settling read", as
   await Effect.runPromise(
     finishApproval(
       await context(),
-      parseApprovalId(id)!,
+      await winningClaim(id),
       NOW + 30_000,
       "success",
       "success",

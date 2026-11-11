@@ -37,6 +37,8 @@ for (const action of ["approve", "reject"] as const) {
     const config = c.get("config");
     const at = c.get("approvalArrival");
     const deadline = at + 25000;
+    const claim = { id, at, claim: crypto.randomUUID() };
+    let won = false;
     const controller = new AbortController();
     const readPage = async (changed = false) => {
       const row = await Effect.runPromise(readApproval(ctx, id, Date.now()));
@@ -63,18 +65,19 @@ for (const action of ["approve", "reject"] as const) {
       if (controller.signal.aborted || Date.now() >= deadline) throw new Error("Approval deadline");
       const decision = await Effect.runPromise(
         decideApproval(ctx, {
-          id,
-          at,
-          claim: crypto.randomUUID(),
+          ...claim,
           action,
           snapshot: view.snapshot,
         }),
       );
       if (!decision.won) return readPage(true);
       if (action === "reject") return readPage();
+      won = true;
       // A late decision response must not start Google work after the request's deadline.
       if (controller.signal.aborted || Date.now() >= deadline) {
-        await Effect.runPromise(finishApproval(ctx, id, Date.now(), "unknown", null, null, false));
+        await Effect.runPromise(
+          finishApproval(ctx, claim, Date.now(), "unknown", null, null, false),
+        );
         return readPage();
       }
       const call: CallContext = {
@@ -129,7 +132,7 @@ for (const action of ["approve", "reject"] as const) {
       const result =
         json !== null && !tooLarge ? await seal(config.tokenKey, `${id}:result`, json) : null;
       await Effect.runPromise(
-        finishApproval(ctx, id, Date.now(), outcome, auditOutcome, result, tooLarge),
+        finishApproval(ctx, claim, Date.now(), outcome, auditOutcome, result, tooLarge),
       );
       return readPage();
     };
@@ -148,10 +151,10 @@ for (const action of ["approve", "reject"] as const) {
         const page = await Promise.race([work(), timedOut]);
         return page ? c.json({ approval: page }) : c.json({ outcome: "not_found" }, 404);
       } catch {
-        if (controller.signal.aborted) {
+        if (controller.signal.aborted && won) {
           try {
             await Effect.runPromise(
-              finishApproval(ctx, id, Date.now(), "unknown", null, null, false),
+              finishApproval(ctx, claim, Date.now(), "unknown", null, null, false),
             );
             const page = await readPage();
             if (page && page.state.kind !== "waiting") return c.json({ approval: page });

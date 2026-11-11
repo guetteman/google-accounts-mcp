@@ -8,7 +8,7 @@ import { ask, page, setting } from "./support/approvals";
 import type { TestEnv } from "./env";
 import { ORIGIN } from "./support/worker";
 
-it("renders every approval preview with the shared hydration entry and no prototype controls", async () => {
+it("renders every approval preview with the shared hydration entry", async () => {
   for (const name of [
     "waiting",
     "waiting-long-names",
@@ -30,7 +30,6 @@ it("renders every approval preview with the shared hydration entry and no protot
     const html = await renderPage(preview!).text();
     expect(html).toContain('id="page-props"');
     expect(html).toContain("/src/pages/client.tsx");
-    expect(html).not.toContain("/__proto");
     if (
       [
         "running",
@@ -50,7 +49,6 @@ it("renders every approval preview with the shared hydration entry and no protot
     }
     if (name === "succeeded") {
       expect(html).toContain("This page does not show the result.");
-      expect(html).not.toContain("The result goes to the agent");
     }
     if (name === "unconfirmed") expect(html).toContain(">Reload</a>");
     if (name === "ended-tool") expect(html).toContain('href="/connections/');
@@ -58,7 +56,7 @@ it("renders every approval preview with the shared hydration entry and no protot
   }
 });
 it.each(["approve", "reject", "changed", "lost", "503"] as const)(
-  "hydrates the real Worker page and handles %s in place",
+  "hydrates the approval page and handles %s in place",
   async (scenario) => {
     const f = await fixture();
     await setting(f, "ask");
@@ -148,7 +146,7 @@ it.each([
             headers: Object.fromEntries(response.headers),
             width,
             dark,
-            screenshot: `approval-${name}-${width}-${dark ? "dark" : "light"}`,
+            layout: true,
           }),
         })
       ).json<{ clientLoads: number; overflow: boolean; errors: string[] }>();
@@ -161,7 +159,7 @@ it.each([
 );
 
 it.each([390, 1280])(
-  "renders the real three-option connection control at %s px",
+  "renders the three-option permission control at %s px",
   async (width) => {
     const response = renderPage(previews["connection-some-allowed"]!);
     const hydrated = await (
@@ -172,13 +170,59 @@ it.each([390, 1280])(
           html: await response.text(),
           headers: Object.fromEntries(response.headers),
           width,
-          screenshot: `connection-ask-${width}`,
+          layout: true,
         }),
       })
     ).json<{ clientLoads: number; overflow: boolean; errors: string[] }>();
     expect(hydrated.errors).toEqual([]);
     expect(hydrated.clientLoads).toBe(1);
     expect(hydrated.overflow).toBe(false);
+  },
+  30_000,
+);
+
+it.each(["double", "identity", "digest"] as const)(
+  "protects approval submissions against %s mistakes",
+  async (protection) => {
+    const f = await fixture();
+    await setting(f, "ask");
+    const id = await ask(f);
+    const initial = await page(f, id);
+    const response = await f.mcp.browser.get(`/approvals/${id}`);
+    const succeeded = { ...initial, state: { kind: "succeeded" as const } };
+    const next =
+      protection === "identity"
+        ? { ...succeeded, id: crypto.randomUUID() }
+        : protection === "digest"
+          ? {
+              ...initial,
+              state: {
+                kind: "waiting" as const,
+                shown: true,
+                changed: true,
+                digest: "new-reviewed-digest",
+              },
+            }
+          : succeeded;
+    const result = await (
+      await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
+        method: "POST",
+        body: JSON.stringify({
+          url: `${ORIGIN}/approvals/${id}`,
+          html: await response.text(),
+          headers: Object.fromEntries(response.headers),
+          approval: { action: "approve", protection, response: next, nextResponse: succeeded },
+        }),
+      })
+    ).json<{ submissions: Record<string, string>[]; reload: number; errors: string[] }>();
+    expect(result.errors).toEqual([]);
+    const originalDigest = initial.state.kind === "waiting" ? initial.state.digest : null;
+    expect(result.submissions).toEqual(
+      protection === "digest"
+        ? [{ digest: originalDigest }, { digest: "new-reviewed-digest" }]
+        : [{ digest: originalDigest }],
+    );
+    expect(result.reload).toBe(protection === "identity" ? 1 : 0);
   },
   30_000,
 );

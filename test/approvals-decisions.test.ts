@@ -70,6 +70,10 @@ it("renders untrusted values as quoted text and replaces invisible characters", 
   await setting(f, "ask");
   const id = await ask(f);
   const hidden = [
+    "2800",
+    "00A0",
+    "3000",
+    "FFF9",
     "202E",
     "200B",
     "0000",

@@ -12,7 +12,13 @@ it("documents migration order, browser control risk and every approval preview",
   expect(readme).toContain(
     "An agent that controls a browser where the owner is signed in can approve its own call or change its own settings",
   );
+  expect(readme).toContain(
+    "revoking a connection, removing an account, and setting a tool to deny return HTTP 503 and change nothing",
+  );
+  expect(readme).toContain("Account tool calls fail without an audit record");
+  expect(readme).toContain("cron trigger (`*/10 * * * *`)");
   const agents = await readFile("AGENTS.md", "utf8");
+  expect(agents).toContain("the approval page, and the permission control");
   for (const name of [
     "waiting",
     "waiting-long-names",

@@ -15,7 +15,7 @@ import {
 } from "./support/permissions";
 import { ORIGIN } from "./support/worker";
 
-// The acceptance path of issue #18 through the Worker's public interfaces only: the owner's
+// Approval flow through the Worker's public interfaces only: the owner's
 // page actions, the MCP endpoint, and the approval page with its two actions.
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 const HOUR = 60 * 60 * 1000;

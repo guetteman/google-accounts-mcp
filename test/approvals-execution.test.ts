@@ -175,6 +175,7 @@ it("does not execute when a view finishes beyond the request deadline", async ()
   expect(google.labelRequests).toEqual([]);
 });
 it("does not execute when the decision response arrives after the request deadline", async () => {
+  const run = vi.spyOn(tool, "run");
   const f = await fixture();
   await setting(f, "ask");
   const id = await ask(f);
@@ -191,6 +192,7 @@ it("does not execute when the decision response arrives after the request deadli
     (await decided(await post(f, id, "approve", { digest: d }, testEnv({ DB: db })))).state.kind,
   ).toBe("unknown");
   expect(google.labelRequests).toEqual([]);
+  expect(run).not.toHaveBeenCalled();
   expect((await callRows())[0]!.outcome).toBeNull();
 });
 it("leaves a server failure during execution unknown with no pending audit outcome", async () => {
@@ -214,4 +216,137 @@ it("leaves the outcome unsettled when its persistence fails and later settles un
   expect(await row(id)).toMatchObject({ outcome: null, arguments: null });
   vi.spyOn(Date, "now").mockReturnValue(NOW + 30_000);
   expect(await get(f, id)).toEqual({ status: "unknown" });
+});
+
+it("does not let a stalled loser's deadline finish the winner's running call", async () => {
+  const f = await fixture();
+  await setting(f, "ask");
+  const id = await ask(f);
+  const d = await digest(f, id);
+  const stalled = deferred(),
+    resume = deferred(),
+    entered = deferred(),
+    release = deferred();
+  let held = false;
+  const writes: string[] = [];
+  const db = observeStatements(env.DB, async (sql) => {
+    if (/UPDATE approvals SET outcome = \?5/.test(sql)) writes.push(sql);
+    if (!held && sql.startsWith("UPDATE calls") && sql.includes("'expired'")) {
+      held = true;
+      stalled.resolve();
+      await resume.promise;
+    }
+  });
+  google.labelAnswers.push(async () => {
+    entered.resolve();
+    await release.promise;
+    return Response.json(LABELS_RESPONSE);
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const loser = post(f, id, "approve", { digest: d }, testEnv({ DB: db }));
+  await stalled.promise;
+  vi.spyOn(Date, "now").mockReturnValue(NOW + 20_000);
+  await vi.advanceTimersByTimeAsync(20_000);
+  const winner = post(f, id, "approve", { digest: d });
+  await entered.promise;
+  try {
+    vi.spyOn(Date, "now").mockReturnValue(NOW + 25_000);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await loser).status).toBe(503);
+    expect(writes).toEqual([]);
+    expect((await row(id))!.outcome).toBeNull();
+  } finally {
+    resume.resolve();
+    release.resolve();
+  }
+  expect((await decided(await winner)).state.kind).toBe("succeeded");
+  expect((await row(id))!.result).not.toBeNull();
+  expect((await callRows())[0]!.outcome).toBe("success");
+  expect(await get(f, id)).toHaveProperty("result.labels");
+});
+
+it("uses arrival plus twenty-five seconds even when reading the form consumes twenty-three seconds", async () => {
+  const f = await fixture();
+  await setting(f, "ask");
+  const id = await ask(f);
+  const d = await digest(f, id);
+  const formData = Reflect.get(Request.prototype, "formData") as (
+    this: Request,
+  ) => Promise<FormData>;
+  vi.spyOn(Request.prototype, "formData").mockImplementationOnce(async function (this: Request) {
+    const result = await formData.call(this);
+    vi.spyOn(Date, "now").mockReturnValue(NOW + 23_000);
+    return result;
+  });
+  const entered = deferred(),
+    release = deferred();
+  let held = false;
+  const db = observeStatements(env.DB, async (sql) => {
+    if (!held && sql.startsWith("UPDATE calls") && sql.includes("'expired'")) {
+      held = true;
+      entered.resolve();
+      await release.promise;
+    }
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let finished = false;
+  const response = post(f, id, "approve", { digest: d }, testEnv({ DB: db })).then((r) => {
+    finished = true;
+    return r;
+  });
+  await entered.promise;
+  try {
+    vi.spyOn(Date, "now").mockReturnValue(NOW + 24_999);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(finished).toBe(false);
+    vi.spyOn(Date, "now").mockReturnValue(NOW + 25_000);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(finished).toBe(true);
+    expect((await response).status).toBe(503);
+  } finally {
+    release.resolve();
+  }
+  await vi.advanceTimersByTimeAsync(1);
+  expect(google.labelRequests).toEqual([]);
+  expect((await row(id))!.state).toBe("waiting");
+});
+
+it("gives credentials only to the winner when both requests reach the decision batch together", async () => {
+  const f = await fixture();
+  await setting(f, "ask");
+  const id = await ask(f);
+  const d = await digest(f, id);
+  const together = deferred(),
+    release = deferred();
+  let arrivals = 0;
+  // Capture all decision results, including the losing batch's empty credential selection.
+  const store = await import("../src/approvals/store");
+  const original = store.decideApproval;
+  const decisions: { won: boolean; credentials: unknown[] }[] = [];
+  vi.spyOn(store, "decideApproval").mockImplementation((ctx, input) =>
+    original(ctx, input).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          decisions.push(result);
+        }),
+      ),
+    ),
+  );
+  const heldDb = observeStatements(env.DB, async (sql) => {
+    if (sql.startsWith("UPDATE approvals SET state = 'approved'")) {
+      if (++arrivals === 2) together.resolve();
+      await release.promise;
+    }
+  });
+  const first = post(f, id, "approve", { digest: d }, testEnv({ DB: heldDb }));
+  const second = post(f, id, "approve", { digest: d }, testEnv({ DB: heldDb }));
+  await together.promise;
+  release.resolve();
+  await Promise.all([first, second]);
+  expect(decisions).toHaveLength(2);
+  expect(decisions.map((r) => r.won).sort((a, b) => Number(a) - Number(b))).toEqual([false, true]);
+  expect(decisions.find((r) => !r.won)!.credentials).toEqual([]);
+  expect(decisions.find((r) => r.won)!.credentials).toHaveLength(1);
+  expect(google.labelRequests).toHaveLength(1);
+  expect(await get(f, id)).toHaveProperty("result.labels");
 });

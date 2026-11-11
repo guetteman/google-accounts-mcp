@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import type { ApprovalPageProps } from "../../src/approvals/model";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
@@ -14,11 +13,13 @@ export async function hydrateAccounts(input: {
   approval?: {
     action: "approve" | "reject";
     response: ApprovalPageProps;
+    protection?: "double" | "identity" | "digest";
+    nextResponse?: ApprovalPageProps;
     failure?: "lost" | "503";
   };
   width?: number;
   dark?: boolean;
-  screenshot?: string;
+  layout?: boolean;
 }) {
   const bundle = await build({
     configFile: false,
@@ -73,7 +74,14 @@ export async function hydrateAccounts(input: {
           status: input.approval.failure === "503" ? 503 : 200,
           contentType: "application/json",
           body: JSON.stringify(
-            input.approval.failure ? { outcome: "unknown" } : { approval: input.approval.response },
+            input.approval.failure
+              ? { outcome: "unknown" }
+              : {
+                  approval:
+                    submissions.length > 1 && input.approval.nextResponse
+                      ? input.approval.nextResponse
+                      : input.approval.response,
+                },
           ),
         });
       }
@@ -112,12 +120,22 @@ export async function hydrateAccounts(input: {
           return { x: r.x, y: r.y, width: r.width, height: r.height };
         }),
       );
-      await page
-        .getByRole("button", {
-          name: input.approval.action === "approve" ? "Approve" : "Reject",
-          exact: true,
-        })
-        .click();
+      const actionButton = page.getByRole("button", {
+        name: input.approval.action === "approve" ? "Approve" : "Reject",
+        exact: true,
+      });
+      if (input.approval.protection === "double") {
+        await actionButton.evaluate((button) => {
+          (button as HTMLButtonElement).click();
+          (button as HTMLButtonElement).click();
+        });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+            ),
+        );
+      } else await actionButton.click();
       const busyButton = page.getByRole("button", {
         name: input.approval.action === "approve" ? "Approving…" : "Reject",
         exact: true,
@@ -138,7 +156,12 @@ export async function hydrateAccounts(input: {
         ),
       };
       releaseDecision();
-      if (input.approval.failure)
+      if (input.approval.protection === "identity")
+        await page
+          .getByRole("link", { name: "Reload", exact: true })
+          .or(page.getByRole("heading", { name: "Approved. The call succeeded.", exact: true }))
+          .waitFor();
+      else if (input.approval.failure)
         await page.getByRole("link", { name: "Reload", exact: true }).waitFor();
       else if (input.approval.response.state.kind === "waiting")
         await page.getByText("Nothing ran. The request changed.", { exact: true }).waitFor();
@@ -153,6 +176,12 @@ export async function hydrateAccounts(input: {
             exact: true,
           })
           .waitFor();
+      if (input.approval.protection === "digest") {
+        await page.getByRole("button", { name: "Approve", exact: true }).click();
+        await page
+          .getByRole("heading", { name: "Approved. The call succeeded.", exact: true })
+          .waitFor();
+      }
       return {
         clientLoads,
         submissions,
@@ -164,10 +193,8 @@ export async function hydrateAccounts(input: {
         ),
       };
     }
-    if (input.screenshot) {
+    if (input.layout) {
       await page.evaluate(() => document.fonts.ready);
-      await mkdir(".work/evidence", { recursive: true });
-      await page.screenshot({ path: `.work/evidence/${input.screenshot}.png`, fullPage: true });
       return {
         clientLoads,
         overflow: await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),

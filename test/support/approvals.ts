@@ -65,3 +65,11 @@ export const approve = async (f: Fixture, id: string, workerEnv = testEnv()) =>
   post(f, id, "approve", { digest: await digest(f, id) }, workerEnv).then(decided);
 export const get = (f: Fixture, id: string, workerEnv = testEnv()) =>
   toolCall(f.mcp, "get_approval", { approval: id }, workerEnv).then(answer);
+
+export async function winningClaim(id: string) {
+  const stored = await env.DB.prepare("SELECT id, claim, decided_at FROM approvals WHERE id = ?")
+    .bind(id)
+    .first<{ id: ApprovalRow["id"]; claim: string; decided_at: number }>();
+  expect(stored?.claim).toEqual(expect.any(String));
+  return { id: stored!.id, claim: stored!.claim, at: stored!.decided_at };
+}

@@ -102,6 +102,17 @@ const expireStatements = (
       .bind(...values),
   ];
 };
+const unknownStatement = (
+  db: D1Database,
+  where: string,
+  now: string,
+  values: (string | number | null)[],
+) =>
+  db
+    .prepare(
+      `UPDATE approvals SET outcome = 'unknown' WHERE ${where} AND state = 'approved' AND outcome IS NULL AND decided_at + 30000 <= ${now}`,
+    )
+    .bind(...values);
 export const readApproval = (
   ctx: ApprovalContext,
   id: ApprovalId,
@@ -114,11 +125,7 @@ export const readApproval = (
       const values = [id, ctx.owner.generation, ctx.owner.email, now, connection ?? null];
       const batch = await ctx.db.batch([
         ...expireStatements(ctx.db, where, "?4", values),
-        ctx.db
-          .prepare(
-            `UPDATE approvals SET outcome = 'unknown' WHERE ${where} AND state = 'approved' AND outcome IS NULL AND decided_at + 30000 <= ?4`,
-          )
-          .bind(...values),
+        unknownStatement(ctx.db, where, "?4", values),
         ctx.db
           .prepare(`SELECT approvals.id, approvals.generation, connection_id, call_id, tool, uses, created_at, expires_at, state, ended_by, decided_at, outcome, arguments, purged,
           CASE WHEN purged = 0 AND decided_at + ${HOUR} > ?4 AND ${rowUsable("?4", "?3")} THEN result ELSE NULL END AS result,
@@ -190,7 +197,7 @@ export const decideApproval = (ctx: ApprovalContext, input: Decision) =>
   });
 export const finishApproval = (
   ctx: ApprovalContext,
-  id: ApprovalId,
+  decision: Pick<Decision, "id" | "at" | "claim">,
   now: number,
   outcome: "success" | "failed" | "unknown",
   auditOutcome: Outcome | null,
@@ -204,13 +211,31 @@ export const finishApproval = (
           .prepare(`UPDATE approvals SET outcome = ?5,
       result = CASE WHEN purged = 0 AND ${rowUsable("?4", "?3")} THEN ?6 ELSE NULL END,
       result_too_large = CASE WHEN purged = 0 AND ${rowUsable("?4", "?3")} THEN ?7 ELSE 0 END
-      WHERE id = ?1 AND ${ownerGuard("?2", "?3")} AND state = 'approved' AND outcome IS NULL AND ?4 < decided_at + 30000`)
-          .bind(id, ctx.owner.generation, ctx.owner.email, now, outcome, result, Number(tooLarge)),
+      WHERE id = ?1 AND ${ownerGuard("?2", "?3")} AND state = 'approved' AND outcome IS NULL AND ?4 < decided_at + 30000 AND claim = ?8 AND decided_at = ?9`)
+          .bind(
+            decision.id,
+            ctx.owner.generation,
+            ctx.owner.email,
+            now,
+            outcome,
+            result,
+            Number(tooLarge),
+            decision.claim,
+            decision.at,
+          ),
         audit(
           ctx.db,
-          `approvals.id = ?1 AND ${ownerGuard("?2", "?3")} AND approvals.state = 'approved' AND approvals.outcome = ?5`,
+          `approvals.id = ?1 AND ${ownerGuard("?2", "?3")} AND approvals.state = 'approved' AND approvals.outcome = ?5 AND claim = ?6 AND decided_at = ?7`,
           "?4",
-          [id, ctx.owner.generation, ctx.owner.email, auditOutcome, outcome],
+          [
+            decision.id,
+            ctx.owner.generation,
+            ctx.owner.email,
+            auditOutcome,
+            outcome,
+            decision.claim,
+            decision.at,
+          ],
           "calls.outcome IS NULL",
         ),
       ]),
@@ -254,6 +279,7 @@ export const cleanupApprovals = (ctx: ApprovalContext, now: number) =>
       const values = [ctx.owner.generation, ctx.owner.email, now];
       return ctx.db.batch([
         ...expireStatements(ctx.db, where, "?3", values),
+        unknownStatement(ctx.db, where, "?3", values),
         ctx.db
           .prepare(
             `UPDATE approvals SET result = NULL WHERE ${where} AND result IS NOT NULL AND decided_at <= ?3 - ${HOUR}`,

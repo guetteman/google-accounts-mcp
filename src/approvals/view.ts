@@ -82,7 +82,7 @@ export async function approvalView(row: ApprovalRow, key: TokenKey, now: number,
   };
   let decoded: { readonly account: string } | null = null;
   let digest: string | null = null;
-  if (row.state === "waiting" && row.arguments) {
+  if (row.state === "waiting" && row.arguments && JSON.parse(row.uses).length === 1) {
     try {
       const opened = await open(key, `${row.id}:arguments`, row.arguments);
       if (opened.ok) {
