@@ -1,6 +1,6 @@
 import type { AccountId } from "../accounts/model";
 import type { ConnectionId, App } from "../connections/model";
-import type { Generation } from "../owner/owner";
+import type { WonBrand } from "./store";
 import type { AccountTool } from "../mcp/tools";
 import type { Sealed } from "../seal";
 
@@ -10,39 +10,54 @@ export const parseApprovalId = (value: unknown): ApprovalId | null =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
     ? (value as ApprovalId)
     : null;
-export const HOUR = 3_600_000;
+export const APPROVAL_LIFETIME = 3_600_000;
+export const RESULT_LIFETIME = 3_600_000;
+export const RUN_DEADLINE = 25_000;
+export const OUTCOME_WINDOW = 30_000;
+export const WAITING_LIMIT = 20;
 export interface Use {
   account: AccountId;
   tool: AccountTool;
 }
-export interface SnapshotAccount {
+export interface ApprovalAccount {
   id: AccountId;
   name: string;
   email: string;
   hd: string | null;
-  version: number;
 }
-export interface ApprovalRow {
+interface Common {
   id: ApprovalId;
-  generation: Generation;
-  connection_id: ConnectionId;
-  call_id: number;
+  connection: { id: ConnectionId; name: string; app: App };
+  accounts: readonly ApprovalAccount[];
+  uses: readonly Use[];
   tool: AccountTool;
-  uses: string;
-  created_at: number;
-  expires_at: number;
-  state: "waiting" | "approved" | "rejected" | "expired" | "refused";
-  ended_by: "tool" | "connection" | "account" | null;
-  decided_at: number | null;
-  outcome: "success" | "failed" | "unknown" | null;
-  arguments: Sealed | null;
-  result: Sealed | null;
-  result_too_large: number;
-  purged: number;
-  connection_name: string;
-  app: App;
-  accounts: string;
+  call: number;
+  createdAt: number;
+  expiresAt: number;
 }
+export type Approval = Common &
+  (
+    | { state: "waiting"; arguments: Sealed }
+    | { state: "running"; decidedAt: number }
+    | {
+        state: "finished";
+        decidedAt: number;
+        outcome: "success" | "failed" | "unknown";
+        result: Sealed | null;
+      }
+    | { state: "rejected"; decidedAt: number }
+    | { state: "expired" }
+    | { state: "refused"; endedBy: "tool" | "connection" | "account" }
+  );
+export type Won = {
+  readonly id: ApprovalId;
+  readonly at: number;
+  readonly claim: string;
+} & WonBrand;
+export type Target =
+  | { connection: ConnectionId }
+  | { account: AccountId }
+  | { connection: ConnectionId; account: AccountId; tool: AccountTool };
 export interface ApprovalRequest {
   connection: { id: string; name: string; app: string };
   account: { name: string; email: string; workspace: boolean };

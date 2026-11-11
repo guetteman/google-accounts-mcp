@@ -107,9 +107,7 @@ it.each([
         decideApproval(ctx, {
           id: stored.id,
           at: NOW,
-          claim: crypto.randomUUID(),
           action: "approve",
-          snapshot: { connection: stored.connection_name, accounts: JSON.parse(stored.accounts) },
         }),
       );
       if (state === "unknown") vi.spyOn(Date, "now").mockReturnValue(NOW + 30_000);

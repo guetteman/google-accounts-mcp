@@ -6,14 +6,15 @@ import {
   cleanupApprovals,
   decideApproval,
   finishApproval,
-  purgeApprovals,
+  endApprovals,
 } from "../src/approvals/store";
-import { parseApprovalId, type SnapshotAccount } from "../src/approvals/model";
+import { parseConnectionId } from "../src/connections/model";
+import { parseApprovalId } from "../src/approvals/model";
 import { readOwner } from "../src/owner/owner";
 import { NOW } from "./support/accounts";
 import { observeStatements } from "./support/db";
 import { fixture } from "./support/permissions";
-import { ask, approve, page, post, setting, winningClaim } from "./support/approvals";
+import { ask, approve, page, post, setting, observeDecisions } from "./support/approvals";
 import { testEnv } from "./support/worker";
 
 const context = async (db = env.DB) => {
@@ -38,19 +39,12 @@ it("looks up calls by primary key in every approval audit statement", async () =
   const id = await ask(f, undefined, workerEnv);
   operation = "settle";
   await page(f, id, workerEnv);
+  const winningClaim = observeDecisions();
   operation = "decide";
   await approve(f, id, workerEnv);
   operation = "finish";
   await Effect.runPromise(
-    finishApproval(
-      await context(db),
-      await winningClaim(id),
-      NOW,
-      "success",
-      "success",
-      null,
-      false,
-    ),
+    finishApproval(await context(db), await winningClaim(id), NOW, "success", "success", null),
   );
   const rejected = await ask(f);
   operation = "reject";
@@ -110,23 +104,16 @@ it("changes no rows when scheduled cleanup runs again after cleaning everything"
   expect(index?.sql).toMatch(/ON approvals\(decided_at\) WHERE result IS NOT NULL/);
 });
 
-it("does not rewrite already purged approvals", async () => {
+it("deletes stored text once and does not rewrite clean approvals", async () => {
   const f = await fixture();
   await setting(f, "ask");
+  const completed = await ask(f);
+  await approve(f, completed);
   await ask(f);
   const ctx = await context();
   const purge = () =>
     env.DB.batch(
-      purgeApprovals(env.DB, {
-        where: "approvals.connection_id = ?1",
-        guard:
-          "EXISTS (SELECT 1 FROM connections c WHERE c.id = approvals.connection_id AND c.expires_at > ?4)",
-        generation: "?2",
-        email: "?3",
-        now: "?4",
-        by: "tool",
-        values: [f.connection.id, ctx.owner.generation, ctx.owner.email, NOW],
-      }),
+      endApprovals(env.DB, ctx.owner, { connection: parseConnectionId(f.connection.id)! }, NOW),
     );
   expect((await purge()).map((result) => result.meta.changes)).toEqual([0, 0, 1, 1, 1]);
   expect((await purge()).map((result) => result.meta.changes)).toEqual([0, 0, 0, 0, 0]);
@@ -136,24 +123,15 @@ it("reads only the credential and account-view columns for the winning decision"
   const f = await fixture();
   await setting(f, "ask");
   const id = parseApprovalId(await ask(f))!;
-  const account = await env.DB.prepare(
-    "SELECT id, name, email, hd, version FROM accounts WHERE id = ?",
-  )
-    .bind(f.personal.id)
-    .first<SnapshotAccount>();
-  const name = await env.DB.prepare("SELECT name FROM connections WHERE id = ?")
-    .bind(f.connection.id)
-    .first<string>("name");
   const decision = await Effect.runPromise(
     decideApproval(await context(), {
       id,
       at: NOW,
-      claim: crypto.randomUUID(),
       action: "approve",
-      snapshot: { connection: name!, accounts: [account!] },
     }),
   );
-  expect(decision.won).toBe(true);
+  expect(decision.won !== null).toBe(true);
+  if (!decision.won) throw new Error("Expected a winning decision");
   expect(decision.credentials).toHaveLength(1);
   expect(Object.keys(decision.credentials[0]!).sort()).toEqual(
     [

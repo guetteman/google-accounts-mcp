@@ -10,14 +10,14 @@ import {
   finishApproval,
   readApproval,
 } from "../src/approvals/store";
-import { parseApprovalId } from "../src/approvals/model";
+import { RUN_DEADLINE, OUTCOME_WINDOW, parseApprovalId } from "../src/approvals/model";
 import { readOwner } from "../src/owner/owner";
 import { seal } from "../src/seal";
 import { readConfig } from "../src/config";
 import { Result } from "effect";
 import { NOW } from "./support/accounts";
 import { fixture, callRows, toolCall, PERSONAL, expectError } from "./support/permissions";
-import { ask, approve, page, post, get, row, setting, winningClaim } from "./support/approvals";
+import { ask, page, post, get, row, setting } from "./support/approvals";
 import { testEnv } from "./support/worker";
 import { McpClient, rpcResult } from "./support/oauth";
 import { google } from "./support/google";
@@ -28,16 +28,12 @@ const context = async () => {
 };
 const claim = async (id: string) => {
   const ctx = await context();
-  const stored = (await Effect.runPromise(readApproval(ctx, parseApprovalId(id)!, NOW)))!;
-  const decision = {
-    id: stored.id,
-    at: NOW,
-    claim: crypto.randomUUID(),
-    action: "approve" as const,
-    snapshot: { connection: stored.connection_name, accounts: JSON.parse(stored.accounts) },
-  };
-  expect((await Effect.runPromise(decideApproval(ctx, decision))).won).toBe(true);
-  return decision;
+  const result = await Effect.runPromise(
+    decideApproval(ctx, { id: parseApprovalId(id)!, at: NOW, action: "approve" }),
+  );
+  expect(result.won !== null).toBe(true);
+  if (!result.won) throw new Error("Expected a winning decision");
+  return result.won;
 };
 
 it("expires waiting approvals through the Worker's scheduled export", async () => {
@@ -135,7 +131,6 @@ it.each(["tool", "connection", "account"])(
       const stored = (await row(entry.id))!;
       expect(stored).toMatchObject({
         state: affected ? "refused" : "waiting",
-        purged: affected ? 1 : 0,
       });
       expect(audit.find((call) => call.id === stored.call_id)!.outcome).toBe(
         affected ? "refused" : "pending",
@@ -154,30 +149,9 @@ it("does not let a different claim or decision time finish the winner's call", a
     { ...winner, claim: crypto.randomUUID() },
     { ...winner, at: NOW + 1 },
   ]) {
-    await Effect.runPromise(
-      finishApproval(ctx, impostor, NOW + 1000, "unknown", null, null, false),
-    );
+    await Effect.runPromise(finishApproval(ctx, impostor, NOW + 1000, "unknown", null, null));
     expect((await row(id))!.outcome).toBeNull();
   }
-});
-
-it("withholds the too-large marker after retention, lost access, or purging", async () => {
-  const f = await fixture();
-  await setting(f, "ask");
-  const id = await ask(f);
-  google.labelAnswers.push(() =>
-    Response.json({ labels: [{ id: "big", name: "x".repeat(1_000_001), type: "user" }] }),
-  );
-  await approve(f, id);
-  expect(await get(f, id)).toHaveProperty("message");
-  const ctx = await context();
-  const read = (at = NOW) => Effect.runPromise(readApproval(ctx, parseApprovalId(id)!, at));
-  expect((await read(NOW + 3_600_000))!.result_too_large).toBe(0);
-  await env.DB.prepare("DELETE FROM permissions WHERE account_id = ?").bind(f.personal.id).run();
-  expect(await get(f, id)).toEqual({ status: "success" });
-  await setting(f, "ask");
-  await env.DB.prepare("UPDATE approvals SET purged = 1 WHERE id = ?").bind(id).run();
-  expect(await get(f, id)).toEqual({ status: "success" });
 });
 
 it.each(["settle", "decide", "finish", "purge", "cron"])(
@@ -187,7 +161,7 @@ it.each(["settle", "decide", "finish", "purge", "cron"])(
     await setting(f, "ask");
     const id = await ask(f);
     const ctx = await context();
-    if (operation === "finish") await claim(id);
+    const winner = operation === "finish" ? await claim(id) : null;
     const stored = (await row(id))!;
     const other = await new McpClient().connect("Other audit owner");
     await rpcResult(await toolCall(other, "list_accounts"));
@@ -204,10 +178,8 @@ it.each(["settle", "decide", "finish", "purge", "cron"])(
       else await Effect.runPromise(cleanupApprovals(ctx, NOW));
     } else if (operation === "decide") await post(f, id, "reject");
     else if (operation === "purge") await setting(f, "deny");
-    else
-      await Effect.runPromise(
-        finishApproval(ctx, await winningClaim(id), NOW, "success", "success", null, false),
-      );
+    else if (winner)
+      await Effect.runPromise(finishApproval(ctx, winner, NOW, "success", "success", null));
     expect((await callRows()).find((call) => call.id === stored.call_id)!.outcome).toBe(
       operation === "finish" ? null : "pending",
     );
@@ -266,4 +238,37 @@ it("explains oversized arguments without misreporting their schema", async () =>
     "invalid_arguments",
     /^The arguments are too large\. The limit is 256 KB\.$/,
   );
+});
+
+it("requires a decision-issued Won to finish an approval at compile time", async () => {
+  const ctx = await context();
+  const handBuilt = {
+    id: parseApprovalId(crypto.randomUUID())!,
+    at: NOW,
+    claim: crypto.randomUUID(),
+  };
+  // @ts-expect-error Only decideApproval can issue the private Won brand.
+  const write = finishApproval(ctx, handBuilt, NOW, "success", "success", null);
+  expect(Effect.isEffect(write)).toBe(true);
+});
+it("keeps the run deadline inside the outcome window", () => {
+  expect(RUN_DEADLINE).toBeLessThan(OUTCOME_WINDOW);
+});
+
+it("fails closed when an approval row cannot be decoded", async () => {
+  const f = await fixture();
+  await setting(f, "ask");
+  const id = await ask(f);
+  await env.DB.prepare("UPDATE approvals SET tool = 'not_a_tool' WHERE id = ?").bind(id).run();
+  const read = await Effect.runPromise(
+    Effect.result(readApproval(await context(), parseApprovalId(id)!, NOW)),
+  );
+  expect(Result.isFailure(read) && read.failure._tag).toBe("WriteUncertain");
+  expect((await f.mcp.browser.get(`/approvals/${id}`)).status).toBe(503);
+  await expectError(
+    await toolCall(f.mcp, "get_approval", { approval: id }),
+    "server_unavailable",
+    /^The server could not complete the call\. Try again later\.$/,
+  );
+  expect(google.labelRequests).toEqual([]);
 });

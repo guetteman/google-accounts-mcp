@@ -27,7 +27,7 @@ import {
   row,
   rows,
   setting,
-  winningClaim,
+  observeDecisions,
 } from "./support/approvals";
 import { OWNER_EMAIL, testEnv } from "./support/worker";
 import { McpClient } from "./support/oauth";
@@ -62,19 +62,16 @@ it.each(["tool", "connection", "account"])(
       state: "refused",
       ended_by: by,
       arguments: null,
-      purged: 1,
     });
     expect(await row(expired)).toMatchObject({
       state: "expired",
       ended_by: null,
       arguments: null,
-      purged: 1,
     });
     expect(await row(completed)).toMatchObject({
       state: "approved",
       outcome: "success",
       result: null,
-      purged: 1,
     });
     const calls = await callRows();
     for (const [id, outcome] of [
@@ -99,7 +96,7 @@ it.each(["tool", "connection", "account"])(
     const id = await ask(f);
     const before = await row(id);
     await env.DB.prepare(
-      "CREATE TRIGGER fail_purge BEFORE UPDATE OF purged ON approvals WHEN NEW.purged = 1 BEGIN SELECT RAISE(ABORT, 'test rollback'); END",
+      "CREATE TRIGGER fail_purge BEFORE UPDATE OF arguments ON approvals WHEN OLD.arguments IS NOT NULL AND NEW.arguments IS NULL BEGIN SELECT RAISE(ABORT, 'test rollback'); END",
     ).run();
     const path =
       by === "tool"
@@ -129,7 +126,7 @@ it.each(["tool", "connection", "account"])(
     ).toEqual({ ask: 1 });
   },
 );
-it("never restores a purged result when deny then ask happen during an approved run", async () => {
+it("stores the result when deny then ask restore access before an approved run ends", async () => {
   const f = await fixture();
   await setting(f, "ask");
   const id = await ask(f);
@@ -147,8 +144,14 @@ it("never restores a purged result when deny then ask happen during an approved 
   await setting(f, "ask");
   release.resolve();
   expect((await decided(await running)).state.kind).toBe("succeeded");
-  expect(await get(f, id)).toEqual({ status: "success" });
-  expect(await row(id)).toMatchObject({ purged: 1, result: null, outcome: "success" });
+  expect(await get(f, id)).toEqual({
+    status: "success",
+    result: {
+      account: f.personal.email,
+      labels: LABELS_RESPONSE.labels.map(({ id, name, type }) => ({ id, name, type })),
+    },
+  });
+  expect(await row(id)).toMatchObject({ result: expect.any(String), outcome: "success" });
   expect((await callRows()).find((call) => call.tool === "list_labels")!.outcome).toBe("success");
 });
 it.each(["connection", "account"])(
@@ -170,7 +173,7 @@ it.each(["connection", "account"])(
     await end(f, by);
     release.resolve();
     expect((await decided(await running)).state.kind).toBe("succeeded");
-    expect(await row(id)).toMatchObject({ purged: 1, result: null, outcome: "success" });
+    expect(await row(id)).toMatchObject({ result: null, outcome: "success" });
     expect((await callRows())[0]!.outcome).toBe("success");
   },
 );
@@ -209,20 +212,7 @@ it("returns failed as a non-error status with the normal tool error and audit ou
   expect((await page(f, id)).state).toEqual({ kind: "failed", message: null });
   expect(await get(f, id)).toEqual({ status: "failed" });
 });
-it("reports success with a useful message when the JSON result exceeds one million bytes", async () => {
-  const f = await fixture();
-  await setting(f, "ask");
-  const id = await ask(f);
-  google.labelAnswers.push(() =>
-    Response.json({ labels: [{ id: "large", name: "x".repeat(1_000_001), type: "user" }] }),
-  );
-  expect((await approve(f, id)).state.kind).toBe("succeeded");
-  expect(await row(id)).toMatchObject({ outcome: "success", result: null, result_too_large: 1 });
-  expect(await get(f, id)).toEqual({
-    status: "success",
-    message: "The call succeeded, but its result was too large for the server to keep.",
-  });
-});
+
 it("uses the read statement to withhold results after one hour and when any used setting is absent", async () => {
   const f = await fixture();
   await setting(f, "ask");
@@ -267,16 +257,18 @@ it("checks every used account in the decision batch", async () => {
       decideApproval(ctx, {
         id: stored.id,
         at: NOW,
-        claim: crypto.randomUUID(),
         action: "approve",
-        snapshot: { connection: stored.connection_name, accounts: JSON.parse(stored.accounts) },
       }),
     );
-  expect(await decide()).toEqual({ won: false, credentials: [] });
+  const denied = await decide();
+  expect({ won: denied.won !== null, credentials: denied.credentials ?? [] }).toEqual({
+    won: false,
+    credentials: [],
+  });
   expect(google.labelRequests).toEqual([]);
   await setting(f, "allow", f.northwind);
   const allowed = await decide();
-  expect(allowed.won).toBe(true);
+  expect(allowed.won !== null).toBe(true);
   expect(allowed.credentials).toHaveLength(2);
 });
 it.each(["page", "get_approval"])(
@@ -327,13 +319,11 @@ it("limits the outcome batch to thirty seconds even without a settling read", as
   const f = await fixture();
   await setting(f, "ask");
   const id = await ask(f);
-  const db = observeStatements(
-    env.DB,
-    () => {},
-    (sql) => {
-      if (/UPDATE approvals SET state = 'approved'/.test(sql)) throw new Error("lost");
-    },
-  );
+  const winningClaim = observeDecisions();
+  // Keep the genuine Won even though the route cannot confirm the outcome write.
+  const db = observeStatements(env.DB, (sql) => {
+    if (sql.startsWith("UPDATE approvals SET outcome = ?5")) throw new Error("lost");
+  });
   expect(
     (await post(f, id, "approve", { digest: await digest(f, id) }, testEnv({ DB: db }))).status,
   ).toBe(503);
@@ -345,7 +335,6 @@ it("limits the outcome batch to thirty seconds even without a settling read", as
       "success",
       "success",
       null,
-      false,
     ),
   );
   expect(await row(id)).toMatchObject({ outcome: null });
@@ -453,7 +442,7 @@ it("audits missing and non-string get_approval inputs as the same refusal", asyn
   expect((await callRows()).map((row) => row.outcome)).toEqual(Array(5).fill("refused"));
 });
 
-it("stores no result when the connection expires during an approved run without being purged", async () => {
+it("stores no result when the connection expires during an approved run without an owner change", async () => {
   const f = await fixture();
   await setting(f, "ask");
   const id = await ask(f);
@@ -472,7 +461,7 @@ it("stores no result when the connection expires during an approved run without 
     .run();
   release.resolve();
   expect((await decided(await running)).state.kind).toBe("succeeded");
-  expect(await row(id)).toMatchObject({ outcome: "success", result: null, purged: 0 });
+  expect(await row(id)).toMatchObject({ outcome: "success", result: null });
   expect((await callRows())[0]!.outcome).toBe("success");
   expect((await toolCall(f.mcp, "get_approval", { approval: id })).status).toBe(401);
   // Even if the connection becomes usable again, the result was never retained.

@@ -4,8 +4,8 @@ ALTER TABLE permissions ADD COLUMN ask INTEGER NOT NULL DEFAULT 0 CHECK (ask IN 
 -- A stored call that waits for the owner. uses is a JSON array of {"account","tool"}: every
 -- setting the call uses, by the server's account ID. arguments and result are sealed with
 -- TOKEN_KEY and bound to this row's ID; both are deleted on a fixed schedule, and the row
--- without its text stays as long as its audit record. purged means a change of the owner's
--- settings deleted this row's text, and no result may be stored for it afterwards.
+-- without its text stays as long as its audit record. An owner's change deletes the text
+-- on its target; results are stored only while access holds at the outcome write.
 -- No foreign keys: reset needs no deletion order, and rows outlive removed accounts.
 CREATE TABLE approvals (
   id TEXT PRIMARY KEY NOT NULL,
@@ -24,13 +24,11 @@ CREATE TABLE approvals (
   outcome TEXT CHECK (outcome IN ('success', 'failed', 'unknown')),
   arguments TEXT,
   result TEXT,
-  result_too_large INTEGER NOT NULL DEFAULT 0 CHECK (result_too_large IN (0, 1)),
-  purged INTEGER NOT NULL DEFAULT 0 CHECK (purged IN (0, 1)),
   CHECK ((state = 'refused') = (ended_by IS NOT NULL)),
   CHECK ((state IN ('approved', 'rejected')) = (decided_at IS NOT NULL)),
   CHECK (outcome IS NULL OR state = 'approved'),
-  CHECK (arguments IS NULL OR state = 'waiting'),
-  CHECK (result IS NULL OR (outcome IS NOT NULL AND purged = 0))
+  CHECK ((state = 'waiting') = (arguments IS NOT NULL)),
+  CHECK (result IS NULL OR outcome IS NOT NULL)
 ) STRICT;
 CREATE INDEX approvals_waiting ON approvals(connection_id, expires_at) WHERE state = 'waiting';
 CREATE INDEX approvals_results ON approvals(decided_at) WHERE result IS NOT NULL;

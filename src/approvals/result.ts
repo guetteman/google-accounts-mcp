@@ -1,8 +1,9 @@
 import { Effect } from "effect";
-import { ToolFailure, type CallContext } from "../mcp/call";
+import { type CallContext } from "../mcp/call";
+import { ToolFailure } from "../mcp/failures";
 import { parseApprovalId, isoSeconds } from "./model";
 import { readApproval } from "./store";
-import { storedPayload } from "./view";
+import { openResult } from "./text";
 export const PENDING_MESSAGE =
   "The owner must approve this call before it runs. Give the owner this link in your reply and end your turn. After the owner tells you that they decided, call get_approval with this approval ID.";
 export const pendingAnswer = (origin: string, id: string, expires: number) => ({
@@ -25,30 +26,26 @@ export const getApproval = (ctx: CallContext, args: Record<string, unknown> | un
         return {
           status: "pending",
           url: `${ctx.origin}/approvals/${id}`,
-          expires_at: isoSeconds(row.expires_at),
+          expires_at: isoSeconds(row.expiresAt),
           message:
             "The owner has not decided yet. Give the owner this link in your reply and end your turn.",
         };
-      case "approved": {
-        if (row.outcome === null)
-          return {
-            status: "running",
-            message:
-              "The owner approved the call and it is still running. Call get_approval again in a few seconds.",
-          };
-        const payload = yield* Effect.tryPromise({
-          try: () => storedPayload(row, ctx.config.tokenKey),
-          catch: () => new ToolFailure({ code: "server_unavailable" }),
-        });
+      case "running":
         return {
-          status: row.outcome,
-          ...payload,
-          ...(row.result_too_large && row.outcome === "success"
-            ? {
-                message: "The call succeeded, but its result was too large for the server to keep.",
-              }
-            : {}),
+          status: "running",
+          message:
+            "The owner approved the call and it is still running. Call get_approval again in a few seconds.",
         };
+      case "finished": {
+        const result = row.result;
+        const payload =
+          result === null
+            ? null
+            : yield* Effect.tryPromise({
+                try: () => openResult(ctx.config.tokenKey, id, result),
+                catch: () => new ToolFailure({ code: "server_unavailable" }),
+              });
+        return { status: row.outcome, ...payload };
       }
       case "refused":
         return {

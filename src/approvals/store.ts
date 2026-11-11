@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { Unavailable, WriteUncertain } from "../db";
 import type { Owner } from "../owner/owner";
 import { allowedAccountColumns } from "../accounts/store";
@@ -8,7 +8,115 @@ import type { ConnectionId } from "../connections/model";
 import type { CallContext } from "../mcp/call";
 import type { CallId, Outcome } from "../calls/store";
 import type { Sealed } from "../seal";
-import { HOUR, type ApprovalId, type ApprovalRow, type SnapshotAccount, type Use } from "./model";
+import {
+  APPROVAL_LIFETIME,
+  RESULT_LIFETIME,
+  OUTCOME_WINDOW,
+  WAITING_LIMIT,
+  parseApprovalId,
+  type ApprovalId,
+  type Approval,
+  type Target,
+  type Won,
+  type Use,
+} from "./model";
+import { parseAccountId } from "../accounts/model";
+import { parseConnectionId } from "../connections/model";
+
+const won = Symbol("Won");
+export type WonBrand = { readonly [won]: true };
+const ApprovalRow = Schema.Struct({
+  id: Schema.String,
+  connection_id: Schema.String,
+  call_id: Schema.Int,
+  tool: Schema.Literal("list_labels"),
+  uses: Schema.String,
+  created_at: Schema.Int,
+  expires_at: Schema.Int,
+  state: Schema.Literals(["waiting", "approved", "rejected", "expired", "refused"]),
+  ended_by: Schema.NullOr(Schema.Literals(["tool", "connection", "account"])),
+  decided_at: Schema.NullOr(Schema.Int),
+  outcome: Schema.NullOr(Schema.Literals(["success", "failed", "unknown"])),
+  arguments: Schema.NullOr(Schema.String),
+  result: Schema.NullOr(Schema.String),
+  connection_name: Schema.String,
+  app: Schema.Literals(["claude-code", "claude-hosted", "chatgpt"]),
+  accounts: Schema.String,
+});
+const Uses = Schema.Array(
+  Schema.Struct({ account: Schema.String, tool: Schema.Literal("list_labels") }),
+);
+const Accounts = Schema.Array(
+  Schema.Struct({
+    id: Schema.String,
+    name: Schema.String,
+    email: Schema.String,
+    hd: Schema.NullOr(Schema.String),
+  }),
+);
+function decodeApproval(raw: unknown): Approval {
+  const row = Schema.decodeUnknownSync(ApprovalRow)(raw);
+  const id = parseApprovalId(row.id);
+  const connection = parseConnectionId(row.connection_id);
+  if (!id || !connection) throw new WriteUncertain();
+  const uses = Schema.decodeUnknownSync(Uses)(JSON.parse(row.uses)).map((use) => {
+    const account = parseAccountId(use.account);
+    if (!account) throw new WriteUncertain();
+    return { account, tool: use.tool };
+  });
+  const accounts = Schema.decodeUnknownSync(Accounts)(JSON.parse(row.accounts)).map((account) => {
+    const id = parseAccountId(account.id);
+    if (!id) throw new WriteUncertain();
+    return { ...account, id };
+  });
+  if (
+    !uses.length ||
+    accounts.length !== uses.length ||
+    (row.state === "waiting") !== (row.arguments !== null) ||
+    (row.state === "refused") !== (row.ended_by !== null) ||
+    ["approved", "rejected"].includes(row.state) !== (row.decided_at !== null) ||
+    (row.outcome !== null && row.state !== "approved") ||
+    (row.result !== null && row.outcome === null)
+  )
+    throw new WriteUncertain();
+  const common = {
+    id,
+    connection: { id: connection, name: row.connection_name, app: row.app },
+    accounts,
+    uses,
+    tool: row.tool,
+    call: row.call_id,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+  switch (row.state) {
+    case "waiting":
+      if (row.arguments !== null)
+        return { ...common, state: "waiting", arguments: row.arguments as Sealed };
+      break;
+    case "approved":
+      if (row.decided_at !== null)
+        return row.outcome === null
+          ? { ...common, state: "running", decidedAt: row.decided_at }
+          : {
+              ...common,
+              state: "finished",
+              decidedAt: row.decided_at,
+              outcome: row.outcome,
+              result: row.result as Sealed | null,
+            };
+      break;
+    case "rejected":
+      if (row.decided_at !== null)
+        return { ...common, state: "rejected", decidedAt: row.decided_at };
+      break;
+    case "expired":
+      return { ...common, state: "expired" };
+    case "refused":
+      if (row.ended_by !== null) return { ...common, state: "refused", endedBy: row.ended_by };
+  }
+  throw new WriteUncertain();
+}
 
 export interface ApprovalContext {
   db: D1Database;
@@ -44,7 +152,7 @@ export const createApproval = (
           .prepare(`INSERT INTO approvals (id,generation,connection_id,call_id,tool,uses,created_at,expires_at,state,arguments)
           SELECT ?1,?2,?3,?4,?5,?6,?7,?8,'waiting',?9
           WHERE ${usable("?3", "?2", "?6", "?7", "?10")}
-          AND (SELECT count(*) FROM approvals WHERE connection_id = ?3 AND generation = ?2 AND state = 'waiting' AND expires_at > ?7) < 20 RETURNING id`)
+          AND (SELECT count(*) FROM approvals WHERE connection_id = ?3 AND generation = ?2 AND state = 'waiting' AND expires_at > ?7) < ${WAITING_LIMIT} RETURNING id`)
           .bind(
             id,
             ctx.owner.generation,
@@ -53,7 +161,7 @@ export const createApproval = (
             tool,
             JSON.stringify(input.uses),
             at,
-            at + HOUR,
+            at + APPROVAL_LIFETIME,
             input.arguments,
             ctx.owner.email,
           ),
@@ -69,7 +177,7 @@ export const createApproval = (
       ]);
       return results[0]!.results.length
         ? ("created" as const)
-        : Number((results[2]!.results[0] as { count: number }).count) >= 20
+        : Number((results[2]!.results[0] as { count: number }).count) >= WAITING_LIMIT
           ? ("limit" as const)
           : ("unavailable" as const);
     },
@@ -110,7 +218,7 @@ const unknownStatement = (
 ) =>
   db
     .prepare(
-      `UPDATE approvals SET outcome = 'unknown' WHERE ${where} AND state = 'approved' AND outcome IS NULL AND decided_at + 30000 <= ${now}`,
+      `UPDATE approvals SET outcome = 'unknown' WHERE ${where} AND state = 'approved' AND outcome IS NULL AND decided_at + ${OUTCOME_WINDOW} <= ${now}`,
     )
     .bind(...values);
 export const readApproval = (
@@ -127,17 +235,17 @@ export const readApproval = (
         ...expireStatements(ctx.db, where, "?4", values),
         unknownStatement(ctx.db, where, "?4", values),
         ctx.db
-          .prepare(`SELECT approvals.id, approvals.generation, connection_id, call_id, tool, uses, created_at, expires_at, state, ended_by, decided_at, outcome, arguments, purged,
-          CASE WHEN purged = 0 AND decided_at + ${HOUR} > ?4 AND ${rowUsable("?4", "?3")} THEN result ELSE NULL END AS result,
-          CASE WHEN purged = 0 AND decided_at + ${HOUR} > ?4 AND ${rowUsable("?4", "?3")} THEN result_too_large ELSE 0 END AS result_too_large,
+          .prepare(`SELECT approvals.id, approvals.generation, connection_id, call_id, tool, uses, created_at, expires_at, state, ended_by, decided_at, outcome, arguments,
+          CASE WHEN decided_at + ${RESULT_LIFETIME} > ?4 AND ${rowUsable("?4", "?3")} THEN result ELSE NULL END AS result,
           (SELECT name FROM connections WHERE id = approvals.connection_id AND generation = approvals.generation) AS connection_name,
           (SELECT app FROM connections WHERE id = approvals.connection_id AND generation = approvals.generation) AS app,
-          (SELECT json_group_array(json_object('id',a.id,'name',a.name,'email',a.email,'hd',a.hd,'version',a.version)) FROM json_each(approvals.uses) u
+          (SELECT json_group_array(json_object('id',a.id,'name',a.name,'email',a.email,'hd',a.hd)) FROM json_each(approvals.uses) u
            JOIN accounts a ON a.id = json_extract(u.value,'$.account') AND a.generation = approvals.generation) AS accounts
           FROM approvals WHERE ${where}`)
           .bind(...values),
       ]);
-      return (batch.at(-1)!.results[0] as unknown as ApprovalRow | undefined) ?? null;
+      const raw = batch.at(-1)!.results[0];
+      return raw === undefined ? null : decodeApproval(raw);
     },
     catch: () => new WriteUncertain(),
   });
@@ -147,32 +255,17 @@ export interface Decision {
   at: number;
   claim: string;
   action: "approve" | "reject";
-  snapshot?: { connection: string; accounts: readonly SnapshotAccount[] };
 }
 export const decisionStatement = (ctx: ApprovalContext, input: Decision) => {
-  const snapshot =
-    input.action === "approve"
-      ? `AND EXISTS (SELECT 1 FROM connections c WHERE c.id = approvals.connection_id AND c.name = ?6)
-    AND NOT EXISTS (SELECT 1 FROM json_each(approvals.uses) u WHERE NOT EXISTS (SELECT 1 FROM accounts a JOIN json_each(?7) s ON a.id = json_extract(s.value,'$.id')
-      WHERE a.id = json_extract(u.value,'$.account') AND a.name = json_extract(s.value,'$.name') AND a.email = json_extract(s.value,'$.email') AND a.version = json_extract(s.value,'$.version')))`
-      : "";
   return ctx.db
     .prepare(`UPDATE approvals SET state = '${input.action === "approve" ? "approved" : "rejected"}', decided_at = ?4, arguments = NULL, claim = ?5
-    WHERE id = ?1 AND ${ownerGuard("?2", "?3")} AND state = 'waiting' AND ?4 < expires_at AND ${rowUsable("?4", "?3")} ${snapshot} RETURNING id`)
-    .bind(
-      input.id,
-      ctx.owner.generation,
-      ctx.owner.email,
-      input.at,
-      input.claim,
-      ...(input.action === "approve"
-        ? [input.snapshot!.connection, JSON.stringify(input.snapshot!.accounts)]
-        : []),
-    );
+    WHERE id = ?1 AND ${ownerGuard("?2", "?3")} AND state = 'waiting' AND ?4 < expires_at AND ${rowUsable("?4", "?3")} RETURNING id`)
+    .bind(input.id, ctx.owner.generation, ctx.owner.email, input.at, input.claim);
 };
-export const decideApproval = (ctx: ApprovalContext, input: Decision) =>
+export const decideApproval = (ctx: ApprovalContext, decision: Omit<Decision, "claim">) =>
   Effect.tryPromise({
     try: async () => {
+      const input = { ...decision, claim: crypto.randomUUID() };
       const where = `approvals.id = ?1 AND ${ownerGuard("?2", "?3")} AND claim = ?4 AND decided_at = ?5 AND approvals.state = ?6`;
       const values = [
         input.id,
@@ -191,27 +284,30 @@ export const decideApproval = (ctx: ApprovalContext, input: Decision) =>
         WHERE ${where} AND approvals.state = 'approved'`)
           .bind(...values),
       ]);
-      return { won: batch[0]!.results.length > 0, credentials: batch[2]!.results };
+      return batch[0]!.results.length > 0
+        ? {
+            won: { id: input.id, at: input.at, claim: input.claim, [won]: true } satisfies Won,
+            credentials: batch[2]!.results,
+          }
+        : { won: null };
     },
     catch: () => new WriteUncertain(),
   });
 export const finishApproval = (
   ctx: ApprovalContext,
-  decision: Pick<Decision, "id" | "at" | "claim">,
+  decision: Won,
   now: number,
   outcome: "success" | "failed" | "unknown",
   auditOutcome: Outcome | null,
   result: Sealed | null,
-  tooLarge: boolean,
 ) =>
   Effect.tryPromise({
     try: () =>
       ctx.db.batch([
         ctx.db
           .prepare(`UPDATE approvals SET outcome = ?5,
-      result = CASE WHEN purged = 0 AND ${rowUsable("?4", "?3")} THEN ?6 ELSE NULL END,
-      result_too_large = CASE WHEN purged = 0 AND ${rowUsable("?4", "?3")} THEN ?7 ELSE 0 END
-      WHERE id = ?1 AND ${ownerGuard("?2", "?3")} AND state = 'approved' AND outcome IS NULL AND ?4 < decided_at + 30000 AND claim = ?8 AND decided_at = ?9`)
+      result = CASE WHEN ${rowUsable("?4", "?3")} THEN ?6 ELSE NULL END
+      WHERE id = ?1 AND ${ownerGuard("?2", "?3")} AND state = 'approved' AND outcome IS NULL AND ?4 < decided_at + ${OUTCOME_WINDOW} AND claim = ?7 AND decided_at = ?8`)
           .bind(
             decision.id,
             ctx.owner.generation,
@@ -219,7 +315,6 @@ export const finishApproval = (
             now,
             outcome,
             result,
-            Number(tooLarge),
             decision.claim,
             decision.at,
           ),
@@ -240,36 +335,65 @@ export const finishApproval = (
         ),
       ]),
     catch: () => new WriteUncertain(),
-  });
+  }).pipe(Effect.asVoid);
 
-/** Prepend to the owner's change, using its guard and bindings before it changes that guard. */
-export const purgeApprovals = (
-  db: D1Database,
-  input: {
-    where: string;
-    guard: string;
-    generation: string;
-    email: string;
-    now: string;
-    by: "tool" | "connection" | "account";
-    values: (string | number | null)[];
-  },
-) => {
-  const where = `(${input.where}) AND (${input.guard}) AND ${ownerGuard(input.generation, input.email)}`;
-  const waiting = `${where} AND state = 'waiting' AND expires_at > ${input.now}`;
+type GuardCommon = { generation: string; ownerEmail: string; now: string };
+/** Placeholder expressions are supplied by stores, never by request data. */
+export function changeGuard(
+  ...[kind, p]:
+    | ["connection", GuardCommon & { connection: string }]
+    | ["account", GuardCommon & { account: string }]
+    | ["tool", GuardCommon & { connection: string; account: string }]
+): string {
+  switch (kind) {
+    case "connection":
+      return `EXISTS (SELECT 1 FROM connections c WHERE c.id = ${p.connection} AND c.generation = ${p.generation} AND ${activeWhere(p)})`;
+    case "account":
+      return `EXISTS (SELECT 1 FROM accounts a WHERE a.id = ${p.account} AND a.state = 'live' AND a.generation = ${p.generation} AND EXISTS (SELECT 1 FROM owner o WHERE o.id = 1 AND o.state = 'pinned' AND o.generation = a.generation AND o.email = ${p.ownerEmail}))`;
+    case "tool":
+      return `EXISTS (SELECT 1 FROM accounts a JOIN connections c ON c.id = ${p.connection} WHERE a.id = ${p.account} AND a.state = 'live' AND a.generation = ${p.generation} AND c.generation = ${p.generation} AND ${activeWhere(p)})`;
+  }
+}
+/** Prepend to the owner's change; every statement binds its own values. */
+export const endApprovals = (db: D1Database, owner: Owner, target: Target, now: number) => {
+  const common = { generation: "?1", ownerEmail: "?2", now: "?3" };
+  const values: (string | number)[] = [owner.generation, owner.email, now];
+  let scope: string;
+  let guard: string;
+  let by: "tool" | "connection" | "account";
+  if ("tool" in target) {
+    by = "tool";
+    values.push(target.connection, target.account, target.tool);
+    guard = changeGuard(by, { ...common, connection: "?4", account: "?5" });
+    scope =
+      "approvals.connection_id = ?4 AND EXISTS (SELECT 1 FROM json_each(approvals.uses) u WHERE json_extract(u.value,'$.account') = ?5 AND json_extract(u.value,'$.tool') = ?6)";
+  } else if ("connection" in target) {
+    by = "connection";
+    values.push(target.connection);
+    guard = changeGuard(by, { ...common, connection: "?4" });
+    scope = "approvals.connection_id = ?4";
+  } else {
+    by = "account";
+    values.push(target.account);
+    guard = changeGuard(by, { ...common, account: "?4" });
+    scope =
+      "EXISTS (SELECT 1 FROM json_each(approvals.uses) u WHERE json_extract(u.value,'$.account') = ?4)";
+  }
+  const where = `(${scope}) AND (${guard}) AND ${ownerGuard("?1", "?2")}`;
+  const waiting = `${where} AND state = 'waiting' AND expires_at > ?3`;
   return [
-    ...expireStatements(db, where, input.now, input.values),
-    audit(db, waiting, "'refused'", input.values),
+    ...expireStatements(db, where, "?3", values),
+    audit(db, waiting, "'refused'", values),
     db
       .prepare(
-        `UPDATE approvals SET state = 'refused', ended_by = '${input.by}', arguments = NULL WHERE ${waiting}`,
+        `UPDATE approvals SET state = 'refused', ended_by = '${by}', arguments = NULL WHERE ${waiting}`,
       )
-      .bind(...input.values),
+      .bind(...values),
     db
       .prepare(
-        `UPDATE approvals SET arguments = NULL, result = NULL, purged = 1 WHERE ${where} AND purged = 0`,
+        `UPDATE approvals SET arguments = NULL, result = NULL WHERE ${where} AND (arguments IS NOT NULL OR result IS NOT NULL)`,
       )
-      .bind(...input.values),
+      .bind(...values),
   ];
 };
 export const cleanupApprovals = (ctx: ApprovalContext, now: number) =>
@@ -282,7 +406,7 @@ export const cleanupApprovals = (ctx: ApprovalContext, now: number) =>
         unknownStatement(ctx.db, where, "?3", values),
         ctx.db
           .prepare(
-            `UPDATE approvals SET result = NULL WHERE ${where} AND result IS NOT NULL AND decided_at <= ?3 - ${HOUR}`,
+            `UPDATE approvals SET result = NULL WHERE ${where} AND result IS NOT NULL AND decided_at <= ?3 - ${RESULT_LIFETIME}`,
           )
           .bind(...values),
       ]);

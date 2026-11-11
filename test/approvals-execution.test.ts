@@ -327,7 +327,7 @@ it("gives credentials only to the winner when both requests reach the decision b
     original(ctx, input).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
-          decisions.push(result);
+          decisions.push({ won: result.won !== null, credentials: result.credentials ?? [] });
         }),
       ),
     ),

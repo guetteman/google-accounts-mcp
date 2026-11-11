@@ -1,4 +1,4 @@
-import { purgeApprovals } from "../approvals/store";
+import { endApprovals, changeGuard } from "../approvals/store";
 import type { CallContext } from "../mcp/call";
 import type { AccountTool } from "../mcp/tools";
 import { permittedWhere } from "../permissions/store";
@@ -249,19 +249,10 @@ export const removeAccount = (db: D1Database, owner: Owner, id: AccountId, now: 
     try: async () => {
       const values = [now, id, owner.generation, owner.email];
       const batch = await db.batch<{ email: string }>([
-        ...purgeApprovals(db, {
-          where:
-            "EXISTS (SELECT 1 FROM json_each(approvals.uses) u WHERE json_extract(u.value,'$.account') = ?2)",
-          guard: `EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?2 AND a.state = 'live' AND ${ownerGuard("?3", "?4")})`,
-          generation: "?3",
-          email: "?4",
-          now: "?1",
-          by: "account",
-          values,
-        }),
+        ...endApprovals(db, owner, { account: id }, now),
         db
           .prepare(
-            `UPDATE accounts AS a SET state = 'removed', removed_at = ?1, refresh_token = NULL, access_token = NULL, access_expires_at = NULL, blocked_until = NULL WHERE a.id = ?2 AND a.state = 'live' AND ${ownerGuard("?3", "?4")} RETURNING email`,
+            `UPDATE accounts AS a SET state = 'removed', removed_at = ?1, refresh_token = NULL, access_token = NULL, access_expires_at = NULL, blocked_until = NULL WHERE a.id = ?2 AND ${changeGuard("account", { account: "?2", generation: "?3", ownerEmail: "?4", now: "?1" })} RETURNING email`,
           )
           .bind(...values),
       ]);

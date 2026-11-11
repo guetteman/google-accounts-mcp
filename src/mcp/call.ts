@@ -1,8 +1,9 @@
 import { createApproval } from "../approvals/store";
-import { HOUR, type ApprovalId } from "../approvals/model";
+import { APPROVAL_LIFETIME, type ApprovalId } from "../approvals/model";
 import { pendingAnswer } from "../approvals/result";
-import { seal } from "../seal";
-import { Data, Effect, Result, Schema } from "effect";
+import { sealArguments } from "../approvals/text";
+import { classify, failures, ToolFailure } from "./failures";
+import { Effect, Result, Schema } from "effect";
 import {
   ProtocolError,
   ProtocolErrorCode,
@@ -11,7 +12,7 @@ import {
 import type { Config } from "../config";
 import type { ActiveConnection } from "../connections/model";
 import { normalizeEmail, type Owner } from "../owner/owner";
-import { accountMessage, type AccountStatus, type Credential } from "../accounts/model";
+import type { AccountStatus, Credential } from "../accounts/model";
 import { allowedAccountStatement, decodeAllowedAccount } from "../accounts/store";
 import { withGoogle, type TokenError } from "../accounts/tokens";
 import {
@@ -22,6 +23,8 @@ import {
   type Outcome,
 } from "../calls/store";
 import { TOOLS, type Send, type Tool } from "./tools";
+export const MAX_ARGUMENTS_BYTES = 256 * 1024;
+
 export interface CallContext {
   db: D1Database;
   config: Config;
@@ -31,60 +34,6 @@ export interface CallContext {
   now: () => number;
 }
 type Allowed = { credential: Credential; status: AccountStatus };
-export const failures = {
-  approval_not_available: {
-    outcome: "refused",
-    message: () => "This approval is not available to this connection.",
-  },
-  approval_limit_reached: {
-    outcome: "refused",
-    message: () =>
-      "This connection already has 20 calls waiting for approval. Wait for the owner to decide or for an approval to expire.",
-  },
-  invalid_arguments: { outcome: "refused", message: () => "The account field must be a string." },
-  account_not_available: {
-    outcome: "refused",
-    message: (input: string) =>
-      `No account "${input}" is available to this connection. Call list_accounts to see the accounts you can use.`,
-  },
-  account_needs_reconnect: {
-    outcome: "failed",
-    message: (_: string, email: string, origin: string) =>
-      accountMessage("needs_reconnect", email, origin),
-  },
-  account_blocked_by_admin: {
-    outcome: "failed",
-    message: (_: string, email: string, origin: string) =>
-      accountMessage("blocked_by_admin", email, origin),
-  },
-  account_missing_access: {
-    outcome: "failed",
-    message: (_: string, email: string, origin: string) =>
-      accountMessage("missing_access", email, origin),
-  },
-  account_unreadable: {
-    outcome: "failed",
-    message: (_: string, email: string, origin: string) =>
-      accountMessage("unreadable", email, origin),
-  },
-  google_unavailable: {
-    outcome: "failed",
-    message: (_: string, email: string) =>
-      `Google could not complete the request for ${email}. Try again later.`,
-  },
-  server_unavailable: {
-    outcome: "failed",
-    message: () => "The server could not complete the call. Try again later.",
-  },
-} satisfies Record<
-  string,
-  { outcome: Outcome; message: (input: string, email: string, origin: string) => string }
->;
-export class ToolFailure extends Data.TaggedError("ToolFailure")<{
-  code: keyof typeof failures;
-  unknown?: boolean;
-  reason?: "arguments_too_large";
-}> {}
 const tokenFailure = (error: TokenError): ToolFailure => {
   switch (error._tag) {
     case "NeedsReconnect":
@@ -147,7 +96,6 @@ export async function runCall(
   args: Record<string, unknown> | undefined,
 ): Promise<CallToolResult> {
   const at = ctx.now();
-  let close = true;
   let id: CallId | null = null;
   let email = "";
   const input = typeof args?.account === "string" ? args.account : "";
@@ -177,7 +125,7 @@ export async function runCall(
         const decoded = Schema.decodeUnknownOption(tool.input)(args);
         if (decoded._tag === "None") throw new ToolFailure({ code: "invalid_arguments" });
         const json = JSON.stringify(decoded.value);
-        if (new TextEncoder().encode(json).byteLength > 256 * 1024)
+        if (new TextEncoder().encode(json).byteLength > MAX_ARGUMENTS_BYTES)
           throw new ToolFailure({ code: "invalid_arguments", reason: "arguments_too_large" });
         const row = batch[1]?.results[0];
         if (!row) throw new ToolFailure({ code: "account_not_available" });
@@ -192,9 +140,8 @@ export async function runCall(
                 | "account_unreadable",
             });
           const approval = crypto.randomUUID() as ApprovalId;
-          const argumentsSealed = await seal(ctx.config.tokenKey, `${approval}:arguments`, json);
+          const argumentsSealed = await sealArguments(ctx.config.tokenKey, approval, decoded.value);
           // Once the batch starts, its lost response must never close the audit record.
-          close = false;
           const created = await Effect.runPromise(
             Effect.result(
               createApproval(ctx, {
@@ -207,42 +154,31 @@ export async function runCall(
               }),
             ),
           );
-          if (Result.isFailure(created)) throw new ToolFailure({ code: "server_unavailable" });
+          if (Result.isFailure(created))
+            throw new ToolFailure({ code: "server_unavailable", unknown: true });
           if (created.success !== "created") {
-            close = true;
             throw new ToolFailure({
               code:
                 created.success === "limit" ? "approval_limit_reached" : "account_not_available",
             });
           }
-          value = pendingAnswer(ctx.origin, approval, at + HOUR);
+          outcome = null;
+          value = pendingAnswer(ctx.origin, approval, at + APPROVAL_LIFETIME);
         } else value = await executeAccount(ctx, tool, allowed, decoded.value);
       }
       result = { content: [{ type: "text", text: JSON.stringify(value) }] };
     }
   } catch (error) {
-    const failure =
-      error instanceof ToolFailure ? error : new ToolFailure({ code: "server_unavailable" });
-    const entry = failures[failure.code];
-    outcome = failure.unknown ? null : entry.outcome;
-    if (entry.outcome === "failed") console.error("Tool call failed", failure.code);
-    result = {
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            code: failure.code,
-            message:
-              failure.reason === "arguments_too_large"
-                ? "The arguments are too large. The limit is 256 KB."
-                : entry.message(input, email, ctx.origin),
-          }),
-        },
-      ],
-    };
+    const classified = classify(
+      error,
+      { approved: false, aborted: false },
+      { input, email, origin: ctx.origin },
+    );
+    outcome = classified.audit;
+    if (classified.audit === "failed") console.error("Tool call failed", classified.error?.code);
+    result = { isError: true, content: [{ type: "text", text: JSON.stringify(classified.error) }] };
   }
-  if (close && id && outcome) {
+  if (id && outcome) {
     try {
       await Effect.runPromise(closeCall(ctx, id, outcome));
     } catch {

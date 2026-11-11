@@ -1,4 +1,4 @@
-import { purgeApprovals } from "../approvals/store";
+import { endApprovals, changeGuard } from "../approvals/store";
 import { permittedWhere } from "../permissions/store";
 import type { Name } from "../names";
 import { Data, Effect } from "effect";
@@ -160,23 +160,20 @@ const action = (
         ];
         const time = change.kind === "rename" ? "?4" : "?1";
         const email = change.kind === "rename" ? "?5" : "?4";
-        const guard = `EXISTS (SELECT 1 FROM connections c WHERE c.id = ?2 AND c.generation = ?3 AND ${activeWhere({ now: time, ownerEmail: email })})`;
+        const guard = changeGuard("connection", {
+          connection: "?2",
+          generation: "?3",
+          ownerEmail: email,
+          now: time,
+        });
         const statement = db
           .prepare(
-            `UPDATE connections AS c SET ${change.kind === "rename" ? "name = ?1" : "state = 'revoked', revoked_at = ?1"} WHERE c.id = ?2 AND c.generation = ?3 AND ${activeWhere({ now: time, ownerEmail: email })} RETURNING grant_id`,
+            `UPDATE connections AS c SET ${change.kind === "rename" ? "name = ?1" : "state = 'revoked', revoked_at = ?1"} WHERE c.id = ?2 AND ${guard} RETURNING grant_id`,
           )
           .bind(...values);
         if (change.kind === "rename") return statement.first<{ grant_id: string }>();
         const batch = await db.batch<{ grant_id: string }>([
-          ...purgeApprovals(db, {
-            where: "approvals.connection_id = ?2",
-            guard,
-            generation: "?3",
-            email,
-            now: "?1",
-            by: "connection",
-            values,
-          }),
+          ...endApprovals(db, owner, { connection: id }, now),
           statement,
         ]);
         return batch.at(-1)!.results[0] ?? null;

@@ -5,7 +5,8 @@ import type { Unavailable } from "../db";
 import { accountMessage } from "../accounts/model";
 import { listVisibleAccounts } from "../accounts/store";
 import { listLabels } from "../google/gmail";
-import type { CallContext, ToolFailure } from "./call";
+import type { CallContext } from "./call";
+import type { ToolFailure } from "./failures";
 export class ViewUnavailable extends Data.TaggedError("ViewUnavailable") {}
 export type DecodedArgs = { readonly account: string };
 export type AccountTool = "list_labels";

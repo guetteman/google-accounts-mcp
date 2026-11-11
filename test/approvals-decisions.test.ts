@@ -4,7 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
 import { TOOLS, ViewUnavailable } from "../src/mcp/tools";
 import { viewDigest } from "../src/approvals/view";
-import { NOW, start, finish } from "./support/accounts";
+import { NOW } from "./support/accounts";
 import { observeStatements, statementFailingDb, dump } from "./support/db";
 import { google, deferred, LABELS_RESPONSE } from "./support/google";
 import { callRows, fixture, googleTraffic } from "./support/permissions";
@@ -148,34 +148,6 @@ it("returns a changed view and runs nothing for a stale digest", async () => {
   expect(answer.request.account.name).toBe("Renamed");
   expect(google.labelRequests).toEqual([]);
 });
-it.each(["connection rename", "account rename", "reconnect"])(
-  "rechecks %s in the decision batch after the view was built",
-  async (change) => {
-    const f = await fixture();
-    await setting(f, "ask");
-    const id = await ask(f);
-    let raced = false;
-    const db = observeStatements(env.DB, async (sql) => {
-      if (raced || !/UPDATE approvals SET state = 'approved'/.test(sql)) return;
-      raced = true;
-      if (change === "connection rename")
-        await f.mcp.browser.post(`/connections/${f.connection.id}/name`, { name: "Changed" });
-      else if (change === "account rename")
-        await f.mcp.browser.post(`/accounts/${f.personal.id}/name`, { name: "Changed" });
-      else {
-        const { url } = await start(f.mcp.browser, f.personal.id);
-        await finish(f.mcp.browser, url, {
-          claims: { sub: f.personal.sub, email: f.personal.email },
-        });
-      }
-    });
-    const answer = await approve(f, id, testEnv({ DB: db }));
-    expect(raced).toBe(true);
-    expect(answer.state).toMatchObject({ kind: "waiting", changed: true });
-    expect(google.labelRequests).toEqual([]);
-    expect((await callRows())[0]!.outcome).toBe("pending");
-  },
-);
 it("two concurrent Approves at the same millisecond execute once and expose running during the call", async () => {
   const f = await fixture();
   await setting(f, "ask");

@@ -1,4 +1,4 @@
-import { purgeApprovals } from "../approvals/store";
+import { endApprovals, changeGuard } from "../approvals/store";
 import { Effect } from "effect";
 import { WriteUncertain } from "../db";
 import type { Owner } from "../owner/owner";
@@ -34,9 +34,13 @@ export const setPermission = (
   now: number,
 ) =>
   Effect.gen(function* () {
-    const guard = `EXISTS (SELECT 1 FROM accounts a JOIN connections c ON c.id = ?1
-    WHERE a.id = ?2 AND a.state = 'live' AND a.generation = ?4 AND c.generation = ?4
-    AND ${activeWhere({ now: "?6", ownerEmail: "?5" })})`;
+    const guard = changeGuard("tool", {
+      connection: "?1",
+      account: "?2",
+      generation: "?4",
+      ownerEmail: "?5",
+      now: "?6",
+    });
     const values = [
       change.connectionId,
       change.accountId,
@@ -49,16 +53,12 @@ export const setPermission = (
       try: () =>
         db.batch<{ state: string; expires_at: number; account_exists: number }>([
           ...(change.setting === "deny"
-            ? purgeApprovals(db, {
-                where:
-                  "approvals.connection_id = ?1 AND EXISTS (SELECT 1 FROM json_each(approvals.uses) u WHERE json_extract(u.value,'$.account') = ?2 AND json_extract(u.value,'$.tool') = ?3)",
-                guard,
-                generation: "?4",
-                email: "?5",
-                now: "?6",
-                by: "tool",
-                values,
-              })
+            ? endApprovals(
+                db,
+                owner,
+                { connection: change.connectionId, account: change.accountId, tool: change.tool },
+                now,
+              )
             : []),
           db
             .prepare(

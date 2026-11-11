@@ -1,9 +1,27 @@
 import { env } from "cloudflare:workers";
-import { expect } from "vite-plus/test";
-import type { ApprovalPageProps, ApprovalRow } from "../../src/approvals/model";
+import { expect, vi } from "vite-plus/test";
+import type { ApprovalPageProps, ApprovalId, Won } from "../../src/approvals/model";
+import { Effect } from "effect";
+import * as store from "../../src/approvals/store";
+import type { ConnectionId } from "../../src/connections/model";
+import type { Sealed } from "../../src/seal";
 import { fixture, toolCall, PERSONAL } from "./permissions";
 import { rpcResult } from "./oauth";
 import { testEnv } from "./worker";
+interface ApprovalRow {
+  id: ApprovalId;
+  connection_id: ConnectionId;
+  call_id: number;
+  created_at: number;
+  expires_at: number;
+  state: "waiting" | "approved" | "rejected" | "expired" | "refused";
+  ended_by: "tool" | "connection" | "account" | null;
+  decided_at: number | null;
+  outcome: "success" | "failed" | "unknown" | null;
+  arguments: Sealed | null;
+  result: Sealed | null;
+  uses: string;
+}
 export type Fixture = Awaited<ReturnType<typeof fixture>>;
 export const setting = async (
   f: Fixture,
@@ -66,10 +84,26 @@ export const approve = async (f: Fixture, id: string, workerEnv = testEnv()) =>
 export const get = (f: Fixture, id: string, workerEnv = testEnv()) =>
   toolCall(f.mcp, "get_approval", { approval: id }, workerEnv).then(answer);
 
-export async function winningClaim(id: string) {
-  const stored = await env.DB.prepare("SELECT id, claim, decided_at FROM approvals WHERE id = ?")
-    .bind(id)
-    .first<{ id: ApprovalRow["id"]; claim: string; decided_at: number }>();
-  expect(stored?.claim).toEqual(expect.any(String));
-  return { id: stored!.id, claim: stored!.claim, at: stored!.decided_at };
+/** Observe the store's actual return value; never manufacture a winning claim from SQL. */
+export function observeDecisions() {
+  const wins = new Map<string, Won>();
+  const original = store.decideApproval;
+  vi.spyOn(store, "decideApproval").mockImplementation((ctx, input) =>
+    original(ctx, input).pipe(
+      Effect.tap((decision) =>
+        Effect.sync(() => {
+          if (decision.won) wins.set(decision.won.id, decision.won);
+        }),
+      ),
+    ),
+  );
+  return async (id: string): Promise<Won> => {
+    const won = wins.get(id);
+    if (!won) throw new Error("The decision did not return a Won");
+    const stored = await env.DB.prepare("SELECT claim FROM approvals WHERE id = ?")
+      .bind(id)
+      .first<{ claim: string }>();
+    expect(stored?.claim).toEqual(expect.any(String));
+    return won;
+  };
 }
