@@ -128,7 +128,7 @@ async function expectComplete(stream: Listening, notices: number) {
 }
 
 it.each(["allow", "remove"] as const)(
-  "N1: announces a list change after the owner chooses %s",
+  "announces a list change after the owner chooses %s",
   async (action) => {
     const f = await fixture();
     if (action === "remove") await permission(f);
@@ -147,7 +147,7 @@ it.each(["allow", "remove"] as const)(
   },
 );
 
-it("N2: a changed permission announces only to that connection's stream", async () => {
+it("a changed permission announces only to that connection's stream", async () => {
   const f = await fixture();
   const other = await new McpClient().connect("Other laptop");
   const first = await listen(f.mcp);
@@ -162,7 +162,7 @@ it("N2: a changed permission announces only to that connection's stream", async 
   await expectComplete(second, 0);
 });
 
-it("N3: another account granting an already listed tool sends no notice", async () => {
+it("another account granting an already listed tool sends no notice", async () => {
   const f = await fixture();
   await permission(f);
   const stream = await listen(f.mcp);
@@ -174,7 +174,7 @@ it("N3: another account granting an already listed tool sends no notice", async 
   await expectComplete(stream, 0);
 });
 
-it("N4: an earlier revision cannot open a GET stream", async () => {
+it("an earlier revision cannot open a GET stream", async () => {
   const mcp = await new McpClient().connect();
   const response = await callWorker(
     new Request(`${ORIGIN}/mcp`, {
@@ -189,7 +189,7 @@ it("N4: an earlier revision cannot open a GET stream", async () => {
 });
 
 it.each(["revoked", "expired", "reset"] as const)(
-  "S1: completes within one tick when the connection is %s",
+  "completes within one tick when the connection is %s",
   async (ending) => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
     const f = await fixture();
@@ -203,7 +203,7 @@ it.each(["revoked", "expired", "reset"] as const)(
   },
 );
 
-it("S2/S4: stays open until tick 40, announces its final change before completion, and fits the request budget", async () => {
+it("stays open until tick 40, announces its final change before completion, and fits the request budget", async () => {
   expect(POLL_MS).toBe(5000);
   expect(TICKS).toBe(40);
   const f = await fixture();
@@ -224,16 +224,15 @@ it("S2/S4: stays open until tick 40, announces its final change before completio
   expect(stream.control.queries + stream.control.kvOperations).toBe(44);
 });
 
-it("S3: a failed tick preserves the previous nonempty list and later announces one change", async () => {
+it("a failed tick preserves the previous nonempty list and later announces one change", async () => {
   const f = await fixture();
   await permission(f);
   const stream = await listen(f.mcp);
+  await permission(f, f.personal, false);
   stream.control.failNext = true;
   await tick(stream);
   expect(stream.ended()).toBe(false);
-  await tick(stream);
-  expect(stream.ended()).toBe(false);
-  await permission(f, f.personal, false);
+  expect(stream.frames).toEqual([acknowledged]);
   await tick(stream);
   expect(stream.frames).toEqual([acknowledged, changed]);
   await revoke(f);
@@ -241,7 +240,7 @@ it("S3: a failed tick preserves the previous nonempty list and later announces o
   await expectComplete(stream, 1);
 });
 
-it("S3: repeated read failures still complete at the lifetime without notices", async () => {
+it("repeated read failures still complete at the lifetime without notices", async () => {
   const f = await fixture();
   await permission(f);
   const stream = await listen(f.mcp);
@@ -253,7 +252,7 @@ it("S3: repeated read failures still complete at the lifetime without notices", 
   await expectComplete(stream, 0);
 });
 
-it("S7: a failed baseline stays open and the first success becomes a silent baseline", async () => {
+it("a failed baseline stays open and the first success becomes a silent baseline", async () => {
   const f = await fixture();
   const stream = await listen(f.mcp, true);
   await permission(f);
@@ -269,7 +268,7 @@ it("S7: a failed baseline stays open and the first success becomes a silent base
 });
 
 it.each([false, true])(
-  "S5: cancel stops all work, including an in-flight read: %s",
+  "cancel stops all work, including an in-flight read: %s",
   async (inFlight) => {
     const f = await fixture();
     const stream = await listen(f.mcp);
@@ -297,7 +296,7 @@ it.each([false, true])(
   },
 );
 
-it("S6: a revoked connection cannot open a listen stream", async () => {
+it("a revoked connection cannot open a listen stream", async () => {
   const f = await fixture();
   await revoke(f);
   const response = await f.mcp.call(

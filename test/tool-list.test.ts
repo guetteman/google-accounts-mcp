@@ -1,4 +1,6 @@
+import { env } from "cloudflare:workers";
 import { expect, it } from "vite-plus/test";
+import { rows } from "./support/connections";
 import { clients, McpClient, rpcMessages, rpcResult } from "./support/oauth";
 import {
   fixture,
@@ -47,7 +49,7 @@ const names = async (mcp: McpClient) =>
   ((await rpcResult(await mcp.call())).tools as Array<{ name: string }>).map((tool) => tool.name);
 
 it.each(clients)(
-  "L1/L8: lists only plain tools for a new $label connection and promises notices",
+  "lists only plain tools for a new $label connection and promises notices",
   async (client) => {
     const mcp = await new McpClient(client).connect();
     expect((await rpcResult(await mcp.call())).tools).toEqual(plainTools);
@@ -57,7 +59,7 @@ it.each(clients)(
   },
 );
 
-it("L2: lists an allowed or ask-first tool in registry order, and removes it when denied everywhere", async () => {
+it("lists an allowed or ask-first tool in registry order, and removes it when denied everywhere", async () => {
   const f = await fixture();
   await permission(f);
   expect((await rpcResult(await f.mcp.call())).tools).toEqual([
@@ -81,13 +83,13 @@ it("L2: lists an allowed or ask-first tool in registry order, and removes it whe
   expect((await rpcResult(await f.mcp.call())).tools).toEqual(plainTools);
 });
 
-it("L3: lists a tool whose only permitted account needs reconnecting", async () => {
+it("lists a tool whose only permitted account needs reconnecting", async () => {
   const f = await fixture(problemCases.find((item) => item.status === "needs_reconnect")!.row);
   await permission(f);
   expect(await names(f.mcp)).toEqual(["list_accounts", "list_labels", "get_approval"]);
 });
 
-it("L4: removes a tool when the owner removes its only permitted account", async () => {
+it("removes a tool when the owner removes its only permitted account", async () => {
   const f = await fixture();
   await permission(f);
   expect(await names(f.mcp)).toContain("list_labels");
@@ -97,7 +99,7 @@ it("L4: removes a tool when the owner removes its only permitted account", async
   expect((await rpcResult(await f.mcp.call())).tools).toEqual(plainTools);
 });
 
-it("L5: an unlisted tool still uses the existing call checks", async () => {
+it("an unlisted tool still uses the existing call checks", async () => {
   const f = await fixture();
   expect(await names(f.mcp)).toEqual(["list_accounts", "get_approval"]);
   await expectError(
@@ -116,7 +118,7 @@ it("L5: an unlisted tool still uses the existing call checks", async () => {
   ]);
 });
 
-it("L6: a permission changes only its connection's list", async () => {
+it("a permission changes only its connection's list", async () => {
   const f = await fixture();
   const other = await new McpClient().connect("Other laptop");
   await permission(f);
@@ -126,7 +128,7 @@ it("L6: a permission changes only its connection's list", async () => {
   expect((await rpcResult(await other.call())).tools).toEqual(plainTools);
 });
 
-it("L7: a failed list read returns an internal error without a list", async () => {
+it("a failed list read returns an internal error without a list", async () => {
   const f = await fixture();
   await permission(f);
   const { messages } = await rpcMessages(
@@ -144,4 +146,36 @@ it("L7: a failed list read returns an internal error without a list", async () =
       error: { code: -32603, message: "The server could not read the tool list. Try again later." },
     },
   ]);
+});
+
+it("keeps a tool out of the list of a connection that holds another stored tool on the same account", async () => {
+  const f = await fixture();
+  await permission(f);
+  const other = await new McpClient().connect("Other laptop");
+  const otherConnection = (await rows()).find((row) => row.id !== f.connection.id)!;
+  // No page can store a second account tool yet, and a stored name the server lacks is not listed.
+  await env.DB.prepare("INSERT INTO permissions (connection_id, account_id, tool) VALUES (?, ?, ?)")
+    .bind(otherConnection.id, f.personal.id, "another_tool")
+    .run();
+  expect(await names(f.mcp)).toEqual(["list_accounts", "list_labels", "get_approval"]);
+  expect((await rpcResult(await other.call())).tools).toEqual(plainTools);
+});
+
+it("returns the same list in revision 2026-07-28, which clients that listen speak", async () => {
+  const f = await fixture();
+  await permission(f);
+  const listed = await rpcResult(
+    await f.mcp.call(
+      "tools/list",
+      undefined,
+      {
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+      { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list" },
+    ),
+  );
+  expect(listed.tools).toEqual([plainTools[0], labelsTool, plainTools[1]]);
 });
