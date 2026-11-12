@@ -96,7 +96,7 @@ const mixed = (values: Values) => new Set(values.map((value) => value.from)).siz
 /** Whose text the shaded values are. Text read from Gmail was never written by the agent. */
 const whose = (values: Values) =>
   mixed(values)
-    ? "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which."
+    ? "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each caption says which."
     : values[0]?.from === "gmail"
       ? "The server read the shaded text below from Gmail. The agent did not write it."
       : "The agent wrote the shaded text below.";
@@ -260,6 +260,13 @@ function WaitingView({
                   }`}
             </p>
           </div>
+          {request.notes
+            .filter((note) => !note.warning)
+            .map((note, index) => (
+              <p key={index} className="text-base/7">
+                {note.text}
+              </p>
+            ))}
           {values.map((value) => (
             <Quoted
               key={value.name}
@@ -270,6 +277,14 @@ function WaitingView({
           {values.length > 0 && (
             <p className="text-sm text-muted-foreground">That is the whole call.</p>
           )}
+          {request.notes
+            .filter((note) => note.warning)
+            .map((note, index) => (
+              <Alert key={index} variant="warning">
+                <TriangleAlertIcon />
+                <AlertTitle>{note.text}</AlertTitle>
+              </Alert>
+            ))}
         </section>
       ) : (
         <Alert variant="warning">

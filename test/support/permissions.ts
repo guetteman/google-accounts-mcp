@@ -11,6 +11,8 @@ export const NORTHWIND = "alex@northwind.example";
 export const SERVER_MESSAGE = "The server could not complete the call. Try again later.";
 export const unavailableMessage = (email: string) =>
   `Google could not complete the request for ${email}. Try again later.`;
+export const unconfirmedMessage = (email: string) =>
+  `Google did not confirm the request for ${email}. It may have taken effect. Sending the same call again is safe.`;
 export const refusedMessage = (input: string) =>
   `No account "${input}" is available to this connection. Call list_accounts to see the accounts you can use.`;
 export const problemCases: Array<{ status: string; row: Partial<AccountRow>; message: string }> = [

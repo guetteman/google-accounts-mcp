@@ -1,6 +1,7 @@
 import type { ApprovalPageProps } from "../approvals/model";
 import { TOOLS } from "../mcp/tools";
 import { GMAIL_SCOPES } from "../google/client";
+import { MAX_ITEMS } from "../google/gmail";
 import { acceptAuthorize } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
 import type { Page } from "./page";
@@ -134,6 +135,7 @@ const approvalBase: ApprovalPageProps = {
       joiner: "of",
       empty: "This call has no other values. The sentence above is the whole call.",
     },
+    notes: [],
     values: [],
   },
   times: {
@@ -303,6 +305,101 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
 };
 export const previews: Readonly<Record<string, Page>> = {
   ...approvalPreviews,
+  "approval-waiting-notes": {
+    ...approvalBase,
+    request: {
+      ...approvalPreviews["approval-waiting-thread"]!.request,
+      notes: [
+        { text: "This call archives this thread: it leaves the inbox.", warning: false },
+        { text: "A deleted message cannot be recovered.", warning: true },
+      ],
+    },
+  },
+  "approval-waiting-labels": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Change labels",
+        action: "add or remove labels on threads",
+        joiner: "in",
+      },
+      notes: [
+        { text: "This call archives these threads: they leave the inbox.", warning: false },
+        { text: "This call marks these threads as read.", warning: false },
+      ],
+      values: [
+        { name: "Labels to add", text: "Receipts", from: "gmail" },
+        { name: "Labels to remove", text: "INBOX\nUNREAD", from: "gmail" },
+        { name: "Thread 1 subject", text: "Lunch", from: "gmail" },
+        { name: "Thread 1 messages", text: "2", from: "gmail" },
+        { name: "Thread 1 last from", text: "Kim Lee <kim@example.com>", from: "gmail" },
+        { name: "Thread 1 last date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+        { name: "Thread 2 ID, not found in this account", text: "19a1b2c3d4e5f6ff", from: "agent" },
+        { name: "Thread 3 subject", text: "Receipt", from: "gmail" },
+        { name: "Thread 3 messages", text: "1", from: "gmail" },
+        { name: "Thread 3 last from", text: "billing@example.com", from: "gmail" },
+        { name: "Thread 3 last date", text: "Nov 9, 2026 at 04:53 UTC", from: "gmail" },
+      ],
+    },
+  },
+  "approval-waiting-labels-many": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Change labels",
+        action: "add or remove labels on threads",
+        joiner: "in",
+      },
+      notes: [
+        { text: "This call archives these threads: they leave the inbox.", warning: false },
+        { text: "This call marks these threads as read.", warning: false },
+      ],
+      values: [
+        { name: "Labels to add", text: "Receipts", from: "gmail" },
+        { name: "Labels to remove", text: "INBOX\nUNREAD", from: "gmail" },
+        ...Array.from({ length: MAX_ITEMS }, (_, index) => {
+          const subjects = [
+            "Lunch",
+            "Re: Invoice for the October project and additional support hours",
+            "Team update",
+            "Planning next month's workshop, travel arrangements, and shared notes",
+          ];
+          const senders = [
+            "Sam <sam@example.com>",
+            "Kim Lee (Northwind Billing and Customer Accounts) <kim.lee@northwind.example>",
+            "Jo <jo@example.com>",
+            "The workshop planning team <workshops@fabrikam-holdings.example>",
+          ];
+          return [
+            {
+              name: `Thread ${index + 1} subject`,
+              text: `${subjects[index % subjects.length]} (${index + 1})`,
+              from: "gmail" as const,
+            },
+            {
+              name: `Thread ${index + 1} messages`,
+              text: String(index + 1),
+              from: "gmail" as const,
+            },
+            {
+              name: `Thread ${index + 1} last from`,
+              text: senders[index % senders.length]!,
+              from: "gmail" as const,
+            },
+            {
+              name: `Thread ${index + 1} last date`,
+              text: "Nov 11, 2026 at 09:41 UTC",
+              from: "gmail" as const,
+            },
+          ];
+        }).flat(),
+      ],
+    },
+  },
   ...Object.fromEntries(
     [
       "new-connection",

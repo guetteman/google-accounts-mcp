@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { expect, it } from "vite-plus/test";
-import { TOOLS, type Tool } from "../src/mcp/tools";
+import { TOOLS } from "../src/mcp/tools";
 import { rows } from "./support/connections";
 import { clients, McpClient, rpcMessages, rpcResult } from "./support/oauth";
 import {
@@ -90,29 +90,30 @@ it("lists a tool whose only permitted account needs reconnecting", async () => {
   expect(await names(f.mcp)).toEqual(["list_accounts", "list_labels", "get_approval"]);
 });
 
-it("publishes each tool's declared annotations", async () => {
+it("publishes the expected annotations for every tool", async () => {
   const f = await fixture();
-  await permission(f);
-  const tool = TOOLS.find((tool) => tool.name === "list_labels")!;
-  const original = tool.annotations;
-  const annotations = {
-    readOnlyHint: false,
-    destructiveHint: true,
-    idempotentHint: false,
-  } as const;
-  tool.annotations = annotations;
-  try {
-    const listed = (await rpcResult(await f.mcp.call())).tools as Array<{
-      name: string;
-      annotations: Tool["annotations"];
-    }>;
-    expect(listed.find((tool) => tool.name === "list_labels")!.annotations).toEqual(annotations);
-    expect(listed.find((tool) => tool.name === "list_accounts")!.annotations).toEqual({
-      readOnlyHint: true,
-    });
-  } finally {
-    tool.annotations = original;
-  }
+  for (const tool of TOOLS)
+    if (tool.kind === "account") await permission(f, f.personal, true, tool.name);
+  const listed = (await rpcResult(await f.mcp.call())).tools as Array<{
+    name: string;
+    annotations: unknown;
+  }>;
+  expect(listed.map(({ name, annotations }) => ({ name, annotations }))).toEqual([
+    { name: "list_accounts", annotations: { readOnlyHint: true } },
+    { name: "list_labels", annotations: { readOnlyHint: true } },
+    { name: "search_threads", annotations: { readOnlyHint: true } },
+    { name: "read_thread", annotations: { readOnlyHint: true } },
+    { name: "get_attachment", annotations: { readOnlyHint: true } },
+    {
+      name: "change_labels",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: "create_draft",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    { name: "get_approval", annotations: { readOnlyHint: true } },
+  ]);
 });
 
 it("removes a tool when the owner removes its only permitted account", async () => {
