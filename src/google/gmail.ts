@@ -4,6 +4,7 @@ import { notFound, ToolFailure, type Missing } from "../mcp/failures";
 import { isoSeconds } from "../approvals/model";
 import { decodeEntities } from "./html";
 import { Headers, InternalDate, header } from "./message";
+import { shorten } from "./bounds";
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const unavailable = () => new ToolFailure({ code: "google_unavailable" });
@@ -167,8 +168,8 @@ export const threadSummary = (
           Effect.mapError(unavailable),
         );
         return {
-          subject: header(first.payload?.headers, "Subject"),
-          from: header(last.payload?.headers, "From"),
+          subject: shorten(header(first.payload?.headers, "Subject"), 500),
+          from: shorten(header(last.payload?.headers, "From"), 500),
           date: Number(date),
           unread: value.messages.some((m) => m.labelIds?.includes("UNREAD") === true),
           messages: [first.id, ...value.messages.slice(1).map((m) => m.id)],
