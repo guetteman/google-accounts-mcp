@@ -3,10 +3,10 @@ import { Effect, Result } from "effect";
 import { HttpResponse } from "msw";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
-import { WINDOW, STALE } from "../src/once/store";
+import { WINDOW, STALE, take, settle, release, type Claim } from "../src/once/store";
 import { identityOf } from "../src/once/identity";
 import { executeAccount, CALL_DEADLINE, type CallContext } from "../src/mcp/call";
-import { TOOLS } from "../src/mcp/tools";
+import { TOOLS, parseAccountTool } from "../src/mcp/tools";
 import { readConfig, type TokenKey } from "../src/config";
 import { normalizeEmail, readOwner } from "../src/owner/owner";
 import { allowedAccountStatement, decodeAllowedAccount } from "../src/accounts/store";
@@ -88,6 +88,70 @@ it.each(["direct", "approved"])("answers running while a %s creation is held", a
   await first;
   expect(google.draftCreates).toHaveLength(1);
 });
+
+it("answers running to an allowed repeat while an approved creation holds the row", async () => {
+  const f = await draftFixture("ask");
+  const id = (await answer(await draftCall(f))).approval as string;
+  const held = holdCreate();
+  const first = approve(f, id);
+  try {
+    await held.entered;
+    await setDraft(f, "allow");
+    expect(await answer(await draftCall(f))).toEqual(running);
+    expect(google.draftCreates).toHaveLength(1);
+  } finally {
+    held.release();
+  }
+  expect((await first).state.kind).toBe("succeeded");
+  expect(google.draftCreates).toHaveLength(1);
+});
+
+it.each(["done", "unknown", "release"] as const)(
+  "keeps a later holder's row unchanged for an old claim (%s)",
+  async (action) => {
+    const f = await draftFixture();
+    const ctx = { db: env.DB };
+    const at = Date.now();
+    const identity = await identityOf(new Uint8Array(32).fill(1) as TokenKey, {
+      connection: parseConnectionId(f.connection.id)!,
+      account: f.personal.id,
+      tool: parseAccountTool("create_draft")!,
+      args: { body: "claims" },
+      defaults: {},
+    });
+    const first = await Effect.runPromise(take(ctx, identity, at));
+    if (first.kind !== "run") throw new Error("Expected first claim");
+    await Effect.runPromise(release(ctx, first.claim));
+    const second = await Effect.runPromise(take(ctx, identity, at + 1));
+    if (second.kind !== "run") throw new Error("Expected second claim");
+    expect(second.claim.value).not.toBe(first.claim.value);
+    const read = () =>
+      env.DB.prepare("SELECT * FROM once WHERE identity = ?").bind(identity).first();
+    const before = await read();
+    expect(before).toMatchObject({ state: "running", claim: second.claim.value });
+    const change = (claim: Claim) =>
+      action === "release"
+        ? release(ctx, claim)
+        : settle(
+            ctx,
+            claim,
+            at + 2,
+            action === "done"
+              ? { kind: "done", result: { draft: "r-new", message: "m-new", thread: "t-new" } }
+              : { kind: "unknown" },
+          );
+    await Effect.runPromise(change(first.claim));
+    expect(await read()).toEqual(before);
+    await Effect.runPromise(change(second.claim));
+    if (action === "release") expect(await read()).toBeNull();
+    else
+      expect(await read()).toMatchObject({
+        state: action,
+        claim: second.claim.value,
+        expires_at: at + 2 + WINDOW,
+      });
+  },
+);
 
 it.each([
   "redirect",

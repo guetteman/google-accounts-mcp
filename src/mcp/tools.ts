@@ -414,7 +414,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
                 text: shorten(plan.answered.from, 1000),
                 from: "gmail",
               },
-              { name: "Its subject", text: plan.answered.subject, from: "gmail" },
+              { name: "Its subject", text: shorten(plan.answered.subject, 1000), from: "gmail" },
               { name: "Its date", text: `${date} at ${time} UTC`, from: "gmail" },
             );
           }

@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { createExecutionContext } from "cloudflare:test";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
-import { MAX_SUBJECT } from "../src/google/mail";
+import { MAX_SUBJECT, parseMailbox } from "../src/google/mail";
 import { CALL_DEADLINE } from "../src/mcp/call";
 import { answer, approve, page, rows } from "./support/approvals";
 import {
@@ -281,8 +281,9 @@ it.each(["To", "Cc"])("refuses filled-in %s longer than 2000 characters", async 
 
 it("bounds filled recipients after RFC 2047 encoding, even when the source header fits", async () => {
   const f = await draftFixture();
-  const from = `${"José ".repeat(220)}<sam@example.com>`;
-  expect(from.length).toBeLessThan(2000);
+  const from = `${"🙂".repeat(400)} <sam@example.com>`;
+  expect(from.length).toBeLessThanOrEqual(998);
+  expect(parseMailbox(from)).not.toBeNull();
   serveMessage({ From: from });
   await expectError(
     await draftCall(f, { reply_to: SOURCE }),
@@ -291,6 +292,35 @@ it("bounds filled recipients after RFC 2047 encoding, even when the source heade
   );
   expect(google.draftCreates).toEqual([]);
   expect(await onceRows()).toEqual([]);
+});
+
+it.each(["b", "<x@example.com>"])(
+  "rejects a 300000-character recipient ending in %s even when denied",
+  async (end) => {
+    const f = await draftFixture();
+    await setDraft(f, "deny");
+    const text = "a" + " ".repeat(300_000 - end.length - 1) + end;
+    await expectError(
+      await draftCall(f, { to: [text] }),
+      "invalid_arguments",
+      /The to field must be/,
+    );
+    expect(await rows()).toEqual([]);
+    expect(await onceRows()).toEqual([]);
+    expect(google.draftCreates).toEqual([]);
+  },
+);
+
+it("rejects an overlong address with ask before creating an approval", async () => {
+  const f = await draftFixture("ask");
+  await expectError(
+    await draftCall(f, { to: ["a".repeat(1000) + "@example.com"] }),
+    "invalid_arguments",
+    /The to field must be/,
+  );
+  expect(await rows()).toEqual([]);
+  expect(await onceRows()).toEqual([]);
+  expect(google.draftCreates).toEqual([]);
 });
 
 it.each([false, true])(

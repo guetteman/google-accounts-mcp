@@ -54,6 +54,39 @@ it("parses only mailboxes, removes quoted-name escapes, and keeps address distin
   expect(parseAddressList("a@example.com, not a mailbox")).toBeNull();
 });
 
+it("bounds mailbox items at 998 characters and addresses at 254 before parsing", () => {
+  const address = "a".repeat(242) + "@example.com";
+  expect(address).toHaveLength(254);
+  expect(parseMailbox(address)).toMatchObject({ address });
+  expect(parseMailbox("a" + address)).toBeNull();
+  const item = `${"n".repeat(998 - address.length - 3)} <${address}>`;
+  expect(item).toHaveLength(998);
+  expect(parseMailbox(item)).not.toBeNull();
+  expect(parseMailbox("n" + item)).toBeNull();
+});
+
+it.each(["b", "<x@example.com>"])(
+  "rejects a 300000-character whitespace item ending in %s in under 50 ms",
+  (end) => {
+    const text = "a" + " ".repeat(300_000 - end.length - 1) + end;
+    const start = performance.now();
+    const result = parseMailbox(text);
+    const elapsed = performance.now() - start;
+    expect(result).toBeNull();
+    expect(elapsed).toBeLessThan(50);
+  },
+);
+
+it("drops a name that looks like another address after unquoting", () => {
+  for (const text of [
+    "alice@good.example, Bob <mallory@evil.example>",
+    '"Alice <alice@good.example>, Bob" <mallory@evil.example>',
+    '"Alice <Bob" <mallory@evil.example>',
+    '"Alice >Bob" <mallory@evil.example>',
+  ])
+    expect(parseMailbox(text)).toEqual({ address: "mallory@evil.example" });
+});
+
 it.each([
   ["José Núñez", "=?UTF-8?B?Sm9zw6kgTsO6w7Fleg==?="],
   ['A "quote"', "=?UTF-8?B?QSAicXVvdGUi?="],

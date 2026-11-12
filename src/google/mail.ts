@@ -15,21 +15,29 @@ export type Outgoing = {
 };
 // oxlint-disable-next-line no-control-regex -- Mail headers must reject control characters.
 const control = /[\u0000-\u001f\u007f]/;
+const safeName = /^[a-zA-Z0-9 !#$%&'*+\-/=?^_`{|}~]*$/;
 const addressOkay = (address: string) =>
+  address.length <= 254 &&
   /^[\x21-\x7e]+@[\x21-\x7e]+$/.test(address) &&
   address.split("@").length === 2 &&
   !/[<>()[\],;:\\"]/.test(address);
 export const parseMailbox = (text: string): Mailbox | null => {
-  if (control.test(text)) return null;
+  if (text.length > 998) return null;
   const value = text.trim();
-  const angle = /^(.*?)\s*<([^<>]+)>$/.exec(value);
-  const address = angle ? angle[2]! : value;
-  if (!addressOkay(address)) return null;
-  let name = angle?.[1]?.trim() ?? "";
+  let address = value;
+  let name = "";
+  if (value.endsWith(">")) {
+    const angle = value.lastIndexOf("<");
+    if (angle < 0) return null;
+    address = value.slice(angle + 1, -1);
+    name = value.slice(0, angle).trim();
+  }
+  if (!addressOkay(address) || control.test(text)) return null;
   if (name.startsWith('"')) {
     if (!/^"(?:[^"\\]|\\.)*"$/.test(name)) return null;
     name = name.slice(1, -1).replace(/\\(.)/g, "$1");
-  } else if (/[<>]/.test(name)) return null;
+  }
+  if (/[@<>]/.test(name)) name = "";
   return { ...(name ? { name } : {}), address } as Mailbox;
 };
 export const parseAddressList = (value: string): Mailbox[] | null => {
@@ -43,8 +51,12 @@ export const parseAddressList = (value: string): Mailbox[] | null => {
   return result;
 };
 /** Human-readable mailbox, before the MIME representation of a display name. */
-export const mailboxText = (mailbox: Mailbox): string =>
-  mailbox.name ? `${mailbox.name} <${mailbox.address}>` : mailbox.address;
+export const mailboxText = (mailbox: Mailbox): string => {
+  if (!mailbox.name) return mailbox.address;
+  const quoted = Array.from(mailbox.name).some((c) => c.charCodeAt(0) <= 0x7f && !safeName.test(c));
+  const name = quoted ? `"${mailbox.name.replace(/["\\]/g, "\\$&")}"` : mailbox.name;
+  return `${name} <${mailbox.address}>`;
+};
 const base64 = (text: string) => {
   const bytes = utf8.encode(text);
   let binary = "";
@@ -76,7 +88,7 @@ const headerText = (text: string, prefix: number, name = false) =>
   /^[\x20-\x7e]*$/.test(text) &&
   !text.includes("=?") &&
   prefix + text.length <= 998 &&
-  (!name || /^[a-zA-Z0-9 !#$%&'*+\-/=?^_`{|}~]*$/.test(text))
+  (!name || safeName.test(text))
     ? text
     : encodedWords(text);
 /** Every token must fit on a continuation line; folding never splits an encoded word. */
