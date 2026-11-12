@@ -177,12 +177,40 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
       ...approvalBase.request,
       tool: { ...approvalBase.request.tool, label: "Search mail", action: "search the mail" },
       values: [
-        { name: "Query", text: "in:inbox is:unread from:billing@northwind.example newer_than:7d" },
-        { name: "Limit", text: "10" },
-        { name: "Page", text: "0a1b2c3d4e5f6a7b8c9d" },
+        {
+          name: "Query",
+          text: "in:inbox is:unread from:billing@northwind.example newer_than:7d",
+          from: "agent",
+        },
+        { name: "Limit", text: "10", from: "agent" },
+        { name: "Page", text: "0a1b2c3d4e5f6a7b8c9d", from: "agent" },
       ],
     },
   },
+  "approval-waiting-thread": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Read thread",
+        action: "read a thread",
+        joiner: "in",
+      },
+      values: [
+        { name: "Subject", text: "Re: Invoice 2026-114 for the October work", from: "gmail" },
+        { name: "Messages", text: "7", from: "gmail" },
+        {
+          name: "Last message from",
+          text: "Kim Lee (Northwind Billing) <kim.lee@northwind.example>",
+          from: "gmail",
+        },
+        { name: "Last message date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+        { name: "Starts at", text: "Message 4 of 7", from: "agent" },
+      ],
+    },
+  },
+
   "approval-cannot-show": {
     ...approvalBase,
     state: { kind: "waiting", shown: false, changed: false, digest: null },

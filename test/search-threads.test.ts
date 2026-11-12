@@ -185,9 +185,9 @@ it("with ask, searches nothing until the owner approves what the page showed, th
   expect(props.request.tool.action).toBe("search the mail");
   // Every value that the call sends, in full: the page says that the agent wrote them.
   expect(props.request.values).toEqual([
-    { name: "Query", text: query },
-    { name: "Limit", text: "2" },
-    { name: "Page", text: "0a1b2c3d" },
+    { name: "Query", text: query, from: "agent" },
+    { name: "Limit", text: "2", from: "agent" },
+    { name: "Page", text: "0a1b2c3d", from: "agent" },
   ]);
   expect(googleTraffic().slice(before)).toEqual([]);
   const decided = await f.mcp.browser.post(`/approvals/${String(pending.approval)}/approve`, {
@@ -314,11 +314,42 @@ it("ends the whole search twenty seconds after the call, with an unknown outcome
 it("reports a date that Gmail cannot mean as Google's failure", async () => {
   const f = await allowed();
   google.threadAnswers.set(THREAD_LIST.threads[0]!.id, () =>
-    HttpResponse.json({ messages: [{ internalDate: "8700000000000000" }] }),
+    HttpResponse.json({ messages: [{ id: "m1", internalDate: "8700000000000000" }] }),
   );
   await expectError(
     await search(f, { query: "a" }),
     "google_unavailable",
     unavailableMessage(PERSONAL),
   );
+});
+
+it("shortens sender-controlled subject and from in search results without splitting an emoji", async () => {
+  const f = await allowed();
+  google.threadAnswers.set(THREAD_LIST.threads[0]!.id, () =>
+    HttpResponse.json({
+      messages: [
+        {
+          id: "m1",
+          internalDate: "1794390096000",
+          payload: {
+            headers: [
+              { name: "Subject", value: "a".repeat(498) + "🙂" + "x".repeat(39500) },
+              { name: "From", value: "b".repeat(498) + "🙂tail" },
+            ],
+          },
+        },
+      ],
+    }),
+  );
+  const rpc = await rpcResult(await search(f, { query: "in:inbox" }));
+  expect(rpc.isError).toBeUndefined();
+  const found = JSON.parse((rpc.content as Array<{ text: string }>)[0]!.text) as {
+    threads: Array<{ subject: string; from: string }>;
+  };
+  const first = found.threads[0]!;
+  expect(first.subject.isWellFormed()).toBe(true);
+  expect(first.from.isWellFormed()).toBe(true);
+  expect(first.subject.length).toBeLessThanOrEqual(500);
+  expect(first.subject).toBe("a".repeat(498) + "…");
+  expect(first.from).toBe("b".repeat(498) + "…");
 });

@@ -55,13 +55,14 @@ it("links each connection to its own permissions page and shows only the account
     expect(props.settings[`${f.northwind.id}:${tool.name}`]).toBeUndefined();
 });
 
-it("renders both tools under Find and read, in tool-list order, and no empty group", async () => {
+it("renders every tool under Find and read, in tool-list order, and no empty group", async () => {
   const f = await fixture();
   const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
   const props = pageProps(html);
   expect(props.tools.map(({ name, group }) => ({ name, group }))).toEqual([
     { name: "list_labels", group: "Find and read" },
     { name: "search_threads", group: "Find and read" },
+    { name: "read_thread", group: "Find and read" },
   ]);
   const first = html.slice(
     html.indexOf("Tool permissions"),
@@ -70,6 +71,9 @@ it("renders both tools under Find and read, in tool-list order, and no empty gro
   expect(textOf(first)).toContain("Find and read");
   expect(first.indexOf('aria-label="List labels on Personal')).toBeLessThan(
     first.indexOf('aria-label="Search mail on Personal'),
+  );
+  expect(first.indexOf('aria-label="Search mail on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Read thread on Personal'),
   );
   for (const group of GROUPS.slice(1)) expect(textOf(html)).not.toContain(group);
 });

@@ -2,8 +2,8 @@ import { Effect } from "effect";
 import { decodeAllowedAccount } from "../accounts/store";
 import type { Config } from "../config";
 import { WriteUncertain } from "../db";
-import { executeAccount, type CallContext } from "../mcp/call";
-import { classify } from "../mcp/failures";
+import { accountRequests, CALL_DEADLINE, executeAccount, type CallContext } from "../mcp/call";
+import { classify, ToolFailure } from "../mcp/failures";
 import type { Outcome } from "../calls/store";
 import {
   RUN_DEADLINE,
@@ -13,23 +13,65 @@ import {
   type StoredPayload,
   type Won,
 } from "./model";
-import { decideApproval, finishApproval, readApproval, type ApprovalContext } from "./store";
+import {
+  decideApproval,
+  finishApproval,
+  readApproval,
+  viewCredential,
+  type ApprovalContext,
+} from "./store";
 import { openResult, sealResult } from "./text";
+import type { Send } from "../mcp/tools";
 import { approvalView } from "./view";
 
 type Dependencies = ApprovalContext & { config: Config; origin: string };
-async function viewOf(approval: Approval, deps: Pick<Dependencies, "config">, changed = false) {
+async function viewOf(
+  approval: Approval,
+  deps: ApprovalContext & { config: Config },
+  changed = false,
+  reads?: { deadline: number; signal?: AbortSignal },
+) {
   const payload =
     approval.state === "finished" && approval.outcome === "failed" && approval.result !== null
       ? await openResult(deps.config.tokenKey, approval.id, approval.result)
       : null;
-  return approvalView(
-    approval,
-    deps.config.tokenKey,
-    Date.now(),
-    changed,
-    payload && "error" in payload ? payload.error.message : null,
-  );
+  let requests: ReturnType<typeof accountRequests> | undefined;
+  const send: Send = (build) =>
+    Effect.gen(function* () {
+      if (!requests) {
+        const row = yield* viewCredential(deps, approval.id, Date.now()).pipe(
+          Effect.mapError(() => new ToolFailure({ code: "server_unavailable" })),
+        );
+        if (!row) return yield* Effect.fail(new ToolFailure({ code: "account_not_available" }));
+        const allowed = yield* Effect.tryPromise({
+          try: () => decodeAllowedAccount(row, deps.config.tokenKey),
+          catch: () => new ToolFailure({ code: "server_unavailable" }),
+        });
+        requests = accountRequests(
+          { ...deps, now: Date.now },
+          allowed,
+          reads!.deadline,
+          reads!.signal,
+        );
+      }
+      return yield* requests.send((token, signal) => {
+        const request = build(token, signal);
+        if (request.method !== "GET") throw new Error("A view may only read");
+        return request;
+      });
+    });
+  try {
+    return await approvalView(
+      approval,
+      deps.config.tokenKey,
+      Date.now(),
+      changed,
+      payload && "error" in payload ? payload.error.message : null,
+      reads ? send : undefined,
+    );
+  } finally {
+    requests?.close();
+  }
 }
 export const readApprovalPage = (
   deps: ApprovalContext & { config: Config },
@@ -39,7 +81,9 @@ export const readApprovalPage = (
   Effect.tryPromise({
     try: async () => {
       const approval = await Effect.runPromise(readApproval(deps, id, Date.now()));
-      return approval ? (await viewOf(approval, deps, changed)).page : null;
+      return approval
+        ? (await viewOf(approval, deps, changed, { deadline: Date.now() + CALL_DEADLINE })).page
+        : null;
     },
     catch: () => new WriteUncertain(),
   });
@@ -56,11 +100,28 @@ export const decide = (
       let winner: Won | null = null;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const late = () => controller.signal.aborted || Date.now() >= deadline;
-      const readPage = (changed = false) => Effect.runPromise(readApprovalPage(deps, id, changed));
+      const readPage = async (changed = false) => {
+        const row = await Effect.runPromise(readApproval(deps, id, Date.now()));
+        return row
+          ? (
+              await viewOf(
+                row,
+                deps,
+                changed,
+                action === "approve" ? { deadline, signal: controller.signal } : undefined,
+              )
+            ).page
+          : null;
+      };
       const work = async () => {
         const approval = await Effect.runPromise(readApproval(deps, id, Date.now()));
         if (!approval) return null;
-        const view = await viewOf(approval, deps);
+        const view = await viewOf(
+          approval,
+          deps,
+          false,
+          action === "approve" ? { deadline, signal: controller.signal } : undefined,
+        );
         switch (approval.state) {
           case "running":
           case "finished":

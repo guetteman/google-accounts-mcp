@@ -251,6 +251,24 @@ export const readApproval = (
     catch: () => new WriteUncertain(),
   });
 
+/** A view acquires a credential only while this waiting approval is still usable. */
+export const viewCredential = (
+  ctx: ApprovalContext,
+  id: ApprovalId,
+  now: number,
+  // oxlint-disable-next-line typescript/no-redundant-type-constituents -- Keep the missing-row case explicit in this public signature.
+): Effect.Effect<unknown | null, Unavailable> =>
+  Effect.tryPromise({
+    try: () =>
+      ctx.db
+        .prepare(`SELECT ${allowedAccountColumns}
+      FROM approvals JOIN json_each(approvals.uses) u JOIN accounts a ON a.id = json_extract(u.value,'$.account') AND a.generation = approvals.generation
+      WHERE approvals.id = ?1 AND ${ownerGuard("?2", "?3")} AND approvals.state = 'waiting' AND ?4 < approvals.expires_at AND ${rowUsable("?4", "?3")}`)
+        .bind(id, ctx.owner.generation, ctx.owner.email, now)
+        .first<unknown>(),
+    catch: () => new Unavailable(),
+  });
+
 export interface Decision {
   id: ApprovalId;
   at: number;

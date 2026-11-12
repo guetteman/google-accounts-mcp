@@ -89,6 +89,18 @@ function Quoted({ label, text }: { readonly label: string; readonly text: string
   );
 }
 
+const OWN_WORDS = "This page's own words are never shaded.";
+const SOURCES = { agent: "written by the agent", gmail: "read from Gmail" } as const;
+type Values = ApprovalRequest["values"];
+const mixed = (values: Values) => new Set(values.map((value) => value.from)).size > 1;
+/** Whose text the shaded values are. Text read from Gmail was never written by the agent. */
+const whose = (values: Values) =>
+  mixed(values)
+    ? "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which."
+    : values[0]?.from === "gmail"
+      ? "The server read the shaded text below from Gmail. The agent did not write it."
+      : "The agent wrote the shaded text below.";
+
 const minutes = (count: number) => (count === 1 ? "1 minute" : `${count} minutes`);
 
 function Facts({
@@ -241,7 +253,7 @@ function WaitingView({
             <p className="text-sm text-muted-foreground">
               {values.length === 0
                 ? tool.empty
-                : `The agent wrote the shaded text below. This page's own words are never shaded.${
+                : `${whose(values)} ${OWN_WORDS}${
                     values.some((value) => hasHidden(value.text))
                       ? " Characters you cannot see are shown as codes."
                       : ""
@@ -249,7 +261,11 @@ function WaitingView({
             </p>
           </div>
           {values.map((value) => (
-            <Quoted key={value.name} label={value.name} text={value.text} />
+            <Quoted
+              key={value.name}
+              label={mixed(values) ? `${value.name}, ${SOURCES[value.from]}` : value.name}
+              text={value.text}
+            />
           ))}
           {values.length > 0 && (
             <p className="text-sm text-muted-foreground">That is the whole call.</p>

@@ -1,12 +1,15 @@
 import { Effect, Schema } from "effect";
 import type { Send } from "../mcp/tools";
-import { ToolFailure } from "../mcp/failures";
+import { notFound, ToolFailure } from "../mcp/failures";
 import { isoSeconds } from "../approvals/model";
+import { decodeEntities } from "./html";
+import { Headers, InternalDate, header } from "./message";
+import { shorten } from "./bounds";
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const unavailable = () => new ToolFailure({ code: "google_unavailable" });
 /** One GET as the account. Any status outside 200 to 299 goes to refused, with its status. */
-const get = <A>(
+export const get = <A>(
   send: Send,
   path: string,
   schema: Schema.Codec<A, unknown>,
@@ -58,34 +61,47 @@ const ThreadList = Schema.Struct({
 const Thread = Schema.Struct({
   messages: Schema.NonEmptyArray(
     Schema.Struct({
+      id: Schema.String,
       labelIds: Schema.optionalKey(Schema.Array(Schema.String)),
       internalDate: Schema.String,
-      payload: Schema.optionalKey(
-        Schema.Struct({
-          headers: Schema.optionalKey(
-            Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String })),
-          ),
-        }),
-      ),
+      payload: Schema.optionalKey(Schema.Struct({ headers: Schema.optionalKey(Headers) })),
     }),
   ),
 });
-// Gmail escapes a snippet as HTML. The agent gets the text.
-const ENTITIES: Readonly<Record<string, string>> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-};
-const decodeEntities = (text: string) =>
-  text.replace(/&(?:#(\d+)|#x([0-9a-fA-F]+)|([a-z]+));/g, (whole, decimal, hex, name) => {
-    const code = decimal ? Number(decimal) : hex ? parseInt(hex, 16) : null;
-    if (code === null) return ENTITIES[name as string] ?? whole;
-    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
-  });
-const header = (message: (typeof Thread.Type)["messages"][number], name: string): string =>
-  message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+export interface ThreadSummary {
+  subject: string;
+  from: string;
+  date: number;
+  unread: boolean;
+  messages: readonly [string, ...string[]];
+}
+export const threadSummary = (
+  send: Send,
+  thread: string,
+): Effect.Effect<ThreadSummary, ToolFailure> =>
+  get(
+    send,
+    `threads/${encodeURIComponent(thread)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`,
+    Thread,
+    (status) => (status === 404 || status === 400 ? notFound("thread", thread) : unavailable()),
+  ).pipe(
+    Effect.flatMap((value) =>
+      Effect.gen(function* () {
+        const first = value.messages[0];
+        const last = value.messages[value.messages.length - 1]!;
+        const date = yield* Schema.decodeUnknownEffect(InternalDate)(last.internalDate).pipe(
+          Effect.mapError(unavailable),
+        );
+        return {
+          subject: shorten(header(first.payload?.headers, "Subject"), 500),
+          from: shorten(header(last.payload?.headers, "From"), 500),
+          date: Number(date),
+          unread: value.messages.some((m) => m.labelIds?.includes("UNREAD") === true),
+          messages: [first.id, ...value.messages.slice(1).map((m) => m.id)],
+        } satisfies ThreadSummary;
+      }),
+    ),
+  );
 /** Cloudflare allows a Worker six connections at once for one request; five leave one free. */
 const THREADS_AT_ONCE = 5;
 export const searchThreads = (
@@ -107,28 +123,17 @@ export const searchThreads = (
     const threads = yield* Effect.forEach(
       list.threads ?? [],
       (listed) =>
-        get(
-          send,
-          `threads/${encodeURIComponent(listed.id)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`,
-          Thread,
-        ).pipe(
-          Effect.flatMap((thread) => {
-            const first = thread.messages[0];
-            const last = thread.messages[thread.messages.length - 1]!;
-            const at = Number(last.internalDate);
-            // A Date holds at most 8.64e15 milliseconds.
-            if (!Number.isSafeInteger(at) || Math.abs(at) > 8.64e15)
-              return Effect.fail(unavailable());
-            return Effect.succeed({
-              thread: listed.id,
-              subject: header(first, "Subject"),
-              from: header(last, "From"),
-              date: isoSeconds(at),
-              snippet: decodeEntities(listed.snippet),
-              messages: thread.messages.length,
-              unread: thread.messages.some((m) => m.labelIds?.includes("UNREAD") === true),
-            });
-          }),
+        threadSummary(send, listed.id).pipe(
+          Effect.mapError((error) => (error.code === "not_found" ? unavailable() : error)),
+          Effect.map((thread) => ({
+            thread: listed.id,
+            subject: thread.subject,
+            from: thread.from,
+            date: isoSeconds(thread.date),
+            snippet: decodeEntities(listed.snippet),
+            messages: thread.messages.length,
+            unread: thread.unread,
+          })),
         ),
       { concurrency: THREADS_AT_ONCE },
     );

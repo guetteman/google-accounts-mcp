@@ -64,6 +64,23 @@ export async function executeAccount(
   deadline: number,
   signal?: AbortSignal,
 ) {
+  const requests = accountRequests(ctx, allowed, deadline, signal);
+  try {
+    const result = await Effect.runPromise(
+      Effect.result(tool.run(requests.send, { email: allowed.credential.email }, args)),
+    );
+    if (Result.isFailure(result)) throw result.failure;
+    return result.success;
+  } finally {
+    requests.close();
+  }
+}
+export function accountRequests(
+  ctx: Pick<CallContext, "db" | "config" | "owner" | "now">,
+  allowed: Allowed,
+  deadline: number,
+  signal?: AbortSignal,
+): { send: Send; close: () => void } {
   if (allowed.status.kind === "missing_access" || allowed.status.kind === "unreadable")
     throw new ToolFailure({ code: `account_${allowed.status.kind}` });
   // A tool can send several requests at once, so each attempt owns its timer.
@@ -88,15 +105,12 @@ export async function executeAccount(
         signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
       );
     }).pipe(Effect.mapError(tokenFailure));
-  try {
-    const result = await Effect.runPromise(
-      Effect.result(tool.run(send, { email: allowed.credential.email }, args)),
-    );
-    if (Result.isFailure(result)) throw result.failure;
-    return result.success;
-  } finally {
-    for (const timer of timers) clearTimeout(timer);
-  }
+  return {
+    send,
+    close: () => {
+      for (const timer of timers) clearTimeout(timer);
+    },
+  };
 }
 export async function runCall(
   ctx: CallContext,
