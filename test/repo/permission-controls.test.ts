@@ -923,27 +923,27 @@ it.each([
     wanted: "Allowed" as const,
     text: "Claude will be able to use every tool on Personal without asking you, including these, which cannot be undone: Send mail, Forward message, and Delete permanently. This changes 6 tools.",
     // List labels is already Allowed, so the click does not send it.
-    sent: ["search_threads", "draft", "send", "forward", "delete", "trash"],
+    sent: ["delete", "send", "draft", "search_threads", "forward", "trash"],
   },
   {
     // Send mail is already Allowed here: the click does not change it, name it, or send it.
     account: "Northwind",
     wanted: "Allowed" as const,
     text: "Claude will be able to use every tool on Northwind without asking you, including these, which cannot be undone: Forward message and Delete permanently. This changes 6 tools.",
-    sent: ["list_labels", "search_threads", "draft", "forward", "delete", "trash"],
+    sent: ["delete", "list_labels", "draft", "search_threads", "forward", "trash"],
   },
   {
     account: "Projects",
     wanted: "Allowed" as const,
     text: "Claude will be able to use every tool on Projects without asking you, including Forward message, which cannot be undone. This changes 5 tools.",
-    sent: ["list_labels", "search_threads", "draft", "forward", "trash"],
+    sent: ["list_labels", "draft", "search_threads", "forward", "trash"],
   },
   {
     // Every irreversible tool is already Allowed.
     account: "Fabrikam Holdings International, Finance and Legal Operations",
     wanted: "Allowed" as const,
     text: "Claude will be able to use every tool on Fabrikam Holdings International, Finance and Legal Operations without asking you. This changes 4 tools.",
-    sent: ["list_labels", "search_threads", "draft", "trash"],
+    sent: ["list_labels", "draft", "search_threads", "trash"],
   },
   {
     account: "Personal",
@@ -970,6 +970,8 @@ it.each([
       expect(form.getAll("tool")).toEqual(tools);
       expect(form.get("setting")).toBe(wanted === "Allowed" ? "allow" : "ask");
       expect(routes).toHaveLength(1);
+      // The whole account shows the save, also when the request left out a tool.
+      await panel(page, account).getByText("Saving…", { exact: true }).waitFor();
     } finally {
       await page.close();
     }

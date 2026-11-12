@@ -190,7 +190,15 @@ export function ConnectionPage(props: Props) {
     const { outcome } = await postAction(`/connections/${connection.id}/permissions`, [
       ["account", account.id],
       ["setting", wanted],
-      ...tools.map((tool): [string, string] => ["tool", tool.name]),
+      // Allowed goes only to the tools that the page shows at another value, the ones that the
+      // dialog counted. In a page that is out of date, a tool that it shows as Allowed is then
+      // not granted without being named. Ask first and Not allowed go to every tool.
+      ...tools
+        .filter((_, i) => {
+          const { state } = before[i]!;
+          return wanted !== "allow" || (state.phase !== "unconfirmed" && state.value !== "allow");
+        })
+        .map((tool): [string, string] => ["tool", tool.name]),
     ]);
     setControls((previous) => ({
       ...previous,
@@ -582,16 +590,10 @@ export function ConnectionPage(props: Props) {
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
-                // Allowed goes only to the tools that the dialog counted. In a page that is out of
-                // date, a tool that it shows as Allowed is then not granted without being named.
                 onClick={() =>
                   void save(
                     pending.account,
-                    pending.tool
-                      ? [pending.tool]
-                      : pending.wanted === "allow"
-                        ? changing
-                        : props.tools,
+                    pending.tool ? [pending.tool] : props.tools,
                     pending.wanted,
                   )
                 }
