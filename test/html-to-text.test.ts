@@ -182,3 +182,18 @@ it("bounds expanded quote prefixes while converting 4000 nested quotes and 10000
     ),
   ).toBe(true);
 }, 20_000);
+
+it("stops parsing at the text bound before an unparseable tail", async () => {
+  const html =
+    "<blockquote>".repeat(500) +
+    "x<br>".repeat(1100) +
+    "</blockquote>".repeat(500) +
+    "<tr><td>".repeat(20000);
+  const text = await htmlToText(html);
+  expect(text.length).toBeLessThanOrEqual(1000000);
+  expect(
+    text.endsWith(
+      "\n[The rest of this message was left out: it is longer than 1,000,000 characters.]",
+    ),
+  ).toBe(true);
+});

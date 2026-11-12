@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { isoSeconds } from "../approvals/model";
-import { boundedRecipients, MAX_BODY_BYTES, shorten } from "./bounds";
+import { boundedRecipients, MAX_BODY_BYTES, PAGE_BODY_BYTES, shorten } from "./bounds";
 
 export const Headers = Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String }));
 interface RawPart {
@@ -40,14 +40,17 @@ export const RawMessage = Schema.Struct({
 export type RawMessage = typeof RawMessage.Type;
 export const header = (headers: typeof Headers.Type | undefined, name: string): string =>
   headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
-export type Body = (
-  | { kind: "plain" | "html"; text: string }
+export type BodyPart = (
+  | { kind: "plain" | "html"; data: string }
   | { kind: "plain" | "html"; fetch: string }
-  | { kind: "plain" | "html"; omitted: string }
-) & {
-  /** A deferred plain alternative may turn out blank once its bytes have been fetched. */
-  fallback?: Body[];
-};
+) & { size: number };
+export type Body =
+  | BodyPart
+  | {
+      kind: "alternative";
+      preferred: Body[];
+      fallback: Body[];
+    };
 export interface Attachment {
   attachment: string;
   filename: string;
@@ -64,7 +67,7 @@ export interface Message {
   date: string;
   labels: readonly string[];
   body: Body[];
-  html: string[];
+  html: BodyPart[];
   attachments: Array<Attachment & { contentId: string }>;
 }
 export const decodeBody = (data: string): string =>
@@ -99,10 +102,27 @@ const addresses = (value: string): string[] => {
   if (value.slice(start).trim()) result.push(value.slice(start).trim());
   return result;
 };
-/** MIME selection and byte decoding stay here; no Gmail requests happen while walking parts. */
+/** MIME selection stays pure. Bytes are decoded only after the page grants their cost. */
 export const readMessage = (raw: RawMessage): Message => {
-  const html: string[] = [];
+  const html: BodyPart[] = [];
   const parts: RawPart[] = [];
+  const sources = new Map<RawPart, BodyPart>();
+  const source = (part: RawPart): BodyPart => {
+    const found = sources.get(part);
+    if (found) return found;
+    const kind = part.mimeType === "text/plain" ? "plain" : "html";
+    const body: BodyPart = {
+      kind,
+      size: part.body.size,
+      ...(part.body.data !== undefined
+        ? { data: part.body.data }
+        : part.body.attachmentId !== undefined
+          ? { fetch: part.body.attachmentId }
+          : { data: "" }),
+    };
+    sources.set(part, body);
+    return body;
+  };
   const collect = (part: RawPart) => {
     parts.push(part);
     if (
@@ -110,43 +130,33 @@ export const readMessage = (raw: RawMessage): Message => {
       part.body.size <= MAX_BODY_BYTES &&
       part.body.data !== undefined
     )
-      html.push(decodeBody(part.body.data));
+      html.push(source(part));
     part.parts?.forEach(collect);
   };
   collect(raw.payload);
+  const readable = (body: Body) => body.kind === "alternative" || body.size <= PAGE_BODY_BYTES;
+  const hasPlain = (bodies: Body[]) =>
+    bodies.some((body) => body.kind === "alternative" || (body.kind === "plain" && readable(body)));
   const select = (part: RawPart): Body[] => {
-    if (part.filename) return [];
     if (part.mimeType === "multipart/alternative") {
       const alternatives = (part.parts ?? []).map(select);
-      const plain = alternatives.find((bodies) =>
-        bodies.some(
-          (body) => body.kind === "plain" && (!("text" in body) || body.text.trim() !== ""),
-        ),
+      const readableHtml = alternatives.find((bodies) =>
+        bodies.some((body) => body.kind === "html" && readable(body)),
       );
-      if (plain) {
-        const fallback = alternatives.find((bodies) => bodies.some((body) => body.kind === "html"));
-        if (plain.length === 1 && "fetch" in plain[0]! && fallback) plain[0]!.fallback = fallback;
-        return plain;
-      }
-      return alternatives.find((bodies) => bodies.some((body) => body.kind === "html")) ?? [];
+      const html =
+        readableHtml ?? alternatives.find((bodies) => bodies.some((body) => body.kind === "html"));
+      const plains = alternatives.filter(hasPlain);
+      let chosen: Body[] = html ?? [];
+      // A plain part can turn out blank only after its bytes have been read within the budget.
+      for (const preferred of plains.reverse())
+        chosen = chosen.length ? [{ kind: "alternative", preferred, fallback: chosen }] : preferred;
+      if (plains.length || readableHtml) return chosen;
+      return alternatives.find((bodies) => bodies.some((body) => body.kind === "plain")) ?? chosen;
     }
     if (part.parts) return part.parts.flatMap(select);
+    if (part.filename) return [];
     if (part.mimeType !== "text/plain" && part.mimeType !== "text/html") return [];
-    const kind = part.mimeType === "text/plain" ? "plain" : "html";
-    if (part.body.size > MAX_BODY_BYTES)
-      return [
-        {
-          kind,
-          omitted: `[The body of this message is too large to read: ${part.body.size} bytes.]`,
-        },
-      ];
-    return [
-      part.body.data !== undefined
-        ? { kind, text: decodeBody(part.body.data) }
-        : part.body.attachmentId !== undefined
-          ? { kind, fetch: part.body.attachmentId }
-          : { kind, text: "" },
-    ];
+    return [source(part)];
   };
   const body = select(raw.payload);
   return {

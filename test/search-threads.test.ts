@@ -322,3 +322,34 @@ it("reports a date that Gmail cannot mean as Google's failure", async () => {
     unavailableMessage(PERSONAL),
   );
 });
+
+it("shortens sender-controlled subject and from in search results without splitting an emoji", async () => {
+  const f = await allowed();
+  google.threadAnswers.set(THREAD_LIST.threads[0]!.id, () =>
+    HttpResponse.json({
+      messages: [
+        {
+          id: "m1",
+          internalDate: "1794390096000",
+          payload: {
+            headers: [
+              { name: "Subject", value: "a".repeat(498) + "🙂" + "x".repeat(39500) },
+              { name: "From", value: "b".repeat(498) + "🙂tail" },
+            ],
+          },
+        },
+      ],
+    }),
+  );
+  const rpc = await rpcResult(await search(f, { query: "in:inbox" }));
+  expect(rpc.isError).toBeUndefined();
+  const found = JSON.parse((rpc.content as Array<{ text: string }>)[0]!.text) as {
+    threads: Array<{ subject: string; from: string }>;
+  };
+  const first = found.threads[0]!;
+  expect(first.subject.isWellFormed()).toBe(true);
+  expect(first.from.isWellFormed()).toBe(true);
+  expect(first.subject.length).toBeLessThanOrEqual(500);
+  expect(first.subject).toBe("a".repeat(498) + "…");
+  expect(first.from).toBe("b".repeat(498) + "…");
+});

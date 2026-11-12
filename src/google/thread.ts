@@ -5,13 +5,24 @@ import {
   boundedAttachments,
   boundedText,
   BODY_PART_LEFT_OUT,
+  BODY_BYTES_LEFT_OUT,
   HTML_UNREADABLE,
+  MAX_BODY_BYTES,
   MAX_TEXT,
+  PAGE_BODY_BYTES,
   shorten,
 } from "./bounds";
 import { get } from "./gmail";
 import { htmlToText, referencedContentIds } from "./html";
-import { decodeBody, header, RawMessage, readMessage, type Attachment, type Body } from "./message";
+import {
+  decodeBody,
+  header,
+  RawMessage,
+  readMessage,
+  type Attachment,
+  type Body,
+  type BodyPart,
+} from "./message";
 
 export const LIMIT = 32_000;
 const MIN_TEXT = 1_000;
@@ -56,12 +67,46 @@ export interface ThreadResult {
 }
 const FullThread = Schema.Struct({ messages: Schema.NonEmptyArray(RawMessage) });
 const Bytes = Schema.Struct({ data: Schema.String });
-// Include a deferred plain part's possible fallback before spending the page's requests.
-const bodyRequests = (bodies: readonly Body[]): number =>
-  bodies.reduce(
-    (count, body) => count + ("fetch" in body ? 1 : 0) + bodyRequests(body.fallback ?? []),
-    0,
-  );
+const bodyParts = (bodies: readonly Body[], fallbacks: boolean, parts = new Set<BodyPart>()) => {
+  for (const body of bodies) {
+    if (body.kind === "alternative") {
+      bodyParts(body.preferred, fallbacks, parts);
+      if (fallbacks) bodyParts(body.fallback, fallbacks, parts);
+    } else parts.add(body);
+  }
+  return parts;
+};
+/** One page budget for both decoded bytes and deferred requests, counting each part once. */
+class BodyBudget {
+  private left = { bytes: PAGE_BODY_BYTES, requests: 3 };
+  private used = new Set<BodyPart>();
+  private cost(bodies: readonly Body[], fallbacks: boolean) {
+    const cost = { bytes: 0, requests: 0 };
+    for (const part of bodyParts(bodies, fallbacks)) {
+      if (this.used.has(part) || part.size > MAX_BODY_BYTES) continue;
+      cost.bytes += part.size;
+      if ("fetch" in part) cost.requests++;
+    }
+    return cost;
+  }
+  fits(bodies: readonly Body[], fallbacks = true): boolean {
+    const cost = this.cost(bodies, fallbacks);
+    return cost.bytes <= this.left.bytes && cost.requests <= this.left.requests;
+  }
+  bytesFit(bodies: readonly Body[]): boolean {
+    return this.cost(bodies, false).bytes <= this.left.bytes;
+  }
+  take(part: BodyPart): string | undefined {
+    if (part.size > MAX_BODY_BYTES)
+      return `[The body of this message is too large to read: ${part.size} bytes.]`;
+    if (this.used.has(part)) return;
+    if ("fetch" in part && this.left.requests === 0) return BODY_PART_LEFT_OUT;
+    if (part.size > this.left.bytes) return BODY_BYTES_LEFT_OUT;
+    this.left.bytes -= part.size;
+    if ("fetch" in part) this.left.requests--;
+    this.used.add(part);
+  }
+}
 const Drafts = Schema.Struct({
   drafts: Schema.optionalKey(
     Schema.Array(
@@ -169,17 +214,45 @@ export const readThread = (
     });
     const result = base();
     const prepared: ThreadMessage[] = [];
-    let requestsLeft = 3;
+    const budget = new BodyBudget();
     for (let index = start; index < thread.messages.length; index++) {
       const parsed = yield* Effect.try({
         try: () => readMessage(thread.messages[index]!),
         catch: () => new ToolFailure({ code: "google_unavailable" }),
       });
-      if (result.messages.length && bodyRequests(parsed.body) > requestsLeft) {
+      const scanHtml = parsed.attachments.some((a) => a.contentId) ? parsed.html : [];
+      if (result.messages.length && !budget.fits([...parsed.body, ...scanHtml])) {
         result.next_page = pageOf(parsed.message);
         break;
       }
-      const heldHtml = [...parsed.html];
+      type Decoded = { text: string } | { omitted: string };
+      const decoded = new Map<BodyPart, Decoded>();
+      const readPart = (part: BodyPart): Effect.Effect<Decoded, ToolFailure> =>
+        Effect.gen(function* () {
+          const cached = decoded.get(part);
+          if (cached) return cached;
+          const omitted = budget.take(part);
+          if (omitted !== undefined) {
+            const value = { omitted };
+            decoded.set(part, value);
+            return value;
+          }
+          const data =
+            "data" in part
+              ? part.data
+              : (yield* get(
+                  send,
+                  `messages/${encodeURIComponent(parsed.message)}/attachments/${encodeURIComponent(part.fetch)}`,
+                  Bytes,
+                )).data;
+          const text = yield* Effect.try({
+            try: () => decodeBody(data),
+            catch: () => new ToolFailure({ code: "google_unavailable" }),
+          });
+          const value = { text };
+          decoded.set(part, value);
+          return value;
+        });
       let htmlFailed = false;
       const readBodies = (bodies: readonly Body[]): Effect.Effect<string, ToolFailure> =>
         Effect.gen(function* () {
@@ -197,24 +270,16 @@ export const readThread = (
         });
       const bodyText = (body: Body): Effect.Effect<string, ToolFailure> =>
         Effect.gen(function* () {
-          if ("omitted" in body) return body.omitted;
-          let text: string;
-          if ("text" in body) text = body.text;
-          else {
-            if (requestsLeft === 0) return BODY_PART_LEFT_OUT;
-            requestsLeft--;
-            const bytes = yield* get(
-              send,
-              `messages/${encodeURIComponent(parsed.message)}/attachments/${encodeURIComponent(body.fetch)}`,
-              Bytes,
-            );
-            text = yield* Effect.try({
-              try: () => decodeBody(bytes.data),
-              catch: () => new ToolFailure({ code: "google_unavailable" }),
-            });
+          if (body.kind === "alternative") {
+            if (!budget.bytesFit(body.preferred) && budget.fits(body.fallback, false))
+              return yield* readBodies(body.fallback);
+            const text = yield* readBodies(body.preferred);
+            return text.trim() ? text : yield* readBodies(body.fallback);
           }
+          const value = yield* readPart(body);
+          if ("omitted" in value) return value.omitted;
+          const { text } = value;
           if (body.kind === "html") {
-            if ("fetch" in body) heldHtml.push(text);
             return yield* Effect.promise(() =>
               htmlToText(text).catch(() => {
                 htmlFailed = true;
@@ -222,7 +287,6 @@ export const readThread = (
               }),
             );
           }
-          if (!text.trim() && body.fallback) return yield* readBodies(body.fallback);
           return text;
         });
       const text = yield* readBodies(parsed.body);
@@ -230,6 +294,14 @@ export const readThread = (
       if (offset > text.length || safeEnd(text, offset) !== offset)
         return yield* Effect.fail(invalidPage());
       const { body: _body, html: _html, attachments, ...fields } = parsed;
+      const heldHtml: string[] = [];
+      if (attachments.some((a) => a.contentId)) {
+        for (const part of new Set([...scanHtml, ...decoded.keys()])) {
+          if (part.kind !== "html") continue;
+          const value = yield* readPart(part);
+          if ("text" in value) heldHtml.push(value.text);
+        }
+      }
       const inlineIds = attachments.some((a) => a.contentId)
         ? yield* Effect.tryPromise({
             try: () => referencedContentIds(heldHtml),

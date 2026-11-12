@@ -128,6 +128,13 @@ it("selects bodies from the observed MIME trees and joins text around attachment
     ],
     [tree("multipart/alternative", [html]), "HTML"],
     [
+      tree("multipart/alternative", [
+        tree("multipart/mixed", [part("text/plain", "  ", "0.0"), part("text/plain", "\n", "0.1")]),
+        html,
+      ]),
+      "HTML",
+    ],
+    [
       tree("multipart/mixed", [
         plain,
         part("text/plain", "not body", "4", "notes.txt"),
@@ -644,7 +651,7 @@ it("skips oversized body parts without fetching, decoding or converting them", a
   serveThread([
     {
       ...message(),
-      payload: { ...part("text/plain"), body: { size: 5000000, attachmentId: "allowed" } },
+      payload: { ...part("text/plain"), body: { size: 2000000, attachmentId: "allowed" } },
     },
   ]);
   google.attachmentAnswers.set("allowed", () => HttpResponse.json({ data: bytes("At the limit") }));
@@ -828,4 +835,225 @@ it("caps plain and joined MIME body text before applying page offsets", async ()
       /The page field must be/,
     );
   }
+});
+
+it("bounds body bytes across parts and still reads the next message", async () => {
+  const f = await allowed();
+  const size = 1900000;
+  const head = "<p>Read</p>";
+  const row = "<div></div>";
+  const html = head + row.repeat(Math.floor((size - head.length) / row.length));
+  const data = bytes(html.padEnd(size, " "));
+  for (let i = 0; i < 3; i++)
+    google.attachmentAnswers.set(`large-${i}`, () => HttpResponse.json({ data }));
+  serveThread([
+    {
+      ...message("m1"),
+      payload: tree(
+        "multipart/mixed",
+        Array.from({ length: 3 }, (_, i) => ({
+          ...part("text/html", "", String(i)),
+          body: { size, attachmentId: `large-${i}` },
+        })),
+      ),
+    },
+    message("m2", "Following"),
+  ]);
+  const found = await result(await read(f));
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  expect(found.messages.map((m) => m.text)).toEqual([
+    [
+      "Read",
+      ...Array(2).fill(
+        "[A part of this message's body was left out: the message is too large to read whole.]",
+      ),
+    ].join("\n\n"),
+    "Following",
+  ]);
+  expect(google.attachmentRequests).toEqual([
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/m1/attachments/large-0",
+  ]);
+  expect(found.next_page).toBeUndefined();
+}, 20000);
+
+it("keeps shortened mail fields well formed at a surrogate boundary", async () => {
+  const f = await allowed();
+  const subject = "a".repeat(498) + "🙂tail";
+  const from = "b".repeat(498) + "🙂tail";
+  const filename = "c".repeat(198) + "🙂tail";
+  const type = "d".repeat(98) + "🙂tail";
+  serveThread([
+    {
+      ...message(),
+      payload: {
+        ...tree("multipart/mixed", [
+          part("text/plain", "Body", "0"),
+          part(type, "", "1", filename),
+        ]),
+        headers: [
+          { name: "Subject", value: subject },
+          { name: "From", value: from },
+        ],
+      },
+    },
+  ]);
+  const found = await result(await read(f));
+  const m = found.messages[0]!;
+  for (const field of [found.subject, m.from, m.attachments[0]!.filename, m.attachments[0]!.type])
+    expect(field.isWellFormed()).toBe(true);
+  expect(found.subject).toBe("a".repeat(498) + "…");
+  expect(m.from).toBe("b".repeat(498) + "…");
+  expect(m.attachments[0]).toMatchObject({
+    filename: "c".repeat(198) + "…",
+    type: "d".repeat(98) + "…",
+  });
+});
+
+it("reads the HTML alternative when the plain part is too large", async () => {
+  const f = await allowed();
+  for (const size of [5000001, 2000001]) {
+    serveThread([
+      {
+        ...message(),
+        payload: tree("multipart/alternative", [
+          { ...part("text/plain", "", "0"), body: { size, attachmentId: "oversized" } },
+          part("text/html", "<p>Readable HTML</p>", "1"),
+        ]),
+      },
+    ]);
+    expect((await result(await read(f))).messages[0]!.text).toBe("Readable HTML");
+    expect(google.attachmentRequests).toEqual([]);
+  }
+  const deferred = (kind: string, size: number) => ({
+    ...part(kind),
+    body: { size, attachmentId: "unreadable" },
+  });
+  serveThread([
+    {
+      ...message(),
+      payload: tree("multipart/alternative", [
+        part("text/plain", " ", "0"),
+        deferred("text/html", 2000001),
+      ]),
+    },
+  ]);
+  expect((await result(await read(f))).messages[0]!.text).toBe(
+    "[A part of this message's body was left out: the message is too large to read whole.]",
+  );
+  serveThread([
+    {
+      ...message(),
+      payload: tree("multipart/alternative", [
+        deferred("text/html", 5000002),
+        deferred("text/plain", 5000001),
+      ]),
+    },
+  ]);
+  expect((await result(await read(f))).messages[0]!.text).toBe(
+    "[The body of this message is too large to read: 5000001 bytes.]",
+  );
+  expect(google.attachmentRequests).toEqual([]);
+});
+
+it("reads named multipart bodies and keeps named text leaves as attachments", async () => {
+  const f = await allowed();
+  const named = (mimeType: string, parts: Parameters<typeof tree>[1]) => ({
+    ...tree(mimeType, parts),
+    filename: "mail.eml",
+  });
+  const body = named("multipart/mixed", [
+    named("multipart/alternative", [
+      part("text/plain", "Readable", "0.0"),
+      part("text/html", "<p>HTML</p>", "0.1"),
+    ]),
+    named("multipart/related", [part("text/html", "<p>Tail</p>", "1.0")]),
+    part("text/plain", "Attachment", "2", "notes.txt"),
+  ]);
+  serveThread([{ ...message(), payload: body }]);
+  const m = (await result(await read(f))).messages[0]!;
+  expect(m.text).toBe("Readable\n\nTail");
+  expect(m.attachments).toContainEqual({
+    attachment: "2",
+    filename: "notes.txt",
+    type: "text/plain",
+    size: 10,
+  });
+});
+
+it("budgets inline-image HTML before deferring a message or decoding its parts", async () => {
+  const f = await allowed();
+  const image = {
+    ...part("image/png", "", "2", "logo.png"),
+    headers: [{ name: "Content-ID", value: "<logo>" }],
+  };
+  const plain = {
+    ...part("text/plain", "Plain", "0"),
+    body: { size: 200000, data: bytes("Plain") },
+  };
+  const html = {
+    ...part("text/html", "", "1"),
+    body: { size: 1300000, data: bytes('<img src="cid:logo">') },
+  };
+  const mixed = {
+    ...message("m2"),
+    payload: tree("multipart/related", [tree("multipart/alternative", [plain, html]), image]),
+  };
+  serveThread([
+    {
+      ...message("m1", "Prefix"),
+      payload: { ...part("text/plain", "Prefix"), body: { size: 600000, data: bytes("Prefix") } },
+    },
+    mixed,
+    {
+      ...message("m3"),
+      payload: { ...part("text/plain"), body: { size: 500000, attachmentId: "last" } },
+    },
+  ]);
+  google.attachmentAnswers.set("last", () => HttpResponse.json({ data: bytes("Last") }));
+  const first = await result(await read(f));
+  expect(first.messages.map((m) => m.message)).toEqual(["m1"]);
+  expect(first.next_page).toBe("m2");
+  expect(google.attachmentRequests).toEqual([]);
+  const second = await result(await read(f, { page: first.next_page }));
+  expect(second.messages.map((m) => m.text)).toEqual(["Plain", "Last"]);
+  expect(second.messages[0]!.attachments[0]!.inline).toBe(true);
+  expect(second.next_page).toBeUndefined();
+  expect(google.attachmentRequests).toHaveLength(1);
+
+  // Unselected HTML still has a byte cost. This data must never reach the decoder.
+  serveThread([
+    {
+      ...mixed,
+      payload: tree("multipart/related", [
+        tree("multipart/alternative", [
+          plain,
+          { ...html, body: { size: 2000001, data: "not valid base64!" } },
+        ]),
+        image,
+      ]),
+    },
+  ]);
+  const skipped = (await result(await read(f))).messages[0]!;
+  expect(skipped.text).toBe("Plain");
+  expect(skipped.attachments[0]!.inline).toBeUndefined();
+  expect(google.attachmentRequests).toHaveLength(1);
+
+  // Body conversion and the inline-image scan read the same part, not two copies.
+  serveThread([
+    {
+      ...message("m1"),
+      payload: tree("multipart/related", [
+        { ...html, body: { size: 1500000, data: bytes('<p>Body<img src="cid:logo"></p>') } },
+        image,
+      ]),
+    },
+    {
+      ...message("m2"),
+      payload: { ...part("text/plain", "Tail"), body: { size: 500000, data: bytes("Tail") } },
+    },
+  ]);
+  const shared = await result(await read(f));
+  expect(shared.messages.map((m) => m.text)).toEqual(["Body[image]", "Tail"]);
+  expect(shared.messages[0]!.attachments[0]!.inline).toBe(true);
+  expect(shared.next_page).toBeUndefined();
 });

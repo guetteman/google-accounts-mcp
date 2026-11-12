@@ -1,20 +1,25 @@
 /** Bounds on fields and text supplied by a mail's sender, before page fitting. */
 export const MAX_BODY_BYTES = 5_000_000;
+export const PAGE_BODY_BYTES = 2_000_000;
 export const MAX_TEXT = 1_000_000;
 export const HTML_UNREADABLE = "[The HTML of this message could not be converted to text.]";
 export const BODY_PART_LEFT_OUT =
   "[A part of this message's body was left out: it has more than 3 parts that Gmail gives apart.]";
+export const BODY_BYTES_LEFT_OUT =
+  "[A part of this message's body was left out: the message is too large to read whole.]";
 const TEXT_LEFT_OUT =
   "[The rest of this message was left out: it is longer than 1,000,000 characters.]";
 
+const safeEnd = (text: string, end: number): number =>
+  /[\uD800-\uDBFF]/.test(text[end - 1]!) && /[\uDC00-\uDFFF]/.test(text[end]!) ? end - 1 : end;
+
 export const shorten = (text: string, limit: number): string =>
-  text.length > limit ? text.slice(0, limit - 1) + "…" : text;
+  text.length > limit ? text.slice(0, safeEnd(text, limit - 1)) + "…" : text;
 
 /** Callers retain at most MAX_TEXT + 1 characters, enough to detect an overflow. */
 export const boundedText = (text: string, cut = false): string => {
   if (!cut && text.length <= MAX_TEXT) return text;
-  let end = MAX_TEXT - TEXT_LEFT_OUT.length - 1;
-  if (/[\uD800-\uDBFF]/.test(text[end - 1]!) && /[\uDC00-\uDFFF]/.test(text[end]!)) end--;
+  const end = safeEnd(text, MAX_TEXT - TEXT_LEFT_OUT.length - 1);
   return text.slice(0, end) + "\n" + TEXT_LEFT_OUT;
 };
 

@@ -333,6 +333,7 @@ const BLOCKS = new Set([
  * examines at most its address's length, independent of text emitted before the link.
  */
 export async function htmlToText(html: string): Promise<string> {
+  const stopped = new Error("Text limit reached");
   const parts: string[] = [];
   const node: string[] = [];
   const visible: Array<{ part: number; offset: number; position: number }> = [];
@@ -365,6 +366,8 @@ export async function htmlToText(html: string): Promise<string> {
     length += text.length;
     last = text.at(-1)!;
     breaks = text === "\n" ? breaks + 1 : 0;
+    if (pre) lastPreserved = length;
+    if (cut) throw stopped;
   };
   const newline = (blank = false) => {
     if (cut) return;
@@ -380,6 +383,7 @@ export async function htmlToText(html: string): Promise<string> {
     if (cut) return;
     if (preserved) {
       const start = length;
+      if (text) firstPreserved ??= start;
       const lines = text.split("\n");
       for (let i = 0; i < lines.length; i++) {
         if (cut) break;
@@ -494,7 +498,12 @@ export async function htmlToText(html: string): Promise<string> {
         if (chunk.lastInTextNode) flush();
       },
     });
-  await rewriter.transform(new Response(html)).text();
+  try {
+    await rewriter.transform(new Response(html)).text();
+  } catch (error) {
+    // HTMLRewriter rewraps a handler's exception, so its identity is not preserved.
+    if (!cut || !(error instanceof Error) || error.message !== stopped.message) throw error;
+  }
   flush();
   // An unclosed link may never get an end-tag callback. Its text has already been emitted.
   for (const link of Array.from(links).reverse()) finishLink(link);
