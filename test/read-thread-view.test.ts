@@ -420,3 +420,28 @@ it("bounds each view request at ten seconds and clears its timers", async () => 
   expect((await waiting).state).toMatchObject({ kind: "waiting", shown: false });
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it("shortens a forty-thousand-character summary subject on the approval page", async () => {
+  const raw = message();
+  serveThread([
+    {
+      ...raw,
+      payload: {
+        ...raw.payload,
+        headers: [
+          { name: "Subject", value: "a".repeat(498) + "🙂" + "x".repeat(39500) },
+          { name: "From", value: "b".repeat(40000) },
+        ],
+      },
+    },
+  ]);
+  const f = await asking();
+  const props = await page(f, f.id);
+  const subject = props.request.values.find((v) => v.name === "Subject")!.text;
+  const from = props.request.values.find((v) => v.name === "Last message from")!.text;
+  expect(subject.isWellFormed()).toBe(true);
+  expect(subject.length).toBeLessThanOrEqual(500);
+  expect(from.length).toBeLessThanOrEqual(500);
+  expect(subject).toBe("a".repeat(498) + "…");
+  expect(from).toBe("b".repeat(499) + "…");
+});
