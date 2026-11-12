@@ -87,6 +87,7 @@ const permissionAccounts: ReadonlyArray<import("../accounts/model").AccountView>
 const permissionTools = TOOLS.filter((tool) => tool.kind === "account").map((tool) => ({
   name: tool.name,
   group: tool.group,
+  irreversible: tool.irreversible,
   label: tool.label,
   description: tool.permissionDescription,
 }));

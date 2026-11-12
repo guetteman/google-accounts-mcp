@@ -88,6 +88,13 @@ export type Tool =
       name: AccountTool;
       label: string;
       group: Group;
+      /**
+       * True when neither the owner nor another tool can revert what one call did: a sent mail, a
+       * message deleted for good. False when it can be reverted: a draft can be deleted, and a
+       * message in the trash can be restored for 30 days. The connection's page names the tools
+       * that say true before it sets them to Allowed.
+       */
+      irreversible: boolean;
       permissionDescription: string;
       description: string;
       annotations: ToolAnnotations;
@@ -110,6 +117,7 @@ type AccountDefinition<A extends DecodedArgs> = {
   name: string;
   label: string;
   group: Group;
+  irreversible: boolean;
   permissionDescription: string;
   description: string;
   annotations: ToolAnnotations;
@@ -264,6 +272,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "list_labels",
     annotations: { readOnlyHint: true },
     group: "Find and read",
+    irreversible: false,
     label: "List labels",
     permissionDescription: "See the names of this account's Gmail labels.",
     description:
@@ -283,6 +292,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "search_threads",
     annotations: { readOnlyHint: true },
     group: "Find and read",
+    irreversible: false,
     label: "Search mail",
     permissionDescription:
       "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",
@@ -328,6 +338,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     annotations: { readOnlyHint: true },
     label: "Read thread",
     group: "Find and read",
+    irreversible: false,
     permissionDescription:
       "Read every message of a thread in full, and see the names of its attachments.",
     description: `Returns the messages of one thread of one Google account, oldest first, as plain text. \`account\` is the address of an account that list_accounts returns. \`thread\` is a thread ID that search_threads returned for that account; an ID works only in the account that returned it. \`message_count\` is the number of messages in the thread. Each message has its ID, its position in the thread, \`from\`, \`to\`, \`cc\`, its date, its label IDs, its text, and its attachments. \`bcc\` is present when the message has that header, which is normally mail that the account wrote. A message that is a draft has \`draft\`, its draft ID. HTML mail is converted to plain text, and a link keeps its address in parentheses. An attachment has an ID, a file name, a media type, and a size in bytes; the result holds no file. \`inline: true\` marks an image that stands inside the body; converted HTML says \`[image: name]\` where it stood. A very long field is shortened: a list of recipients ends with \`… and N more\`, and \`attachments_left_out\` counts the attachments that are not listed. A result has at most ${LIMIT.toLocaleString("en-US")} characters. When it has \`next_page\`, it stops before the end of the thread: send the same call with \`page\` set to that value to get the rest. A message with \`text_cut\` does not hold its whole text: \`end\` means that the next page continues it, \`start\` that it continues the page before, and \`both\` means both. Reading changes nothing in Gmail: unread mail stays unread. When the owner sets this tool to ask, it returns a pending approval with a link instead of messages; get_approval returns the messages after the owner approves.`,
@@ -379,6 +390,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "get_attachment",
     label: "Download attachment",
     group: "Download attachments",
+    irreversible: false,
     permissionDescription: "Download a file attached to a message of this account.",
     annotations: { readOnlyHint: true },
     description:
@@ -445,6 +457,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "change_labels",
     label: "Change labels",
     group: "Organize",
+    // A label that a call removed can be added back, and an archived thread returns to the inbox.
+    irreversible: false,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     permissionDescription:
       "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam, or take it out.",
@@ -492,6 +506,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "create_draft",
     label: "Create draft",
     group: "Draft",
+    // The owner can delete a draft, and writing one sends nothing.
+    irreversible: false,
     permissionDescription: "Write a draft, new or as a reply. Nothing is sent.",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     description:
