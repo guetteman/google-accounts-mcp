@@ -14,6 +14,7 @@ import {
   LABELS_EXPECT,
   MAX_LABELS,
   REFUSED,
+  REFUSED_ADD,
 } from "../google/organize";
 import { readListedTools } from "../permissions/store";
 import type { CallContext } from "./call";
@@ -128,9 +129,15 @@ const ThreadId = Schema.String.check(
 const LabelIds = Schema.Array(
   Schema.String.check(
     Schema.isBetweenLength(1, 100),
+    Schema.isPattern(/^[A-Za-z0-9_-]+$/),
     Schema.makeFilter((id) => !REFUSED.has(id)),
   ),
 ).check(Schema.isMaxLength(MAX_LABELS));
+const labelChange = (args: {
+  threads: readonly string[];
+  add?: readonly string[];
+  remove?: readonly string[];
+}) => ({ threads: args.threads, add: args.add ?? [], remove: args.remove ?? [] });
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -278,20 +285,21 @@ export const TOOLS: ReadonlyArray<Tool> = [
     group: "Organize",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     permissionDescription:
-      "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam.",
-    description: `Adds and removes labels on threads of one Google account. \`account\` is the address of an account that list_accounts returns. \`threads\` is a list of 1 to ${MAX_ITEMS} thread IDs that search_threads returned for that account. \`add\` and \`remove\` are lists of label IDs that list_labels returned for that account, at most ${MAX_LABELS} each; the call needs at least one label, and no label in both lists. The change applies to every message of each thread. To archive a thread, remove \`INBOX\`; to move it back to the inbox, for example after a message came out of the trash, add \`INBOX\`. To mark it as read, remove \`UNREAD\`; to mark it as unread, add \`UNREAD\`. To star it, add \`STARRED\`. Of the system labels, the tool accepts only \`INBOX\`, \`UNREAD\`, \`STARRED\`, \`IMPORTANT\`, and the five \`CATEGORY_\` labels: it does not move mail to the trash or to spam, and it creates no label. The result's \`threads\` has one entry for each thread that changed: its ID and \`labels\`, the IDs of the labels that at least one of its messages has after the change. \`not_found\` lists the threads that the account does not have. \`unconfirmed\` lists the threads whose change Google did not confirm: send the call again with those threads, because repeating a change is safe. Each of the two is left out when it is empty. The call fails as a whole only when no thread changed. When the owner sets this tool to ask, it returns a pending approval with a link instead of a result; get_approval returns the result after the owner approves.`,
+      "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam, or take it out.",
+    description: `Adds and removes labels on threads of one Google account. \`account\` is the address of an account that list_accounts returns. \`threads\` is a list of 1 to ${MAX_ITEMS} thread IDs that search_threads returned for that account. \`add\` and \`remove\` are lists of label IDs that list_labels returned for that account, at most ${MAX_LABELS} each; the call needs at least one label, and no label in both lists. The change applies to every message of each thread. To archive a thread, remove \`INBOX\`. The tool cannot add \`INBOX\`, because that would also take mail out of the trash or spam. To mark it as read, remove \`UNREAD\`; to mark it as unread, add \`UNREAD\`. To star it, add \`STARRED\`. Of the system labels, the tool accepts only \`UNREAD\`, \`STARRED\`, \`IMPORTANT\`, and the five \`CATEGORY_\` labels, and \`INBOX\` in \`remove\`: it does not move mail to the trash or to spam or take it out, and it creates no label. The result's \`threads\` has one entry for each thread that changed: its ID and \`labels\`, the IDs of the labels that at least one of its messages has after the change. \`not_found\` lists the threads that the account does not have. \`unconfirmed\` lists the threads whose change Google did not confirm: send the call again with those threads, because repeating a change is safe. Each of the two is left out when it is empty. The call fails as a whole only when no thread is confirmed changed. When it fails with a message that Google did not confirm the request, a thread may have changed, and sending the same call again is safe. When the owner sets this tool to ask, it returns a pending approval with a link instead of a result; get_approval returns the result after the owner approves.`,
     input: Schema.Struct({
       account: Schema.String,
       threads: Schema.Array(ThreadId).check(
         Schema.isBetweenLength(1, MAX_ITEMS),
         Schema.isUnique(),
       ),
-      add: Schema.optionalKey(LabelIds),
+      add: Schema.optionalKey(
+        LabelIds.check(Schema.makeFilter((ids) => !ids.some((id) => REFUSED_ADD.has(id)))),
+      ),
       remove: Schema.optionalKey(LabelIds),
     }).check(
       Schema.makeFilter((args) => {
-        const add = args.add ?? [];
-        const remove = args.remove ?? [];
+        const { add, remove } = labelChange(args);
         if (add.length + remove.length === 0)
           return { path: ["add"], issue: "At least one label is required" };
         if (remove.some((id) => add.includes(id)))
@@ -309,21 +317,13 @@ export const TOOLS: ReadonlyArray<Tool> = [
       action: "add or remove labels on threads",
       joiner: "in",
       empty: "This call has no other values. The sentence above is the whole call.",
-      notes: (args) =>
-        labelChangeNotes({ threads: args.threads, add: args.add ?? [], remove: args.remove ?? [] }),
-      values: (args, send) =>
-        labelChangeValues(send, {
-          threads: args.threads,
-          add: args.add ?? [],
-          remove: args.remove ?? [],
-        }),
+      notes: (args) => labelChangeNotes(labelChange(args)),
+      values: (args, send) => labelChangeValues(send, labelChange(args)),
     },
     run: (send, account, args) =>
       changeLabels(send, {
         account: account.email,
-        threads: args.threads,
-        add: args.add ?? [],
-        remove: args.remove ?? [],
+        ...labelChange(args),
       }),
   }),
   {

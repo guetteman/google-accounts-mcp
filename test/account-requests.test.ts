@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { Effect, Result, Schema } from "effect";
 import { http } from "msw";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
 import { accountRequests } from "../src/mcp/call";
 import { change, changeEach } from "../src/google/gmail";
@@ -69,9 +69,12 @@ it.each([
   let now = NOW;
   const controller = new AbortController();
   const requests = await requestsAt(() => now, controller.signal);
+  const fetches = vi.spyOn(globalThis, "fetch");
+  let beforeStop = 0;
   const stop = () => {
     if (cut === "deadline") now = DEADLINE;
     else controller.abort();
+    beforeStop = fetches.mock.calls.length;
   };
   if (retry) {
     google.labelAnswers.push(() => new Response(null, { status: 401 }));
@@ -88,7 +91,9 @@ it.each([
     });
     expect(google.labelRequests).toHaveLength(retry ? 1 : 0);
     expect(google.events).toEqual(retry ? ["refresh"] : []);
+    expect(fetches).toHaveBeenCalledTimes(beforeStop);
   } finally {
+    fetches.mockRestore();
     requests.close();
   }
 });

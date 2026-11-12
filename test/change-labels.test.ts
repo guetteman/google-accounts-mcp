@@ -16,6 +16,7 @@ import {
   refusedMessage,
   textResult,
   unavailableMessage,
+  unconfirmedMessage,
 } from "./support/permissions";
 import { ORIGIN } from "./support/worker";
 import {
@@ -46,7 +47,7 @@ it.each(
     ["x".repeat(65)],
     [1],
   ].map((threads) => ({ threads })),
-)("I1 refuses invalid threads $threads before an approval or Google", async ({ threads }) => {
+)("refuses invalid threads $threads before an approval or Google", async ({ threads }) => {
   const f = await fixture();
   await setting(f, "ask");
   await expectError(
@@ -58,7 +59,7 @@ it.each(
   expect(await env.DB.prepare("SELECT count(*) AS n FROM approvals").first()).toEqual({ n: 0 });
 });
 
-it("I1 accepts fifteen distinct IDs including the syntax boundaries", async () => {
+it("accepts fifteen distinct IDs including the syntax boundaries", async () => {
   const f = await allowed();
   const ids = ["a", "b".repeat(64), ...Array.from({ length: 13 }, (_, i) => `id_${i}-ok`)];
   for (const id of ids)
@@ -74,11 +75,18 @@ it("I1 accepts fifteen distinct IDs including the syntax boundaries", async () =
 });
 
 it.each(["add", "remove"] as const)(
-  "I2 I5 refuses invalid %s lists with the whole message",
+  "refuses invalid %s lists with the whole message",
   async (field) => {
     const f = await fixture();
     await setting(f, "ask");
-    for (const value of [Array(101).fill("Label_12"), [""], "Label_12", ["x".repeat(101)]]) {
+    for (const value of [
+      Array(101).fill("Label_12"),
+      [""],
+      "Label_12",
+      ["x".repeat(101)],
+      ["bad id"],
+      ["bad\nid"],
+    ]) {
       await expectError(
         await labelCall(f, { ...CHANGE, [field]: value }),
         "invalid_arguments",
@@ -90,7 +98,7 @@ it.each(["add", "remove"] as const)(
   },
 );
 
-it("I2 accepts repeated label IDs and the one-hundred-label boundary", async () => {
+it("accepts repeated label IDs and the one-hundred-label boundary", async () => {
   const f = await allowed();
   labels();
   expect(
@@ -111,30 +119,30 @@ it("I2 accepts repeated label IDs and the one-hundred-label boundary", async () 
   expect(google.modifyRequests[2]!.body).toEqual({ addLabelIds: [id] });
 });
 
-it.each(["TRASH", "SPAM", "SENT", "DRAFT"])(
-  "I3 I5 refuses %s in either list before an approval",
-  async (id) => {
-    const f = await fixture();
-    await setting(f, "ask");
-    for (const field of ["add", "remove"]) {
-      await expectError(
-        await labelCall(f, { ...CHANGE, [field]: [id] }),
-        "invalid_arguments",
-        fieldMessage(field),
-      );
-      expect(googleTraffic()).toEqual([]);
-      expect(await env.DB.prepare("SELECT count(*) AS n FROM approvals").first()).toEqual({ n: 0 });
-    }
-  },
-);
+it.each([
+  ...["TRASH", "SPAM", "SENT", "DRAFT"].flatMap((id) =>
+    ["add", "remove"].map((field) => ({ id, field })),
+  ),
+  { id: "INBOX", field: "add" },
+])("refuses $id in $field before an approval", async ({ id, field }) => {
+  const f = await fixture();
+  await setting(f, "ask");
+  await expectError(
+    await labelCall(f, { threads: [FIRST], [field]: [id] }),
+    "invalid_arguments",
+    fieldMessage(field),
+  );
+  expect(googleTraffic()).toEqual([]);
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM approvals").first()).toEqual({ n: 0 });
+});
 
 it.each([
   { args: {}, field: "add" },
   { args: { add: [], remove: [] }, field: "add" },
   { args: { add: [] }, field: "add" },
   { args: { remove: [] }, field: "add" },
-  { args: { add: ["INBOX"], remove: ["INBOX"] }, field: "remove" },
-])("I4 I5 refuses empty or overlapping changes $args at $field", async ({ args, field }) => {
+  { args: { add: ["STARRED"], remove: ["STARRED"] }, field: "remove" },
+])("refuses empty or overlapping changes $args at $field", async ({ args, field }) => {
   const f = await fixture();
   await setting(f, "ask");
   await expectError(
@@ -146,7 +154,7 @@ it.each([
   expect(await env.DB.prepare("SELECT count(*) AS n FROM approvals").first()).toEqual({ n: 0 });
 });
 
-it("R1 reads labels first and refreshes an expired token once for several writes", async () => {
+it("reads labels first and refreshes an expired token once for several writes", async () => {
   const f = await allowed({ access_expires_at: Date.now() - 1 });
   await answer(await labelCall(f, { ...CHANGE, threads: [FIRST, SECOND] }));
   expect(google.refreshTokens).toHaveLength(1);
@@ -158,7 +166,7 @@ it("R1 reads labels first and refreshes an expired token once for several writes
     `${THREADS_URL}/${SECOND}/modify`,
   ]);
 });
-it("R1 preserves a failed label read and changes nothing", async () => {
+it("preserves a failed label read and changes nothing", async () => {
   const f = await allowed();
   google.labelAnswers.push(() => new HttpResponse(null, { status: 500 }));
   await expectError(await labelCall(f), "google_unavailable", unavailableMessage(PERSONAL));
@@ -169,7 +177,7 @@ it.each([
   { add: ["missing_add"], remove: ["INBOX"], id: "missing_add" },
   { add: ["Label_12"], remove: ["missing_remove", "another"], id: "missing_remove" },
   { add: ["missing_add", "another"], remove: ["missing_remove"], id: "missing_add" },
-])("R2 names the first missing label in add then remove: $id", async ({ add, remove, id }) => {
+])("names the first missing label in add then remove: $id", async ({ add, remove, id }) => {
   const f = await allowed();
   await expectError(
     await labelCall(f, { threads: [FIRST], add, remove }),
@@ -179,28 +187,35 @@ it.each([
   expect(google.modifyRequests).toEqual([]);
 });
 
-it.each([["CHAT"], ["CHAT", "Label_missing"]])(
-  "R3 refuses a listed system label before missing labels: %j",
-  async (...add) => {
-    const f = await allowed();
-    labels([{ id: "CHAT", name: "Chats", type: "system" }]);
-    await expectError(
-      await labelCall(f, { threads: [FIRST], add }),
-      "invalid_arguments",
-      fieldMessage("add"),
-    );
-    expect(google.modifyRequests).toEqual([]);
-  },
-);
-it("R3 accepts all nine supported system labels and user labels", async () => {
+it.each([
+  { field: "add", ids: ["CHAT"] },
+  { field: "add", ids: ["CHAT", "Label_missing"] },
+  { field: "remove", ids: ["YELLOW_STAR"] },
+])("refuses listed system labels in $field before missing labels: $ids", async ({ field, ids }) => {
+  const f = await allowed();
+  labels([
+    { id: "CHAT", name: "Chats", type: "system" },
+    { id: "YELLOW_STAR", name: "Yellow star", type: "system" },
+  ]);
+  await expectError(
+    await labelCall(f, { threads: [FIRST], [field]: ids }),
+    "invalid_arguments",
+    fieldMessage(field),
+  );
+  expect(google.modifyRequests).toEqual([]);
+});
+it.each([
+  { field: "add", ids: [...SYSTEM_IDS.filter((id) => id !== "INBOX"), "Label_12"] },
+  { field: "remove", ids: [...SYSTEM_IDS, "Label_12"] },
+])("accepts supported system labels and user labels in $field", async ({ field, ids }) => {
   const f = await allowed();
   labels();
-  await answer(await labelCall(f, { threads: [FIRST], add: [...SYSTEM_IDS, "Label_12"] }));
-  expect(google.modifyRequests[0]!.body).toEqual({ addLabelIds: [...SYSTEM_IDS, "Label_12"] });
+  await answer(await labelCall(f, { threads: [FIRST], [field]: ids }));
+  expect(google.modifyRequests[0]!.body).toEqual({ [`${field}LabelIds`]: ids });
 });
 
 it.each([{ add: ["Label_12"] }, { remove: ["INBOX"] }, { add: ["Label_12"], remove: ["INBOX"] }])(
-  "R4 sends only the declared JSON fields via authorized manual POST: %j",
+  "sends only the declared JSON fields via authorized manual POST: %j",
   async (change) => {
     const f = await allowed();
     await answer(await labelCall(f, { threads: [FIRST], ...change }));
@@ -239,7 +254,7 @@ it.each([
     expected: [],
   },
 ])(
-  "R5 derives the label union from the observed messages response at $status",
+  "derives the label union from the observed messages response at $status",
   async ({ status, messages, expected }) => {
     const f = await allowed();
     google.modifyAnswers.set(FIRST, () => HttpResponse.json({ id: FIRST, messages }, { status }));
@@ -251,7 +266,7 @@ it.each([
 );
 
 it.each([400, 404])(
-  "R6 continues after status %s on either the first or a later thread",
+  "continues after status %s on either the first or a later thread",
   async (status) => {
     const f = await allowed();
     for (const missing of [FIRST, SECOND]) {
@@ -269,7 +284,7 @@ it.each([400, 404])(
     }
   },
 );
-it.each([403, 429])("R6 keeps a later %s refusal unconfirmed", async (status) => {
+it.each([403, 429])("keeps a later %s refusal unconfirmed", async (status) => {
   const f = await allowed();
   google.modifyAnswers.set(SECOND, () => new HttpResponse(null, { status }));
   expect(await answer(await labelCall(f, { ...CHANGE, threads: [FIRST, SECOND] }))).toEqual({
@@ -280,7 +295,7 @@ it.each([403, 429])("R6 keeps a later %s refusal unconfirmed", async (status) =>
 });
 
 it.each(["503", "redirect", "lost", "invalid JSON", "missing messages", "empty messages"])(
-  "R7 keeps a later %s answer unconfirmed",
+  "keeps a later %s answer unconfirmed",
   async (failure) => {
     const f = await allowed();
     google.modifyAnswers.set(SECOND, () =>
@@ -302,7 +317,7 @@ it.each(["503", "redirect", "lost", "invalid JSON", "missing messages", "empty m
   },
 );
 
-it("R8 R9 orders partial lists, uses the stored account, omits empty lists and records success", async () => {
+it("orders partial lists, uses the stored account, omits empty lists and records success", async () => {
   const f = await allowed();
   const threads = mixed();
   const result = await rpcResult(
@@ -328,7 +343,7 @@ it("R8 R9 orders partial lists, uses the stored account, omits empty lists and r
 });
 
 it.each([{ ids: [MISSING] }, { ids: [MISSING, FOURTH, FIFTH] }])(
-  "R10 names all missing threads $ids and records refused",
+  "names all missing threads $ids and records refused",
   async ({ ids }) => {
     const f = await allowed();
     await expectError(
@@ -350,7 +365,7 @@ it.each([
     count: 3,
     outcome: null,
   },
-])("R11 preserves the failure and audit for $name", async ({ statuses, count, outcome }) => {
+])("preserves the failure and audit for $name", async ({ statuses, count, outcome }) => {
   const f = await allowed();
   const ids = [FIRST, SECOND, FIFTH].slice(0, statuses.length);
   statuses.forEach((status, index) =>
@@ -362,12 +377,15 @@ it.each([
   expect(google.modifyRequests).toHaveLength(count);
   expect((await callRows()).at(-1)?.outcome).toBe(outcome);
   expect(result).toEqual({
-    ...textResult({ code: "google_unavailable", message: unavailableMessage(PERSONAL) }),
+    ...textResult({
+      code: "google_unavailable",
+      message: outcome === null ? unconfirmedMessage(PERSONAL) : unavailableMessage(PERSONAL),
+    }),
     isError: true,
   });
 });
 
-it("R12 repeats the same set operations without changing the result or the thread again", async () => {
+it("returns the same result and sends the same bodies when the call is repeated", async () => {
   const f = await allowed();
   const original = await answer(await labelCall(f));
   const stored = structuredClone(google.modifiedLabels.get(FIRST));
@@ -380,7 +398,7 @@ it("R12 repeats the same set operations without changing the result or the threa
   ]);
 });
 
-it("R13 answers at twenty seconds and retains earlier confirmed changes", async () => {
+it("answers at twenty seconds and retains earlier confirmed changes", async () => {
   const f = await allowed();
   const release = deferred();
   google.labelAnswers.push(
@@ -446,7 +464,7 @@ it("R13 answers at twenty seconds and retains earlier confirmed changes", async 
   }
 });
 
-it("G1 denies visible accounts and hides unavailable accounts", async () => {
+it("denies visible accounts and hides unavailable accounts", async () => {
   const f = await fixture();
   await permission(f);
   await expectError(
@@ -461,39 +479,33 @@ it("G1 denies visible accounts and hides unavailable accounts", async () => {
   );
   expect(googleTraffic()).toEqual([]);
 });
-it.each(problemCases)(
-  "G1 returns account_$status before Google",
-  async ({ row, status, message }) => {
-    const f = await allowed(row);
-    await expectError(await labelCall(f), `account_${status}`, message);
-    expect(google.modifyRequests).toEqual([]);
-  },
-);
+it.each(problemCases)("returns account_$status before Google", async ({ row, status, message }) => {
+  const f = await allowed(row);
+  await expectError(await labelCall(f), `account_${status}`, message);
+  expect(googleTraffic()).toEqual([]);
+});
 
-it.each(["ask", "allow"] as const)(
-  "G2 lists annotations and arrays for setting %s",
-  async (value) => {
-    const f = await fixture();
-    await setting(f, value);
-    const result = await rpcResult(await f.mcp.call());
-    const tool = (result.tools as Array<Record<string, unknown>>).find(
-      (tool) => tool.name === "change_labels",
-    )!;
-    expect(tool.annotations).toEqual({
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-    });
-    expect(tool.inputSchema).toMatchObject({
-      type: "object",
-      required: ["account", "threads"],
-      properties: {
-        threads: { type: "array", items: { type: "string" } },
-        add: { type: "array", items: { type: "string" } },
-        remove: { type: "array", items: { type: "string" } },
-      },
-    });
-    expect(tool.description).toBe(DESCRIPTION);
-    expect(googleTraffic()).toEqual([]);
-  },
-);
+it.each(["ask", "allow"] as const)("lists annotations and arrays for setting %s", async (value) => {
+  const f = await fixture();
+  await setting(f, value);
+  const result = await rpcResult(await f.mcp.call());
+  const tool = (result.tools as Array<Record<string, unknown>>).find(
+    (tool) => tool.name === "change_labels",
+  )!;
+  expect(tool.annotations).toEqual({
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+  });
+  expect(tool.inputSchema).toMatchObject({
+    type: "object",
+    required: ["account", "threads"],
+    properties: {
+      threads: { type: "array", items: { type: "string" } },
+      add: { type: "array", items: { type: "string" } },
+      remove: { type: "array", items: { type: "string" } },
+    },
+  });
+  expect(tool.description).toBe(DESCRIPTION);
+  expect(googleTraffic()).toEqual([]);
+});

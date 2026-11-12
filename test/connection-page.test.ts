@@ -55,7 +55,7 @@ it("links each connection to its own permissions page and shows only the account
     expect(props.settings[`${f.northwind.id}:${tool.name}`]).toBeUndefined();
 });
 
-it("G1 renders tools under their groups in tool-list order, with no empty group", async () => {
+it("renders tools under their groups in tool-list order, with no empty group", async () => {
   const f = await fixture();
   const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
   const props = pageProps(html);
@@ -70,7 +70,7 @@ it("G1 renders tools under their groups in tool-list order, with no empty group"
     label: "Change labels",
     group: "Organize",
     description:
-      "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam.",
+      "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam, or take it out.",
   });
   const first = html.slice(
     html.indexOf("Tool permissions"),

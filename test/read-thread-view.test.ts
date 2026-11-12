@@ -70,7 +70,7 @@ it.each([undefined, "m4", "m4+18000"])(
     const text = textOf(await renderPage(props).text());
     if (start) {
       expect(text).toContain(
-        "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which.",
+        "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each caption says which.",
       );
       for (const label of ["Subject", "Messages", "Last message from", "Last message date"])
         expect(text).toContain(`${label}, read from Gmail`);
@@ -97,7 +97,7 @@ it.each([
       { name: "Subject", text: "Lunch", from: "gmail" },
       { name: "Body", text: "Reply", from: "agent" },
     ],
-    "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which.",
+    "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each caption says which.",
   ],
 ] as [ViewValue[], string][])(
   "explains the source of shaded values %j",
