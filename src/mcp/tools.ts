@@ -580,10 +580,10 @@ export const TOOLS: ReadonlyArray<Tool> = [
     }),
     expects: {
       account: draftExpects.account,
-      to: draftExpects.to,
-      cc: draftExpects.cc,
-      bcc: draftExpects.bcc,
-      subject: draftExpects.subject,
+      to: "a list of at least one mailbox, each an address or Name <address>",
+      cc: "a list of mailboxes, each an address or Name <address>",
+      bcc: "a list of mailboxes, each an address or Name <address>",
+      subject: `a string of 1 to ${MAX_SUBJECT} characters without control characters`,
       body: draftExpects.body,
       duplicate: draftExpects.duplicate,
     },
@@ -664,9 +664,9 @@ export const TOOLS: ReadonlyArray<Tool> = [
     expects: {
       account: draftExpects.account,
       message: "a message ID of 1 to 64 letters, digits, hyphens, or underscores from this account",
-      to: draftExpects.to,
-      cc: draftExpects.cc,
-      bcc: draftExpects.bcc,
+      to: "a list of at least one mailbox, each an address or Name <address>",
+      cc: "a list of mailboxes, each an address or Name <address>",
+      bcc: "a list of mailboxes, each an address or Name <address>",
       body: draftExpects.body,
       duplicate: draftExpects.duplicate,
     },
@@ -757,7 +757,11 @@ export const TOOLS: ReadonlyArray<Tool> = [
             files.length > MAX_FORWARD_FILES
           )
             return yield* Effect.fail(new ViewUnavailable());
-          const body = yield* textOf(send, readMessage(raw), new BodyBudget());
+          const parsed = yield* Effect.try({
+            try: () => readMessage(raw),
+            catch: () => new ToolFailure({ code: "google_unavailable" }),
+          });
+          const body = yield* textOf(send, parsed, new BodyBudget());
           if (!body.whole) return yield* Effect.fail(new ViewUnavailable());
           return [
             ...fields

@@ -28,7 +28,10 @@ export const forwardPlan = (send: Send, message: string): Effect.Effect<ForwardP
           ? notFound("message", message)
           : new ToolFailure({ code: "google_unavailable" }),
     );
-    const parsed = readMessage(raw);
+    const parsed = yield* Effect.try({
+      try: () => readMessage(raw),
+      catch: () => new ToolFailure({ code: "google_unavailable" }),
+    });
     const body = yield* textOf(send, parsed, new BodyBudget());
     const subject = header(raw.payload.headers, "Subject");
     const quoted = [

@@ -134,7 +134,13 @@ it.each([
     await expectError(
       await sendCall(f, name, args),
       "invalid_arguments",
-      new RegExp(`The ${field} field must be`),
+      field === "to"
+        ? "The to field must be a list of at least one mailbox, each an address or Name <address>."
+        : field === "cc" || field === "bcc"
+          ? `The ${field} field must be a list of mailboxes, each an address or Name <address>.`
+          : name === "send_message" && field === "subject"
+            ? "The subject field must be a string of 1 to 998 characters without control characters."
+            : new RegExp(`The ${field} field must be`),
     );
     expect(googleTraffic().slice(traffic)).toEqual([]);
     expect(await onceRows()).toEqual([]);
