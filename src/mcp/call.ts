@@ -1,5 +1,5 @@
-import { createApproval } from "../approvals/store";
-import { APPROVAL_LIFETIME, type ApprovalId } from "../approvals/model";
+import { createApproval, waitingApproval } from "../approvals/store";
+import { APPROVAL_LIFETIME, CALL_DEADLINE, isoSeconds, type ApprovalId } from "../approvals/model";
 import { pendingAnswer } from "../approvals/result";
 import { sealArguments } from "../approvals/text";
 import { classify, failures, ToolFailure } from "./failures";
@@ -27,9 +27,10 @@ import {
   type Outcome,
 } from "../calls/store";
 import { decodeArgs, TOOLS, type DecodedArgs, type Send, type Tool } from "./tools";
+import { identityOf } from "../once/identity";
+import { take, settle, release, WINDOW, type Repeat } from "../once/store";
 export const MAX_ARGUMENTS_BYTES = 256 * 1024;
-/** A tool call answers within this time, below the 25 seconds of an approved run. */
-export const CALL_DEADLINE = 20_000;
+export { CALL_DEADLINE } from "../approvals/model";
 
 export interface CallContext {
   db: D1Database;
@@ -38,7 +39,39 @@ export interface CallContext {
   connection: ActiveConnection;
   origin: string;
   now: () => number;
+  waitUntil: (work: Promise<unknown>) => void;
 }
+export type Executed = { kind: "ran"; value: unknown } | { kind: "repeat"; repeat: Repeat };
+export const repeatAnswer = (
+  repeat: Repeat,
+  account: string,
+  tool: Extract<Tool, { kind: "account" }>,
+  args: DecodedArgs & { readonly duplicate?: number },
+): unknown => {
+  switch (repeat.kind) {
+    case "done": {
+      const at = isoSeconds(repeat.at);
+      const next = (args.duplicate ?? 1) + 1;
+      return {
+        account,
+        ...repeat.result,
+        repeat_of: at,
+        note: `This call already ran at ${at}. Nothing was created or sent again. This is its result.${next <= 100 ? ` To make one more on purpose, call again with duplicate: ${next}.` : ""}`,
+      };
+    }
+    case "running":
+      return {
+        status: "running",
+        note: "The same call is still running. Call again with the same arguments in a few seconds.",
+      };
+    case "unknown":
+      // executeAccount and createApproval return repeats only for creating tools.
+      throw new ToolFailure({
+        code: "outcome_unknown",
+        said: tool.unknown!(account, repeat.until, args),
+      });
+  }
+};
 type Allowed = { credential: Credential; status: AccountStatus };
 const tokenFailure = (error: TokenError): ToolFailure => {
   switch (error._tag) {
@@ -63,14 +96,49 @@ export async function executeAccount(
   args: DecodedArgs,
   deadline: number,
   signal?: AbortSignal,
-) {
+): Promise<Executed> {
   const requests = accountRequests(ctx, allowed, deadline, signal);
   try {
-    const result = await Effect.runPromise(
-      Effect.result(tool.run(requests.send, { email: allowed.credential.email }, args)),
-    );
-    if (Result.isFailure(result)) throw result.failure;
-    return result.success;
+    if (!tool.create) {
+      const result = await Effect.runPromise(
+        Effect.result(tool.run(requests.send, { email: allowed.credential.email }, args)),
+      );
+      if (Result.isFailure(result)) throw result.failure;
+      return { kind: "ran", value: result.success };
+    }
+    const identity = await identityOf(ctx.config.tokenKey, {
+      connection: ctx.connection.connectionId,
+      account: allowed.credential.id,
+      tool: tool.name,
+      args: { ...args },
+      defaults: tool.defaults,
+    });
+    const entered = await Effect.runPromise(Effect.result(take(ctx, identity, ctx.now())));
+    if (Result.isFailure(entered)) throw new ToolFailure({ code: "server_unavailable" });
+    if (entered.success.kind !== "run") return { kind: "repeat", repeat: entered.success };
+    const claim = entered.success.claim;
+    try {
+      const result = await Effect.runPromise(
+        Effect.result(tool.create(requests.send, { email: allowed.credential.email }, args)),
+      );
+      if (Result.isFailure(result)) throw result.failure;
+      await Effect.runPromise(
+        Effect.result(settle(ctx, claim, ctx.now(), { kind: "done", result: result.success })),
+      );
+      return { kind: "ran", value: { account: allowed.credential.email, ...result.success } };
+    } catch (error) {
+      if (error instanceof ToolFailure && error.code !== "outcome_unknown") {
+        await Effect.runPromise(Effect.result(release(ctx, claim)));
+        throw error;
+      }
+      const now = ctx.now();
+      await Effect.runPromise(Effect.result(settle(ctx, claim, now, { kind: "unknown" })));
+      throw new ToolFailure({
+        code: "outcome_unknown",
+        unknown: true,
+        said: tool.unknown(allowed.credential.email, now + WINDOW, args),
+      });
+    }
   } finally {
     requests.close();
   }
@@ -157,7 +225,7 @@ export async function runCall(
           const name = decoded.field ?? "account";
           throw new ToolFailure({
             code: "invalid_arguments",
-            field: { name, expects: tool.expects[name] ?? "valid" },
+            field: { name, expects: decoded.expects ?? tool.expects[name] ?? "valid" },
           });
         }
         const json = JSON.stringify(decoded.value);
@@ -192,20 +260,74 @@ export async function runCall(
                 uses: [{ account: allowed.credential.id, tool: tool.name }],
                 arguments: argumentsSealed,
                 at,
+                ...(tool.create
+                  ? {
+                      identity: await identityOf(ctx.config.tokenKey, {
+                        connection: ctx.connection.connectionId,
+                        account: allowed.credential.id,
+                        tool: tool.name,
+                        args: { ...decoded.value },
+                        defaults: tool.defaults,
+                      }),
+                    }
+                  : {}),
               }),
             ),
           );
           if (Result.isFailure(created))
             throw new ToolFailure({ code: "server_unavailable", unknown: true });
-          if (created.success !== "created") {
+          if (typeof created.success === "object") {
+            outcome = "repeat";
+            value =
+              "repeat" in created.success
+                ? repeatAnswer(created.success.repeat, email, tool, decoded.value)
+                : pendingAnswer(
+                    ctx.origin,
+                    created.success.waiting.id,
+                    created.success.waiting.expiresAt,
+                  );
+          } else if (created.success !== "created") {
             throw new ToolFailure({
               code:
                 created.success === "limit" ? "approval_limit_reached" : "account_not_available",
             });
+          } else {
+            outcome = null;
+            value = pendingAnswer(ctx.origin, approval, at + APPROVAL_LIFETIME);
           }
-          outcome = null;
-          value = pendingAnswer(ctx.origin, approval, at + APPROVAL_LIFETIME);
-        } else value = await executeAccount(ctx, tool, allowed, decoded.value, at + CALL_DEADLINE);
+        } else {
+          const waiting = tool.create
+            ? await Effect.runPromise(
+                waitingApproval(
+                  ctx,
+                  await identityOf(ctx.config.tokenKey, {
+                    connection: ctx.connection.connectionId,
+                    account: allowed.credential.id,
+                    tool: tool.name,
+                    args: { ...decoded.value },
+                    defaults: tool.defaults,
+                  }),
+                  ctx.now(),
+                ),
+              )
+            : null;
+          if (waiting) {
+            outcome = "repeat";
+            value = pendingAnswer(ctx.origin, waiting.id, waiting.expiresAt);
+          } else {
+            const executed = await executeAccount(
+              ctx,
+              tool,
+              allowed,
+              decoded.value,
+              at + CALL_DEADLINE,
+            );
+            if (executed.kind === "repeat") {
+              outcome = "repeat";
+              value = repeatAnswer(executed.repeat, email, tool, decoded.value);
+            } else value = executed.value;
+          }
+        }
       }
       result = { content: [{ type: "text", text: JSON.stringify(value) }] };
     }
@@ -219,7 +341,9 @@ export async function runCall(
         origin: ctx.origin,
         tool: tool?.name ?? "",
         connection: ctx.connection.connectionId,
-        annotations: tool?.annotations,
+        // A tool with `create` marks its own uncertain request as outcome_unknown, so its other
+        // failures never mean that a change may have happened.
+        annotations: tool?.kind === "account" && tool.create ? undefined : tool?.annotations,
       },
     );
     outcome = classified.audit;

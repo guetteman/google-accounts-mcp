@@ -107,6 +107,10 @@ it("publishes the expected annotations for every tool", async () => {
       name: "change_labels",
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
+    {
+      name: "create_draft",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
     { name: "get_approval", annotations: { readOnlyHint: true } },
   ]);
 });

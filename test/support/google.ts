@@ -138,6 +138,21 @@ export const google = {
   >(),
   draftRequests: [] as string[],
   draftAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
+  draftCreates: [] as Array<{
+    url: string;
+    method: string;
+    redirect: RequestRedirect;
+    contentType: string | null;
+    body: unknown;
+  }>,
+  draftCreateAnswers: [] as Array<
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >,
+  messageRequests: [] as string[],
+  messageAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
   labelRequests: [] as Array<{
     url: string;
     method: string;
@@ -194,6 +209,10 @@ export const google = {
     this.attachmentAnswers.clear();
     this.draftRequests = [];
     this.draftAnswers = [];
+    this.draftCreates = [];
+    this.draftCreateAnswers = [];
+    this.messageRequests = [];
+    this.messageAnswers.clear();
     this.labelRequests = [];
     this.labelAnswers = [];
     this.threadRequests = [];
@@ -416,10 +435,39 @@ export const google = {
       ),
       http.all("https://gmail.googleapis.com/gmail/v1/users/me/drafts", async ({ request }) => {
         this.methods.push(request.method);
+        if (request.method === "POST") {
+          this.draftCreates.push({
+            url: request.url,
+            method: request.method,
+            redirect: request.redirect,
+            contentType: request.headers.get("Content-Type"),
+            body: await request.json(),
+          });
+          const id = this.draftCreates.length;
+          return (
+            (await this.draftCreateAnswers.shift()?.(request)) ??
+            HttpResponse.json({
+              id: `draft-${id}`,
+              message: { id: `message-${id}`, threadId: `thread-${id}` },
+            })
+          );
+        }
         this.draftRequests.push(request.url);
         if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
         return (await this.draftAnswers.shift()?.(request)) ?? HttpResponse.json({});
       }),
+      http.all(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/:id",
+        async ({ request, params }) => {
+          this.methods.push(request.method);
+          this.messageRequests.push(request.url);
+          if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+          return (
+            (await this.messageAnswers.get(String(params.id))?.(request)) ??
+            new HttpResponse(null, { status: 404 })
+          );
+        },
+      ),
       http.get(GMAIL, ({ request }) => {
         this.methods.push(request.method);
         this.events.push("gmail");
