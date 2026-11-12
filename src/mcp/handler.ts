@@ -45,6 +45,7 @@ export const mcpHandler = {
       owner: { generation: env.ownerGeneration, email: config.success.ownerEmail },
       origin: new URL(request.url).origin,
       now: Date.now,
+      waitUntil: (work) => ctx.waitUntil(work),
     };
     const handler = createMcpHandler(() => createMcpServer(context), {
       bus: watchToolList(context, () => void handler.close()),

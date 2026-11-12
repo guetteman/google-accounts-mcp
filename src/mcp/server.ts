@@ -24,7 +24,7 @@ export function createMcpServer(ctx: CallContext): Server {
       tools: listed.success.tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        annotations: { readOnlyHint: true },
+        annotations: tool.annotations,
         // Effect's empty struct is not an object JSON Schema. Keep the existing contract.
         inputSchema:
           tool.kind === "plain"
@@ -44,7 +44,18 @@ export function createMcpServer(ctx: CallContext): Server {
         : ctx.connection.app === "claude-hosted" && typeof stated === "string"
           ? stated
           : null;
-    return runCall({ ...ctx, reader: { client } }, request.params.name, request.params.arguments);
+    const work = runCall(
+      { ...ctx, reader: { client } },
+      request.params.name,
+      request.params.arguments,
+    );
+    ctx.waitUntil(
+      work.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return work;
   });
   return server;
 }

@@ -36,8 +36,11 @@ export function testEnv(overrides: { [K in keyof Env]?: Env[K] | undefined } = {
 }
 
 /** Calls the Worker module's default export, as Cloudflare would. */
-export async function callWorker(request: Request, workerEnv: Env = testEnv()): Promise<Response> {
-  const ctx = createExecutionContext();
+export async function callWorker(
+  request: Request,
+  workerEnv: Env = testEnv(),
+  ctx: ExecutionContext = createExecutionContext(),
+): Promise<Response> {
   const { default: worker } = await import("../../src/index");
   const response = await worker.fetch(request, workerEnv, ctx);
   await waitOnExecutionContext(ctx);

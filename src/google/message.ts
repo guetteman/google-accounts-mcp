@@ -75,7 +75,7 @@ export const decodeBody = (data: string): string =>
     Uint8Array.from(atob(data.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0)),
   );
 
-const addresses = (value: string): string[] => {
+export const addresses = (value: string): string[] => {
   const result: string[] = [];
   let quoted = false;
   let escaped = false;

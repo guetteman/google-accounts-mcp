@@ -4,7 +4,13 @@ import type { Config } from "../config";
 import { putFile } from "../files/store";
 import { WithFile } from "../mcp/file";
 import { WriteUncertain } from "../db";
-import { accountRequests, CALL_DEADLINE, executeAccount, type CallContext } from "../mcp/call";
+import {
+  accountRequests,
+  CALL_DEADLINE,
+  executeAccount,
+  repeatAnswer,
+  type CallContext,
+} from "../mcp/call";
 import { classify, ToolFailure } from "../mcp/failures";
 import type { Outcome } from "../calls/store";
 import {
@@ -167,13 +173,14 @@ export const decide = (
           connection: { connectionId: approval.connection.id, app: approval.connection.app },
           now: Date.now,
           reader: approval.connection.app === "chatgpt" ? { client: null } : "later",
+          waitUntil: () => {},
         };
         let outcome: "success" | "failed" | "unknown" = "success";
         let audit: Outcome | null = "success";
         let payload: StoredPayload | null = null;
         try {
           const allowed = await decodeAllowedAccount(decision.credentials[0], deps.config.tokenKey);
-          const out = await executeAccount(
+          const executed = await executeAccount(
             call,
             view.tool,
             allowed,
@@ -181,12 +188,22 @@ export const decide = (
             deadline,
             controller.signal,
           );
-          if (out instanceof WithFile) {
-            const ref = await Effect.runPromise(
-              putFile(deps.files, out.file, decision.won.at + RESULT_LIFETIME),
-            );
-            payload = { result: out.value, file: ref };
-          } else payload = { result: out };
+          if (executed.kind === "ran") {
+            const out = executed.value;
+            if (out instanceof WithFile) {
+              const ref = await Effect.runPromise(
+                putFile(deps.files, out.file, decision.won.at + RESULT_LIFETIME),
+              );
+              payload = { result: out.value, file: ref };
+            } else payload = { result: out };
+          } else {
+            audit = "repeat";
+            if (executed.repeat.kind === "done")
+              payload = {
+                result: repeatAnswer(executed.repeat, allowed.credential.email, view.tool, args),
+              };
+            else outcome = "unknown";
+          }
         } catch (error) {
           const classified = classify(
             error,

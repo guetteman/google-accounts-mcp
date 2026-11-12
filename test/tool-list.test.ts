@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { expect, it } from "vite-plus/test";
+import { TOOLS, type Tool } from "../src/mcp/tools";
 import { rows } from "./support/connections";
 import { clients, McpClient, rpcMessages, rpcResult } from "./support/oauth";
 import {
@@ -87,6 +88,31 @@ it("lists a tool whose only permitted account needs reconnecting", async () => {
   const f = await fixture(problemCases.find((item) => item.status === "needs_reconnect")!.row);
   await permission(f);
   expect(await names(f.mcp)).toEqual(["list_accounts", "list_labels", "get_approval"]);
+});
+
+it("publishes each tool's declared annotations", async () => {
+  const f = await fixture();
+  await permission(f);
+  const tool = TOOLS.find((tool) => tool.name === "list_labels")!;
+  const original = tool.annotations;
+  const annotations = {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+  } as const;
+  tool.annotations = annotations;
+  try {
+    const listed = (await rpcResult(await f.mcp.call())).tools as Array<{
+      name: string;
+      annotations: Tool["annotations"];
+    }>;
+    expect(listed.find((tool) => tool.name === "list_labels")!.annotations).toEqual(annotations);
+    expect(listed.find((tool) => tool.name === "list_accounts")!.annotations).toEqual({
+      readOnlyHint: true,
+    });
+  } finally {
+    tool.annotations = original;
+  }
 });
 
 it("removes a tool when the owner removes its only permitted account", async () => {

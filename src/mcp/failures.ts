@@ -1,4 +1,4 @@
-import { Data } from "effect";
+import { Data, Effect } from "effect";
 import { accountMessage } from "../accounts/model";
 import type { Outcome } from "../calls/store";
 import { WAITING_LIMIT } from "../approvals/model";
@@ -50,6 +50,10 @@ export const failures = {
     message: (_: string, email: string) =>
       `Google could not complete the request for ${email}. Try again later.`,
   },
+  outcome_unknown: {
+    outcome: "repeat",
+    message: () => "The server does not know whether the call completed.",
+  },
   server_unavailable: {
     outcome: "failed",
     message: () => "The server could not complete the call. Try again later.",
@@ -89,6 +93,7 @@ export const notReadable = (file: FileInfo): ToolFailure =>
   });
 type FailureData = {
   unknown?: boolean;
+  said?: string;
   missing?: { kind: Missing; id: string };
   reason?: "arguments_too_large";
   /** The field that is wrong, with what it must be. */
@@ -104,6 +109,16 @@ type FailureData = {
 );
 export const ToolFailure = Data.TaggedError("ToolFailure")<FailureData>;
 export type ToolFailure = InstanceType<typeof ToolFailure>;
+
+/** Mark only the request that creates or sends, never a preparing read or write. */
+export const creating = <A>(
+  request: Effect.Effect<A, ToolFailure>,
+): Effect.Effect<A, ToolFailure> =>
+  request.pipe(
+    Effect.mapError((failure) =>
+      failure.unknown ? new ToolFailure({ code: "outcome_unknown", unknown: true }) : failure,
+    ),
+  );
 
 export function classify(
   error: unknown,
@@ -131,6 +146,7 @@ export function classify(
         : {
             code: failure.code,
             message:
+              failure.said ??
               fileMessage ??
               (failure.reason === "arguments_too_large"
                 ? "The arguments are too large. The limit is 256 KB."

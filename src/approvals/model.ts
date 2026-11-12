@@ -13,6 +13,8 @@ export const parseApprovalId = (value: unknown): ApprovalId | null =>
     : null;
 export const APPROVAL_LIFETIME = 3_600_000;
 export const RESULT_LIFETIME = 3_600_000;
+/** A direct call's deadline is below that of an approved run. */
+export const CALL_DEADLINE = 20_000;
 export const RUN_DEADLINE = 25_000;
 export const OUTCOME_WINDOW = 30_000;
 export const WAITING_LIMIT = 20;

@@ -65,6 +65,7 @@ it("renders every tool in its group, in tool-list order, and no empty group", as
     { name: "search_threads", group: "Find and read" },
     { name: "read_thread", group: "Find and read" },
     { name: "get_attachment", group: "Download attachments" },
+    { name: "create_draft", group: "Draft" },
   ]);
   const first = html.slice(
     html.indexOf("Tool permissions"),
@@ -77,11 +78,17 @@ it("renders every tool in its group, in tool-list order, and no empty group", as
   expect(first.indexOf('aria-label="Search mail on Personal')).toBeLessThan(
     first.indexOf('aria-label="Read thread on Personal'),
   );
+  expect(textOf(first)).toContain("Draft");
+  expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Create draft on Personal'),
+  );
   expect(textOf(first)).toContain("Download attachments");
   expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
     first.indexOf('aria-label="Download attachment on Personal'),
   );
-  for (const group of GROUPS.slice(1).filter((group) => group !== "Download attachments"))
+  for (const group of GROUPS.filter(
+    (group) => !["Find and read", "Draft", "Download attachments"].includes(group),
+  ))
     expect(textOf(html)).not.toContain(group);
 });
 
