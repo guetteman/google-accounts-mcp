@@ -274,6 +274,49 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
       ],
     },
   },
+  "approval-waiting-delete": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Delete permanently",
+        action: "delete messages permanently",
+        joiner: "from",
+      },
+      notes: [
+        {
+          text: "These messages cannot be recovered. They do not go to the trash: Gmail deletes them at once and for good.",
+          warning: true,
+        },
+      ],
+      values: [
+        {
+          name: "Message 1 from",
+          text: "Kim Lee (Northwind Billing) <kim.lee@northwind.example>",
+          from: "gmail",
+        },
+        {
+          name: "Message 1 subject",
+          text: "Invoice 2026-114 for the October work",
+          from: "gmail",
+        },
+        { name: "Message 1 date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+        { name: "Message 2 from", text: "Sam Ortiz <sam@example.com>", from: "gmail" },
+        {
+          name: "Message 2 subject",
+          text: "Re: Invoice 2026-114 for the October work",
+          from: "gmail",
+        },
+        { name: "Message 2 date", text: "Nov 11, 2026 at 10:15 UTC", from: "gmail" },
+        {
+          name: "Message 3 ID, not found in this account",
+          text: "19a1b2c3d4e5f603",
+          from: "agent",
+        },
+      ],
+    },
+  },
   "approval-cannot-show": {
     ...approvalBase,
     state: { kind: "waiting", shown: false, changed: false, digest: null },

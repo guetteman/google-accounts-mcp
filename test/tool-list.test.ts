@@ -103,7 +103,6 @@ it("publishes the expected annotations for every tool", async () => {
     { name: "list_labels", annotations: { readOnlyHint: true } },
     { name: "search_threads", annotations: { readOnlyHint: true } },
     { name: "read_thread", annotations: { readOnlyHint: true } },
-    { name: "get_attachment", annotations: { readOnlyHint: true } },
     {
       name: "change_labels",
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -112,6 +111,19 @@ it("publishes the expected annotations for every tool", async () => {
       name: "create_draft",
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
+    {
+      name: "trash_messages",
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    {
+      name: "restore_messages",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: "delete_messages",
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    { name: "get_attachment", annotations: { readOnlyHint: true } },
     { name: "get_approval", annotations: { readOnlyHint: true } },
   ]);
 });
