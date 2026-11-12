@@ -27,12 +27,15 @@ import {
   type Outcome,
 } from "../calls/store";
 import { decodeArgs, TOOLS, type DecodedArgs, type Send, type Tool } from "./tools";
+import { contentOf, takes, type Reader } from "./file";
 export const MAX_ARGUMENTS_BYTES = 256 * 1024;
 /** A tool call answers within this time, below the 25 seconds of an approved run. */
 export const CALL_DEADLINE = 20_000;
 
 export interface CallContext {
   db: D1Database;
+  files: KVNamespace;
+  reader: Reader;
   config: Config;
   owner: Owner;
   connection: ActiveConnection;
@@ -67,7 +70,9 @@ export async function executeAccount(
   const requests = accountRequests(ctx, allowed, deadline, signal);
   try {
     const result = await Effect.runPromise(
-      Effect.result(tool.run(requests.send, { email: allowed.credential.email }, args)),
+      Effect.result(
+        tool.run(requests.send, { email: allowed.credential.email }, args, takes(ctx.reader)),
+      ),
     );
     if (Result.isFailure(result)) throw result.failure;
     return result.success;
@@ -204,7 +209,7 @@ export async function runCall(
           value = pendingAnswer(ctx.origin, approval, at + APPROVAL_LIFETIME);
         } else value = await executeAccount(ctx, tool, allowed, decoded.value, at + CALL_DEADLINE);
       }
-      result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+      result = { content: contentOf(value, ctx.reader) };
     }
   } catch (error) {
     const classified = classify(

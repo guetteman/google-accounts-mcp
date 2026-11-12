@@ -28,6 +28,7 @@ export const LABELS_RESPONSE = {
     },
   ],
 };
+export const MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 export const THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 // Shapes observed on a real account on 2026-11-11 (issue #23), with made-up values. The list
 // holds only IDs and snippets, snippets are HTML-escaped, and a thread's messages come oldest
@@ -131,6 +132,11 @@ export function deferred() {
 }
 export const google = {
   methods: [] as string[],
+  messageRequests: [] as string[],
+  messageAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
   attachmentRequests: [] as string[],
   attachmentAnswers: new Map<
     string,
@@ -177,6 +183,8 @@ export const google = {
     this.release();
     this.codes.clear();
     this.methods = [];
+    this.messageRequests = [];
+    this.messageAnswers.clear();
     this.attachmentRequests = [];
     this.attachmentAnswers.clear();
     this.draftRequests = [];
@@ -345,6 +353,15 @@ export const google = {
         return (
           (await this.threadAnswers.get(id)?.(request)) ??
           (THREADS[id] ? HttpResponse.json(THREADS[id]) : new HttpResponse(null, { status: 404 }))
+        );
+      }),
+      http.all(`${MESSAGES_URL}/:message`, async ({ request, params }) => {
+        this.methods.push(request.method);
+        this.messageRequests.push(request.url);
+        if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+        return (
+          (await this.messageAnswers.get(String(params.message))?.(request)) ??
+          new HttpResponse(null, { status: 404 })
         );
       }),
       http.all(

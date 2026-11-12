@@ -17,6 +17,8 @@ const context = async (f: Awaited<ReturnType<typeof fixture>>): Promise<CallCont
   const owner = await Effect.runPromise(readOwner(env.DB));
   return {
     db: env.DB,
+    files: env.FILES_KV,
+    reader: { client: null },
     config: config.success,
     owner: { generation: owner.generation, email: owner.email! },
     connection: { connectionId: parseConnectionId(f.connection.id)!, app: f.connection.app },

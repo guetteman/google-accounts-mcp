@@ -5,6 +5,10 @@ import { Data, Effect, Result, Schema } from "effect";
 import type { Unavailable } from "../db";
 import { accountMessage } from "../accounts/model";
 import { listVisibleAccounts } from "../accounts/store";
+import { findAttachment, partBytes } from "../google/attachment";
+import { shorten } from "../google/bounds";
+import { MAX_ATTACHMENT_BYTES, WithFile, type Takes } from "./file";
+import { notReadable, tooLarge } from "./failures";
 import { LIMIT, placeOf, readThread } from "../google/thread";
 import { listLabels, searchThreads, threadSummary } from "../google/gmail";
 import { readListedTools } from "../permissions/store";
@@ -54,6 +58,7 @@ export type Tool =
         send: Send,
         account: { email: string },
         args: DecodedArgs,
+        takes: Takes,
       ) => Effect.Effect<unknown, ToolFailure>;
     };
 type AccountDefinition<A extends DecodedArgs> = {
@@ -73,7 +78,12 @@ type AccountDefinition<A extends DecodedArgs> = {
       send: Send,
     ) => Effect.Effect<ReadonlyArray<ViewValue>, ViewUnavailable | ToolFailure>;
   };
-  run: (send: Send, account: { email: string }, args: A) => Effect.Effect<unknown, ToolFailure>;
+  run: (
+    send: Send,
+    account: { email: string },
+    args: A,
+    takes: Takes,
+  ) => Effect.Effect<unknown, ToolFailure>;
 };
 // The runner passes a tool only the arguments that the tool's own input decoded.
 const accountTool = <A extends DecodedArgs>(definition: AccountDefinition<A>) =>
@@ -102,6 +112,21 @@ export const DEFAULT_LIMIT = 10;
 export const MAX_LIMIT = 25;
 const MAX_QUERY = 2000;
 const MAX_PAGE = 500;
+
+const viewDate = (at: number): string => {
+  const date = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(at);
+  const time = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(at);
+  return `${date} at ${time} UTC`;
+};
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -220,22 +245,11 @@ export const TOOLS: ReadonlyArray<Tool> = [
       values: (args, send) =>
         Effect.gen(function* () {
           const summary = yield* threadSummary(send, args.thread);
-          const date = new Intl.DateTimeFormat("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-            timeZone: "UTC",
-          }).format(summary.date);
-          const time = new Intl.DateTimeFormat("en-GB", {
-            hour: "2-digit",
-            minute: "2-digit",
-            timeZone: "UTC",
-          }).format(summary.date);
           const values: ViewValue[] = [
             { name: "Subject", text: summary.subject, from: "gmail" },
             { name: "Messages", text: String(summary.messages.length), from: "gmail" },
             { name: "Last message from", text: summary.from, from: "gmail" },
-            { name: "Last message date", text: `${date} at ${time} UTC`, from: "gmail" },
+            { name: "Last message date", text: viewDate(summary.date), from: "gmail" },
           ];
           if (args.page !== undefined) {
             const place = placeOf(args.page);
@@ -252,6 +266,71 @@ export const TOOLS: ReadonlyArray<Tool> = [
     },
     run: (send, account, args) =>
       readThread(send, { account: account.email, thread: args.thread, page: args.page }),
+  }),
+  accountTool({
+    name: "get_attachment",
+    label: "Download attachment",
+    group: "Download attachments",
+    permissionDescription: "Download a file attached to a message of this account.",
+    description:
+      "Returns one attachment of a message of one Google account. `account` is the address of an account that list_accounts returns. `message` is a message ID and `attachment` an attachment ID that read_thread returned for that account; both work only in that account. The result has two parts. The first is JSON with the account, the message, the attachment, and the file's name, media type, and size in bytes. The second is the file. In Claude Code the file comes as an embedded resource of any type: Claude Code saves it to disk and gives its path. In other clients an image (PNG, JPEG, GIF, or WebP) comes as an image and a text file as text, and any other file, such as a PDF, returns attachment_not_readable: tell the owner that Claude Code can open it. An attachment larger than 12 MB returns attachment_too_large with its size. Downloading changes nothing in Gmail. When the owner sets this tool to ask, it returns a pending approval with a link instead of the file; get_approval returns the file after the owner approves, for one hour.",
+    input: Schema.Struct({
+      account: Schema.String,
+      message: Schema.String.check(
+        Schema.isBetweenLength(1, 64),
+        Schema.isPattern(/^[A-Za-z0-9_-]+$/u),
+      ),
+      attachment: Schema.String.check(Schema.isMaxLength(64), Schema.isPattern(/^\d+(\.\d+)*$/u)),
+    }),
+    expects: {
+      account: "a string",
+      message: "a message ID that read_thread returned",
+      attachment: "an attachment ID that read_thread returned",
+    },
+    view: {
+      action: "download an attachment",
+      joiner: "from",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      values: (args, send) =>
+        Effect.gen(function* () {
+          const found = yield* findAttachment(send, args);
+          return [
+            { name: "File", text: found.filename || "(no name)", from: "gmail" as const },
+            { name: "Type", text: found.type, from: "gmail" as const },
+            {
+              name: "Size",
+              text: `${found.size.toLocaleString("en-US")} bytes`,
+              from: "gmail" as const,
+            },
+            { name: "From", text: shorten(found.from, 500), from: "gmail" as const },
+            { name: "Subject", text: shorten(found.subject, 500), from: "gmail" as const },
+            { name: "Date", text: viewDate(found.date), from: "gmail" as const },
+          ];
+        }),
+    },
+    run: (send, account, args, takes) =>
+      Effect.gen(function* () {
+        const found = yield* findAttachment(send, args);
+        if (found.size > MAX_ATTACHMENT_BYTES)
+          return yield* Effect.fail(tooLarge(found, MAX_ATTACHMENT_BYTES));
+        if (!takes(found.type)) return yield* Effect.fail(notReadable(found));
+        const bytes = yield* partBytes(send, args.message, found.part);
+        if (bytes.byteLength > MAX_ATTACHMENT_BYTES)
+          return yield* Effect.fail(
+            tooLarge({ ...found, size: bytes.byteLength }, MAX_ATTACHMENT_BYTES),
+          );
+        return new WithFile(
+          {
+            account: account.email,
+            message: args.message,
+            attachment: args.attachment,
+            filename: found.filename,
+            type: found.type,
+            size: found.size,
+          },
+          { bytes, filename: found.filename, type: found.type, charset: found.charset },
+        );
+      }),
   }),
   {
     kind: "plain",

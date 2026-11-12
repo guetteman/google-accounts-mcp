@@ -33,6 +33,7 @@ for (const action of ["approve", "reject"] as const) {
       decide(
         {
           db: c.env.DB,
+          files: c.env.FILES_KV,
           owner: c.get("owner"),
           config: c.get("config"),
           origin: new URL(c.req.url).origin,

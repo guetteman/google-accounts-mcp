@@ -55,7 +55,7 @@ it("links each connection to its own permissions page and shows only the account
     expect(props.settings[`${f.northwind.id}:${tool.name}`]).toBeUndefined();
 });
 
-it("renders every tool under Find and read, in tool-list order, and no empty group", async () => {
+it("renders every tool in its group, in tool-list order, and no empty group", async () => {
   const f = await fixture();
   const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
   const props = pageProps(html);
@@ -63,6 +63,7 @@ it("renders every tool under Find and read, in tool-list order, and no empty gro
     { name: "list_labels", group: "Find and read" },
     { name: "search_threads", group: "Find and read" },
     { name: "read_thread", group: "Find and read" },
+    { name: "get_attachment", group: "Download attachments" },
   ]);
   const first = html.slice(
     html.indexOf("Tool permissions"),
@@ -75,7 +76,12 @@ it("renders every tool under Find and read, in tool-list order, and no empty gro
   expect(first.indexOf('aria-label="Search mail on Personal')).toBeLessThan(
     first.indexOf('aria-label="Read thread on Personal'),
   );
-  for (const group of GROUPS.slice(1)) expect(textOf(html)).not.toContain(group);
+  expect(textOf(first)).toContain("Download attachments");
+  expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Download attachment on Personal'),
+  );
+  for (const group of GROUPS.slice(1).filter((group) => group !== "Download attachments"))
+    expect(textOf(html)).not.toContain(group);
 });
 
 it.each(["revoked", "expired"])(

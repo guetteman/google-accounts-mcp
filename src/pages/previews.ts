@@ -211,6 +211,26 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
     },
   },
 
+  "approval-waiting-attachment": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Download attachment",
+        action: "download an attachment",
+        joiner: "from",
+      },
+      values: [
+        { name: "File", text: "menu.pdf", from: "gmail" },
+        { name: "Type", text: "application/pdf", from: "gmail" },
+        { name: "Size", text: "48,213 bytes", from: "gmail" },
+        { name: "From", text: "Sam <sam@example.com>", from: "gmail" },
+        { name: "Subject", text: "Lunch", from: "gmail" },
+        { name: "Date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+      ],
+    },
+  },
   "approval-cannot-show": {
     ...approvalBase,
     state: { kind: "waiting", shown: false, changed: false, digest: null },

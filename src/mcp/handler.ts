@@ -38,6 +38,8 @@ export const mcpHandler = {
         : new Response("Service unavailable", { status: 503 });
     const context: CallContext = {
       db: env.DB,
+      files: env.FILES_KV,
+      reader: { client: null },
       config: config.success,
       connection: connection.success,
       owner: { generation: env.ownerGeneration, email: config.success.ownerEmail },

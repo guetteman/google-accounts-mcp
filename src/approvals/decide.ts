@@ -1,12 +1,15 @@
 import { Effect } from "effect";
 import { decodeAllowedAccount } from "../accounts/store";
 import type { Config } from "../config";
+import { putFile } from "../files/store";
+import { WithFile } from "../mcp/file";
 import { WriteUncertain } from "../db";
 import { accountRequests, CALL_DEADLINE, executeAccount, type CallContext } from "../mcp/call";
 import { classify, ToolFailure } from "../mcp/failures";
 import type { Outcome } from "../calls/store";
 import {
   RUN_DEADLINE,
+  RESULT_LIFETIME,
   type Approval,
   type ApprovalId,
   type ApprovalPageProps,
@@ -24,7 +27,7 @@ import { openResult, sealResult } from "./text";
 import type { Send } from "../mcp/tools";
 import { approvalView } from "./view";
 
-type Dependencies = ApprovalContext & { config: Config; origin: string };
+type Dependencies = ApprovalContext & { config: Config; origin: string; files: KVNamespace };
 async function viewOf(
   approval: Approval,
   deps: ApprovalContext & { config: Config },
@@ -163,22 +166,29 @@ export const decide = (
           ...deps,
           connection: { connectionId: approval.connection.id, app: approval.connection.app },
           now: Date.now,
+          reader: "later",
         };
         let outcome: "success" | "failed" | "unknown" = "success";
         let audit: Outcome | null = "success";
         let payload: StoredPayload | null = null;
         try {
           const allowed = await decodeAllowedAccount(decision.credentials[0], deps.config.tokenKey);
-          payload = {
-            result: await executeAccount(
-              call,
-              view.tool,
-              allowed,
-              args,
-              deadline,
-              controller.signal,
-            ),
-          };
+          const out = await executeAccount(
+            call,
+            view.tool,
+            allowed,
+            args,
+            deadline,
+            controller.signal,
+          );
+          if (out instanceof WithFile) {
+            const ref = await Effect.runPromise(
+              putFile(deps.files, out.file, decision.won.at + RESULT_LIFETIME).pipe(
+                Effect.mapError(() => new ToolFailure({ code: "server_unavailable" })),
+              ),
+            );
+            payload = { result: out.value, file: ref };
+          } else payload = { result: out };
         } catch (error) {
           const classified = classify(
             error,

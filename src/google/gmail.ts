@@ -36,6 +36,9 @@ export const get = <A>(
     return yield* Schema.decodeUnknownEffect(schema)(body).pipe(Effect.mapError(unavailable));
   });
 
+/** Shared answer shape for attachments.get, including read_thread's deferred body parts. */
+export const AttachmentBytes = Schema.Struct({ data: Schema.String });
+
 const Labels = Schema.Struct({
   labels: Schema.optionalKey(
     Schema.Array(

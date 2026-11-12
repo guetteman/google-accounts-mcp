@@ -1,4 +1,5 @@
 import {
+  CLIENT_INFO_META_KEY,
   ProtocolError,
   ProtocolErrorCode,
   Server,
@@ -32,8 +33,15 @@ export function createMcpServer(ctx: CallContext): Server {
       })),
     };
   });
-  server.setRequestHandler("tools/call", (request) =>
-    runCall(ctx, request.params.name, request.params.arguments),
-  );
+  server.setRequestHandler("tools/call", (request, extra) => {
+    // SDK 2.3.0 types the validated envelope as {}; retain its client-info field here.
+    const envelope: { [CLIENT_INFO_META_KEY]?: { name: string } } | undefined =
+      extra.mcpReq.envelope;
+    return runCall(
+      { ...ctx, reader: { client: envelope?.[CLIENT_INFO_META_KEY]?.name ?? null } },
+      request.params.name,
+      request.params.arguments,
+    );
+  });
   return server;
 }
