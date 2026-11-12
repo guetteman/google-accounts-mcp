@@ -98,6 +98,7 @@ it("publishes the expected annotations for every tool", async () => {
     name: string;
     annotations: unknown;
   }>;
+  expect(listed.every((tool) => !("irreversible" in tool))).toBe(true);
   expect(listed.map(({ name, annotations }) => ({ name, annotations }))).toEqual([
     { name: "list_accounts", annotations: { readOnlyHint: true } },
     { name: "list_labels", annotations: { readOnlyHint: true } },
