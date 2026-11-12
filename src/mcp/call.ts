@@ -13,8 +13,11 @@ import type { Config } from "../config";
 import type { ActiveConnection } from "../connections/model";
 import { normalizeEmail, type Owner } from "../owner/owner";
 import type { AccountStatus, Credential } from "../accounts/model";
-import { allowedAccountStatement, decodeAllowedAccount } from "../accounts/store";
-import { seenAccountStatement } from "../accounts/store";
+import {
+  allowedAccountStatement,
+  decodeAllowedAccount,
+  seenAccountStatement,
+} from "../accounts/store";
 import { googleSession, type TokenError } from "../accounts/tokens";
 import {
   closeCall,

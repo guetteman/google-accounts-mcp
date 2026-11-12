@@ -394,9 +394,7 @@ export function ConnectionPage(props: Props) {
                           <p className="text-sm font-medium @3xl:w-44 @3xl:shrink-0">
                             {props.tools.length === 2
                               ? "Both tools"
-                              : props.tools.length === 1
-                                ? "All tools"
-                                : `All ${props.tools.length} tools`}
+                              : `All ${props.tools.length} tools`}
                           </p>
                           <p
                             className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-muted-foreground"

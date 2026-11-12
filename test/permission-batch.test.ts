@@ -2,18 +2,28 @@ import { env } from "cloudflare:workers";
 import { expect, it } from "vite-plus/test";
 import "./support/account-checks";
 import { answer, approve, row, rows } from "./support/approvals";
-import { dump } from "./support/db";
+import { dump, writeRecordingDb } from "./support/db";
 import { McpClient } from "./support/oauth";
 import { rows as connections } from "./support/connections";
 import { callRows, fixture, permissionRows, PERSONAL, toolCall } from "./support/permissions";
+import { testEnv } from "./support/worker";
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-const change = (f: Fixture, setting: string, tools = ["list_labels", "search_threads"]) =>
-  f.mcp.browser.post(`/connections/${f.connection.id}/permissions`, [
-    ["account", f.personal.id],
-    ["setting", setting],
-    ...tools.map((tool): [string, string] => ["tool", tool]),
-  ]);
+const change = (
+  f: Fixture,
+  setting: string,
+  tools = ["list_labels", "search_threads"],
+  workerEnv?: Env,
+) =>
+  f.mcp.browser.post(
+    `/connections/${f.connection.id}/permissions`,
+    [
+      ["account", f.personal.id],
+      ["setting", setting],
+      ...tools.map((tool): [string, string] => ["tool", tool]),
+    ],
+    { env: workerEnv },
+  );
 const ask = async (f: Fixture, tool: string, account = PERSONAL) => {
   const value = await answer(
     await toolCall(f.mcp, tool, { account, ...(tool === "search_threads" ? { query: "a" } : {}) }),
@@ -24,9 +34,16 @@ const ask = async (f: Fixture, tool: string, account = PERSONAL) => {
 
 it("sets all named tools, counts duplicate names once, and applies them on the next call", async () => {
   const f = await fixture();
-  const response = await change(f, "allow", ["list_labels", "search_threads", "list_labels"]);
+  const { db, writes } = writeRecordingDb();
+  const response = await change(
+    f,
+    "allow",
+    ["list_labels", "search_threads", "list_labels"],
+    testEnv({ DB: db }),
+  );
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ outcome: "ok" });
+  expect(writes.filter((sql) => /^\s*INSERT\s+INTO\s+permissions\b/i.test(sql))).toHaveLength(2);
   expect(await permissionRows()).toEqual([
     { connection_id: f.connection.id, account_id: f.personal.id, tool: "list_labels", ask: 0 },
     { connection_id: f.connection.id, account_id: f.personal.id, tool: "search_threads", ask: 0 },

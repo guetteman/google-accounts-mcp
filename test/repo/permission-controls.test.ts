@@ -310,6 +310,27 @@ it.each([
   }
 });
 
+it.each(["tool", "account"])("retries the same %s choice after unavailable", async (scope) => {
+  const page = await open();
+  try {
+    const routes = await pending(page);
+    const group = (scope === "tool" ? control : accountControl)(page, "Personal");
+    await segment(group, "Not allowed").click();
+    await expect.poll(() => routes.length).toBe(1);
+    await answer(routes[0]!, "unavailable");
+    await page.getByText(unavailable, { exact: true }).filter({ visible: true }).waitFor();
+    await segment(group, "Not allowed").click();
+    await expect.poll(() => routes.length).toBe(2);
+    expect(routes[1]!.request().postData()).toBe(routes[0]!.request().postData());
+    await answer(routes[1]!, "ok");
+    await expect
+      .poll(() => segment(group, "Not allowed").getAttribute("aria-checked"))
+      .toBe("true");
+  } finally {
+    await page.close();
+  }
+});
+
 it("clears the previous failure notice when the owner makes the next change", async () => {
   const page = await open();
   try {
@@ -867,6 +888,11 @@ it("shows ordered group values or counts only for a closed mixed account, and re
       "Ask first",
       "Not allowed",
     ]);
+    const header = page.getByRole("button", { name: "Northwind", exact: true });
+    await header.click();
+    expect(await control(page).isVisible()).toBe(true);
+    expect(await panel(page).locator("dl").count()).toBe(0);
+    await header.click();
     expect(await panel(page, "Projects").locator("dl").count()).toBe(0);
     expect(await panel(page).getByText("Mixed", { exact: true }).count()).toBe(0);
     expect(await panel(page).locator('[data-slot="badge"]').count()).toBe(0);

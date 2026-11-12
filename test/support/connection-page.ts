@@ -15,7 +15,7 @@ export const connectionPage = {
   connection: {
     id: parseConnectionId("11111111-1111-4111-8111-111111111111")!,
     name: "Claude",
-    appLabel: "Claude",
+    appLabel: "Claude Code",
     status: { kind: "active" as const },
     created: "Nov 1",
     lastUsed: "Never",
