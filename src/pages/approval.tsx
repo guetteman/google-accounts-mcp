@@ -260,6 +260,11 @@ function WaitingView({
                   }`}
             </p>
           </div>
+          {tool.note && (
+            <Alert>
+              <AlertDescription>{tool.note}</AlertDescription>
+            </Alert>
+          )}
           {values.map((value) => (
             <Quoted
               key={value.name}

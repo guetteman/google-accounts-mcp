@@ -24,6 +24,7 @@ import {
   finishApproval,
   readApproval,
   viewCredential,
+  stillApproved,
   type ApprovalContext,
 } from "./store";
 import { openResult, sealResult } from "./text";
@@ -145,7 +146,7 @@ export const decide = (
             input.digest.length === 0 ||
             view.page.state.kind !== "waiting" ||
             typeof view.page.state.digest !== "string" ||
-            view.page.state.digest !== input.digest
+            (!view.tool.view.asItIs && view.page.state.digest !== input.digest)
           )
             return readPage(true);
         }
@@ -182,6 +183,7 @@ export const decide = (
             allowed,
             args,
             deadline,
+            stillApproved(deps, decision.won),
             controller.signal,
           );
           if (executed.kind === "ran") payload = { result: executed.value };

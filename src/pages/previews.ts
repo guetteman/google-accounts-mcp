@@ -264,6 +264,108 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
       ],
     },
   },
+  "approval-waiting-send": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Send message",
+        action: "send a message",
+        joiner: "from",
+      },
+      values: [
+        { name: "To", text: "Sam Lee <sam@example.com>", from: "agent" },
+        { name: "Cc", text: "Kim <kim@northwind.example>", from: "agent" },
+        { name: "Bcc", text: "Lee <lee@example.com>", from: "agent" },
+        { name: "Subject", text: "Notes for Thursday's meeting", from: "agent" },
+        {
+          name: "Body",
+          text: "Hi Sam,\n\nHere are the notes for Thursday. Please review the budget before we meet.\n\nThanks,\nAlex",
+          from: "agent",
+        },
+      ],
+    },
+  },
+  "approval-waiting-send-reply": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Send reply",
+        action: "send a reply",
+        joiner: "from",
+      },
+      values: [
+        { name: "Answers a message from", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
+        { name: "Its subject", text: "Invoice for October", from: "gmail" },
+        { name: "Its date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+        { name: "To", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
+        { name: "Subject", text: "Re: Invoice for October", from: "gmail" },
+        {
+          name: "Body",
+          text: "Hi Kim,\n\nThe invoice looks correct. I'll arrange payment on Friday.\n\nThanks,\nAlex",
+          from: "agent",
+        },
+      ],
+    },
+  },
+  "approval-waiting-forward": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Forward message",
+        action: "forward a message",
+        joiner: "from",
+      },
+      values: [
+        { name: "Forwards a message from", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
+        { name: "Its subject", text: "Invoice for October", from: "gmail" },
+        { name: "Its date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+        { name: "To", text: "Sam Lee <sam@example.com>", from: "agent" },
+        { name: "Subject", text: "Fwd: Invoice for October", from: "gmail" },
+        { name: "Attachments", text: "2 files, 128,456 bytes in all", from: "gmail" },
+        {
+          name: "Attachment 1",
+          text: "October invoice.pdf (application/pdf, 125,000 bytes)",
+          from: "gmail",
+        },
+        { name: "Attachment 2", text: "logo.png (image/png, 3,456 bytes)", from: "gmail" },
+        { name: "Note", text: "Please arrange payment on Friday.", from: "agent" },
+        {
+          name: "Forwarded text",
+          text: "---------- Forwarded message ---------\nFrom: Kim Lee <kim@northwind.example>\nDate: 2026-11-11T09:41:36Z\nSubject: Invoice for October\nTo: Alex <alex.personal@example.com>\n\nThe invoice for October is attached. Thank you!",
+          from: "gmail",
+        },
+      ],
+    },
+  },
+  "approval-waiting-send-draft": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Send draft",
+        action: "send a draft",
+        joiner: "from",
+        note: "This is the draft as it is in Gmail now. It is sent as it is at the moment you approve, also if it changed after this page loaded.",
+      },
+      values: [
+        { name: "From", text: "Alex <alex.personal@example.com>", from: "gmail" },
+        { name: "To", text: "Sam Lee <sam@example.com>", from: "gmail" },
+        { name: "Subject", text: "Notes for Thursday's meeting", from: "gmail" },
+        {
+          name: "Body",
+          text: "Hi Sam,\n\nHere are the notes for Thursday. Please review the budget before we meet.\n\nThanks,\nAlex",
+          from: "gmail",
+        },
+      ],
+    },
+  },
   "approval-cannot-show": {
     ...approvalBase,
     state: { kind: "waiting", shown: false, changed: false, digest: null },

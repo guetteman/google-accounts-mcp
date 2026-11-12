@@ -171,3 +171,46 @@ export const messageText = (mail: Outgoing): string => {
   const part = textPart(mail.body);
   return [...envelopeLines(mail), ...part.headers, "", part.content, ""].join("\r\n");
 };
+
+export interface FilePart {
+  filename: string;
+  type: string;
+  bytes: Uint8Array;
+}
+/** Encode in multiples of 57 bytes, so chunks end on both a base64 and a MIME line boundary. */
+export const mixedMessage = (mail: Outgoing, files: ReadonlyArray<FilePart>): Blob => {
+  const boundary = `mixed-${crypto.randomUUID()}`;
+  const text = textPart(mail.body);
+  const parts: BlobPart[] = [
+    [
+      ...envelopeLines(mail),
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      ...text.headers,
+      "",
+      text.content,
+      "",
+    ].join("\r\n"),
+  ];
+  for (const file of files) {
+    const type =
+      file.type.length <= 100 && /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(file.type)
+        ? file.type
+        : "application/octet-stream";
+    const filename = encodeURIComponent(file.filename).replace(
+      /[!'()*]/g,
+      (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+    );
+    parts.push(
+      `--${boundary}\r\nContent-Type: ${type}\r\nContent-Disposition: attachment; filename*=UTF-8''${filename}\r\nContent-Transfer-Encoding: base64\r\n\r\n`,
+    );
+    for (let at = 0; at < file.bytes.length; at += 57 * 512) {
+      const encoded = btoa(String.fromCharCode(...file.bytes.subarray(at, at + 57 * 512)));
+      parts.push(new Blob([encoded.match(/.{1,76}/g)!.join("\r\n") + "\r\n"]));
+    }
+    if (!file.bytes.length) parts.push("\r\n");
+  }
+  parts.push(`--${boundary}--\r\n`);
+  return new Blob(parts);
+};

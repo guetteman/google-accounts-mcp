@@ -3,7 +3,7 @@ import { isoSeconds } from "../approvals/model";
 import { boundedRecipients, MAX_BODY_BYTES, PAGE_BODY_BYTES, shorten } from "./bounds";
 
 export const Headers = Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String }));
-interface RawPart {
+export interface RawPart {
   readonly partId: string;
   readonly mimeType: string;
   readonly filename: string;
@@ -105,7 +105,6 @@ export const addresses = (value: string): string[] => {
 /** MIME selection stays pure. Bytes are decoded only after the page grants their cost. */
 export const readMessage = (raw: RawMessage): Message => {
   const html: BodyPart[] = [];
-  const parts: RawPart[] = [];
   const sources = new Map<RawPart, BodyPart>();
   const source = (part: RawPart): BodyPart => {
     const found = sources.get(part);
@@ -124,7 +123,6 @@ export const readMessage = (raw: RawMessage): Message => {
     return body;
   };
   const collect = (part: RawPart) => {
-    parts.push(part);
     if (
       part.mimeType === "text/html" &&
       part.body.size <= MAX_BODY_BYTES &&
@@ -171,23 +169,32 @@ export const readMessage = (raw: RawMessage): Message => {
     labels: raw.labelIds ?? [],
     body,
     html,
-    attachments: parts
-      .filter(
-        (part) =>
-          // The root has no partId and is named 0, as its first part is. Only a root that is
-          // the whole message can be a file.
-          !(part === raw.payload && part.parts?.length) &&
-          (part.filename ||
-            (part.body.attachmentId &&
-              part.mimeType !== "text/plain" &&
-              part.mimeType !== "text/html")),
-      )
-      .map((part) => ({
-        attachment: part.partId || "0",
-        filename: shorten(part.filename, 200),
-        type: shorten(part.mimeType, 100),
-        size: part.body.size,
-        contentId: header(part.headers, "Content-ID").replace(/^<|>$/g, ""),
-      })),
+    attachments: attachmentParts(raw).map(attachmentFields),
   };
 };
+
+/** The single rule for files, shared by reads, downloads and forwards. */
+export const attachmentParts = (raw: RawMessage): RawPart[] => {
+  const files: RawPart[] = [];
+  const collect = (part: RawPart) => {
+    // A multipart root and its first child can both be named 0. Only the child is a file.
+    if (
+      !(part === raw.payload && part.parts?.length) &&
+      (part.filename ||
+        (part.body.attachmentId && part.mimeType !== "text/plain" && part.mimeType !== "text/html"))
+    )
+      files.push(part);
+    part.parts?.forEach(collect);
+  };
+  collect(raw.payload);
+  return files;
+};
+export const attachmentFields = (part: RawPart): Attachment & { contentId: string } => ({
+  attachment: part.partId || "0",
+  filename: shorten(part.filename, 200),
+  type: shorten(part.mimeType, 100),
+  size: part.body.size,
+  contentId: header(part.headers, "Content-ID").replace(/^<|>$/g, ""),
+});
+export const attachmentPart = (raw: RawMessage, attachment: string): RawPart | null =>
+  attachmentParts(raw).find((part) => (part.partId || "0") === attachment) ?? null;

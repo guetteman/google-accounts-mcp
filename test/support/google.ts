@@ -148,6 +148,24 @@ export const google = {
   draftCreateAnswers: [] as Array<
     (request: Pick<Request, "signal">) => Response | Promise<Response>
   >,
+  sends: [] as Array<{ url: string; body: { id: string }; redirect: RequestRedirect }>,
+  sendAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
+  deletes: [] as string[],
+  deleteAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
+  fullDraftRequests: [] as string[],
+  fullDraftAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
+  storedDrafts: new Map<string, object>(),
+  uploads: [] as Array<{
+    url: string;
+    contentType: string;
+    redirect: RequestRedirect;
+    metadata: unknown;
+    message: string;
+  }>,
+  uploadAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
   messageRequests: [] as string[],
   messageAnswers: new Map<
     string,
@@ -198,6 +216,15 @@ export const google = {
     this.draftAnswers = [];
     this.draftCreates = [];
     this.draftCreateAnswers = [];
+    this.sends = [];
+    this.sendAnswers = [];
+    this.deletes = [];
+    this.deleteAnswers = [];
+    this.fullDraftRequests = [];
+    this.fullDraftAnswers.clear();
+    this.storedDrafts.clear();
+    this.uploads = [];
+    this.uploadAnswers = [];
     this.messageRequests = [];
     this.messageAnswers.clear();
     this.labelRequests = [];
@@ -378,6 +405,75 @@ export const google = {
           );
         },
       ),
+      http.post(
+        "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send",
+        async ({ request }) => {
+          this.methods.push(request.method);
+          const body = (await request.json()) as { id: string };
+          this.sends.push({ url: request.url, body, redirect: request.redirect });
+          const draft = this.storedDrafts.get(body.id) as { threadId?: string } | undefined;
+          const response =
+            (await this.sendAnswers.shift()?.(request)) ??
+            (draft
+              ? HttpResponse.json({
+                  id: `sent-${this.sends.length}`,
+                  threadId: draft.threadId ?? "sent-thread",
+                })
+              : new HttpResponse(null, { status: 404 }));
+          if (response.ok) this.storedDrafts.delete(body.id);
+          return response;
+        },
+      ),
+      http.all(
+        "https://gmail.googleapis.com/gmail/v1/users/me/drafts/:id",
+        async ({ request, params }) => {
+          this.methods.push(request.method);
+          const id = String(params.id);
+          if (request.method === "DELETE") {
+            this.deletes.push(id);
+            const response = await this.deleteAnswers.shift()?.(request);
+            if (!response || response.ok) this.storedDrafts.delete(id);
+            return response ?? new HttpResponse(null, { status: 204 });
+          }
+          this.fullDraftRequests.push(request.url);
+          if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+          return (
+            (await this.fullDraftAnswers.get(id)?.(request)) ??
+            (this.storedDrafts.has(id)
+              ? HttpResponse.json({ id, message: this.storedDrafts.get(id) })
+              : new HttpResponse(null, { status: 404 }))
+          );
+        },
+      ),
+      http.post(
+        "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts",
+        async ({ request }) => {
+          this.methods.push(request.method);
+          const contentType = request.headers.get("Content-Type") ?? "";
+          const boundary = /boundary="?([^";]+)/.exec(contentType)?.[1];
+          if (!boundary) return new HttpResponse(null, { status: 400 });
+          const parts = new TextDecoder()
+            .decode(await request.arrayBuffer())
+            .split(`--${boundary}`);
+          const content = (part: string) =>
+            part.slice(part.indexOf("\r\n\r\n") + 4).replace(/\r\n$/, "");
+          const metadata = JSON.parse(content(parts[1]!)) as { message?: { threadId?: string } };
+          this.uploads.push({
+            url: request.url,
+            contentType,
+            redirect: request.redirect,
+            metadata,
+            message: content(parts[2]!),
+          });
+          const n = this.draftCreates.length + this.uploads.length;
+          const threadId = metadata.message?.threadId ?? `thread-${n}`;
+          const response =
+            (await this.uploadAnswers.shift()?.(request)) ??
+            HttpResponse.json({ id: `draft-${n}`, message: { id: `message-${n}`, threadId } });
+          if (response.ok) this.storedDrafts.set(`draft-${n}`, { threadId });
+          return response;
+        },
+      ),
       http.all("https://gmail.googleapis.com/gmail/v1/users/me/drafts", async ({ request }) => {
         this.methods.push(request.method);
         if (request.method === "POST") {
@@ -389,13 +485,14 @@ export const google = {
             body: await request.json(),
           });
           const id = this.draftCreates.length;
-          return (
+          const response =
             (await this.draftCreateAnswers.shift()?.(request)) ??
             HttpResponse.json({
               id: `draft-${id}`,
               message: { id: `message-${id}`, threadId: `thread-${id}` },
-            })
-          );
+            });
+          if (response.ok) this.storedDrafts.set(`draft-${id}`, { threadId: `thread-${id}` });
+          return response;
         }
         this.draftRequests.push(request.url);
         if (request.method !== "GET") return new HttpResponse(null, { status: 405 });

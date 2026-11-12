@@ -63,7 +63,7 @@ export type Target =
 export interface ApprovalRequest {
   connection: { id: string; name: string; app: string };
   account: { name: string; email: string; workspace: boolean };
-  tool: { label: string; action: string; joiner: string; empty: string };
+  tool: { label: string; action: string; joiner: string; empty: string; note?: string };
   values: ReadonlyArray<ViewValue>;
 }
 /** One value of a view. Its text is the agent's own, or was read from the account's mail. */

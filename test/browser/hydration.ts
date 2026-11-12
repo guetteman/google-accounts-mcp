@@ -21,6 +21,7 @@ export async function hydrateAccounts(input: {
   width?: number;
   dark?: boolean;
   layout?: boolean;
+  screenshot?: string;
 }) {
   const bundle = await build({
     configFile: false,
@@ -196,6 +197,7 @@ export async function hydrateAccounts(input: {
     }
     if (input.layout) {
       await page.evaluate(() => document.fonts.ready);
+      if (input.screenshot) await page.screenshot({ path: input.screenshot, fullPage: true });
       return {
         clientLoads,
         overflow: await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),

@@ -60,6 +60,7 @@ export async function approvalView(
       action: tool.view.action,
       joiner: tool.view.joiner,
       empty: tool.view.empty,
+      ...(tool.view.note ? { note: tool.view.note } : {}),
     },
     values: [],
   };

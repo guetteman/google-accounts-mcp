@@ -46,7 +46,6 @@ export const change = <A>(
   body?: unknown,
 ): Effect.Effect<A, ToolFailure> =>
   Effect.gen(function* () {
-    const uncertain = () => new ToolFailure({ code: "google_unavailable", unknown: true });
     const response = yield* send(
       (token, signal) =>
         new Request(`${API}/${path}`, {
@@ -60,6 +59,39 @@ export const change = <A>(
           body: body === undefined ? undefined : JSON.stringify(body),
         }),
     );
+    return yield* changed(response, schema, refused);
+  });
+
+/** A byte upload uses the same refusal and uncertainty rules as a JSON change. */
+export const upload = <A>(
+  send: Send,
+  path: string,
+  schema: Schema.Codec<A, unknown>,
+  refused: (status: number) => ToolFailure,
+  body: Blob,
+  contentType: string,
+): Effect.Effect<A, ToolFailure> =>
+  Effect.gen(function* () {
+    const response = yield* send(
+      (token, signal) =>
+        new Request(`https://gmail.googleapis.com/upload/gmail/v1/users/me/${path}`, {
+          method: "POST",
+          redirect: "manual",
+          signal,
+          body,
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": contentType },
+        }),
+    );
+    return yield* changed(response, schema, refused);
+  });
+
+const changed = <A>(
+  response: Response,
+  schema: Schema.Codec<A, unknown> | null,
+  refused: (status: number) => ToolFailure,
+): Effect.Effect<A, ToolFailure> =>
+  Effect.gen(function* () {
+    const uncertain = () => new ToolFailure({ code: "google_unavailable", unknown: true });
     if (response.status >= 400 && response.status < 500)
       return yield* Effect.fail(refused(response.status));
     if (!response.ok) return yield* Effect.fail(uncertain());

@@ -14,6 +14,11 @@ export const failures = {
       `This connection already has ${WAITING_LIMIT} calls waiting for approval. Wait for the owner to decide or for an approval to expire.`,
   },
   not_found: { outcome: "refused", message: () => "The requested item does not exist." },
+  message_too_large: {
+    outcome: "refused",
+    message: () => "Gmail refused this message as too large.",
+  },
+  message_not_sendable: { outcome: "refused", message: () => "Gmail refused this message." },
   invalid_arguments: { outcome: "refused", message: () => "The arguments are not valid." },
   account_not_available: {
     outcome: "refused",
@@ -74,9 +79,17 @@ export const failures = {
 export type Missing = "thread" | "message" | "draft" | "attachment" | "label";
 export const notFound = (kind: Missing, id: string): ToolFailure =>
   new ToolFailure({ code: "not_found", missing: { kind, id } });
+export const messageTooLarge = (
+  over: { bytes: number } | { attachments: number } | null,
+): ToolFailure => new ToolFailure({ code: "message_too_large", over });
+export const notSendable = (draft: string | null): ToolFailure =>
+  new ToolFailure({ code: "message_not_sendable", unsendable: { draft } });
 export class ToolFailure extends Data.TaggedError("ToolFailure")<{
   code: keyof typeof failures;
   unknown?: boolean;
+  released?: true;
+  over?: { bytes: number } | { attachments: number } | null;
+  unsendable?: { draft: string | null };
   said?: string;
   missing?: { kind: Missing; id: string };
   reason?: "arguments_too_large";
@@ -103,7 +116,8 @@ export function classify(
     error instanceof ToolFailure ? error : new ToolFailure({ code: "server_unavailable" });
   const entry = failures[failure.code];
   const unknown =
-    failure.unknown || when.aborted || (when.approved && failure.code === "server_unavailable");
+    !failure.released &&
+    (failure.unknown || when.aborted || (when.approved && failure.code === "server_unavailable"));
   return {
     audit: unknown ? null : entry.outcome,
     error:
@@ -119,13 +133,21 @@ export function classify(
                   ? `The ${failure.field.name} field must be ${failure.field.expects}.`
                   : failure.missing
                     ? `No ${failure.missing.kind} "${failure.missing.id}" exists in ${text.email}. A ${failure.missing.kind} ID works only in the account that returned it.`
-                    : entry.message(
-                        text.input,
-                        text.email,
-                        text.origin,
-                        text.tool,
-                        text.connection,
-                      )),
+                    : failure.over
+                      ? "bytes" in failure.over
+                        ? `This forward would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is 25,000,000 bytes.`
+                        : `This forward would have ${failure.over.attachments} attachments. The limit is 30.`
+                      : failure.unsendable
+                        ? failure.unsendable.draft === null
+                          ? `Gmail refused this message from ${text.email}. Check that every address is valid.`
+                          : `Gmail refused to send draft "${failure.unsendable.draft}" from ${text.email}. A draft needs at least one recipient, and every address must be valid. The owner can complete it in Gmail.`
+                        : entry.message(
+                            text.input,
+                            text.email,
+                            text.origin,
+                            text.tool,
+                            text.connection,
+                          )),
           },
   };
 }

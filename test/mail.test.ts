@@ -179,3 +179,54 @@ it("rechecks addresses and encodes header injection even from an unsafe caller",
     envelopeLines(outgoing({ inReplyTo: "<bad\nid>", references: "<ok@example.com>" })),
   ).toEqual(["MIME-Version: 1.0"]);
 });
+
+it("F4: multipart file names round trip while unsafe media types cannot add headers or boundaries", async () => {
+  const { mixedMessage } = await import("../src/google/mail");
+  const { mime } = await import("./support/send");
+  const files = [
+    {
+      filename: 'quote"\r\nBcc: x@example.com ñ',
+      type: "image/png\r\nBcc: x@example.com",
+      bytes: new Uint8Array([0, 255, 254, 0]),
+    },
+    {
+      filename: "space and 'quote'.pdf",
+      type: "application/pdf",
+      bytes: new TextEncoder().encode("file content"),
+    },
+    { filename: "empty", type: "x/" + "a".repeat(99), bytes: new Uint8Array() },
+  ];
+  const blob = mixedMessage(outgoing({ subject: "Files", body: "Plain text\nunchanged" }), files);
+  expect(blob).toBeInstanceOf(Blob);
+  const text = await blob.text();
+  const parsed = mime(text);
+  expect(new TextDecoder().decode(parsed.parts[0]!.data)).toBe("Plain text\nunchanged");
+  for (const [i, file] of files.entries()) {
+    const sent = parsed.parts[i + 1]!;
+    expect(sent.data).toEqual(file.bytes);
+    expect(decodeURIComponent(sent.headers["Content-Disposition"]!.split("UTF-8''")[1]!)).toBe(
+      file.filename,
+    );
+    expect(Object.keys(sent.headers)).toEqual([
+      "Content-Type",
+      "Content-Disposition",
+      "Content-Transfer-Encoding",
+    ]);
+    expect(sent.headers["Content-Type"]).toBe(
+      i === 1 ? "application/pdf" : "application/octet-stream",
+    );
+  }
+});
+
+it("F3: the multipart root named 0 never hides a file child named 0", async () => {
+  const { attachmentPart, attachmentFields, readMessage } = await import("../src/google/message");
+  const { message, part, tree } = await import("./support/thread");
+  const raw = message();
+  const file = part("application/pdf", "PDF", "0", "report.pdf");
+  const multipart = { ...raw, payload: tree("multipart/mixed", [file]) };
+  expect(attachmentPart(multipart, "0")).toBe(file);
+  expect(attachmentFields(file)).toMatchObject({ filename: "report.pdf", attachment: "0" });
+  const root = { ...raw, payload: { ...file, partId: "" } };
+  expect(attachmentPart(root, "0")).toBe(root.payload);
+  expect(readMessage(multipart).attachments).toHaveLength(1);
+});
