@@ -25,7 +25,7 @@ import { asking, message, read, serveThread, THREAD } from "./support/thread";
 const readTool = TOOLS.find((t) => t.name === "read_thread")!;
 if (readTool.kind !== "account") throw new Error("Missing read_thread");
 
-it("A1: with ask, returns pending without contacting Google", async () => {
+it("with ask, returns pending without contacting Google", async () => {
   serveThread([message()]);
   const before = googleTraffic().length;
   const f = await asking();
@@ -35,7 +35,7 @@ it("A1: with ask, returns pending without contacting Google", async () => {
 });
 
 it.each([undefined, "m4", "m4+18000"])(
-  "A2: builds Gmail's metadata view and page position for %s",
+  "builds Gmail's metadata view and page position for %s",
   async (start) => {
     serveThread(Array.from({ length: 7 }, (_, i) => message(`m${i + 1}`)));
     const f = await asking(start ? { page: start } : {});
@@ -56,11 +56,23 @@ it.each([undefined, "m4", "m4+18000"])(
             {
               name: "Starts at",
               text: `Message 4 of 7${start.includes("+") ? ", after its first 18,000 characters" : ""}`,
-              from: "gmail",
+              from: "agent",
             },
           ]
         : []),
     ]);
+    const text = textOf(await renderPage(props).text());
+    if (start) {
+      expect(text).toContain(
+        "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which.",
+      );
+      for (const label of ["Subject", "Messages", "Last message from", "Last message date"])
+        expect(text).toContain(`${label}, read from Gmail`);
+      expect(text).toContain("Starts at, written by the agent");
+    } else
+      expect(text).toContain(
+        "The server read the shaded text below from Gmail. The agent did not write it.",
+      );
     expect(google.threadRequests.map((r) => r.url)).toEqual([
       `${THREADS_URL}/${THREAD}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`,
     ]);
@@ -82,7 +94,7 @@ it.each([
     "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which.",
   ],
 ] as [ViewValue[], string][])(
-  "A3: explains the source of shaded values %j",
+  "explains the source of shaded values %j",
   async (values, sentence) => {
     const source = previews["approval-waiting-thread"] as ApprovalPageProps;
     const props = { ...source, request: { ...source.request, values } };
@@ -99,7 +111,7 @@ it.each([
   },
 );
 
-it("A3: renders thread and search previews at 390 and 1280 pixels without overflow", async () => {
+it("renders thread and search previews at 390 and 1280 pixels without overflow", async () => {
   for (const name of ["approval-waiting-thread", "approval-waiting-search"])
     for (const width of [390, 1280]) {
       const response = renderPage(previews[name]!);
@@ -121,7 +133,7 @@ it("A3: renders thread and search previews at 390 and 1280 pixels without overfl
 });
 
 it.each(["404", "500", "page", "account"])(
-  "A4: hides Approve for %s while Reject still works",
+  "hides Approve for %s while Reject still works",
   async (failure) => {
     serveThread([message()]);
     const f = await asking(failure === "page" ? { page: "unknown" } : {});
@@ -142,38 +154,52 @@ it.each(["404", "500", "page", "account"])(
   },
 );
 
-it("A5: rechecks permission after reading the approval and before acquiring its credential", async () => {
+it.each([
+  { change: "permission is denied", kind: "permission" },
+  { change: "the approval is rejected", kind: "rejected" },
+  { change: "the approval expires", kind: "expired" },
+])("does not read Gmail when $change after the page reads the approval", async ({ kind }) => {
   serveThread([message()]);
   const f = await asking();
-  let denied = false;
-  const db = observeStatements(
+  let read = false;
+  const observed = observeStatements(
     env.DB,
     () => {},
     (sql) => {
-      if (!denied && sql.startsWith("SELECT approvals.id")) denied = true;
+      if (sql.startsWith("SELECT approvals.id")) read = true;
     },
   );
-  // The observer must await the deny before viewCredential reads. Use a promise from the
-  // real approval read, then perform the change at the next statement boundary.
+  // Apply the concurrent change after the snapshot is read and before the credential lookup.
   let changed = false;
-  const racing = observeStatements(db, async () => {
-    if (denied && !changed) {
+  const racing = observeStatements(observed, async () => {
+    if (read && !changed) {
       changed = true;
-      await env.DB.prepare(
-        "DELETE FROM permissions WHERE connection_id = ? AND account_id = ? AND tool = 'read_thread'",
-      )
-        .bind(f.connection.id, f.personal.id)
-        .run();
+      if (kind === "permission")
+        await env.DB.prepare(
+          "DELETE FROM permissions WHERE connection_id = ? AND account_id = ? AND tool = 'read_thread'",
+        )
+          .bind(f.connection.id, f.personal.id)
+          .run();
+      else if (kind === "rejected")
+        await env.DB.prepare(
+          "UPDATE approvals SET state = 'rejected', decided_at = ?, arguments = NULL WHERE id = ?",
+        )
+          .bind(Date.now(), f.id)
+          .run();
+      else
+        await env.DB.prepare("UPDATE approvals SET expires_at = ? WHERE id = ?")
+          .bind(Date.now(), f.id)
+          .run();
     }
   });
   const before = googleTraffic().length;
   const props = await page(f, f.id, testEnv({ DB: racing }));
   expect(changed).toBe(true);
-  expect(props.state).toMatchObject({ kind: "waiting", shown: false });
   expect(googleTraffic().slice(before)).toEqual([]);
+  expect(props.state).toMatchObject({ kind: "waiting", shown: false });
 });
 
-it("A5: viewing makes no audit row and Reject sends nothing to Google", async () => {
+it("viewing makes no audit row and Reject sends nothing to Google", async () => {
   serveThread([message()]);
   const f = await asking();
   await page(f, f.id);
@@ -184,7 +210,7 @@ it("A5: viewing makes no audit row and Reject sends nothing to Google", async ()
   expect((await callRows()).map((r) => r.outcome)).toEqual(["rejected"]);
 });
 
-it("A9: refuses a view's POST before Gmail and hides Approve", async () => {
+it("refuses a view's POST before Gmail and hides Approve", async () => {
   serveThread([message()]);
   const f = await asking();
   vi.spyOn(readTool.view, "values").mockImplementation((_args, send) =>
@@ -206,7 +232,7 @@ it("A9: refuses a view's POST before Gmail and hides Approve", async () => {
   expect(googleTraffic().slice(before)).toEqual([]);
 });
 
-it("A6: a new message changes the digest and Approve runs nothing", async () => {
+it("a new message changes the digest and Approve runs nothing", async () => {
   serveThread([message()]);
   const f = await asking();
   const original = await page(f, f.id);
@@ -226,7 +252,7 @@ it("A6: a new message changes the digest and Approve runs nothing", async () => 
   expect((await callRows()).map((r) => r.outcome)).toEqual(["pending"]);
 });
 
-it("A7: an approved read returns the direct result through get_approval", async () => {
+it("an approved read returns the direct result through get_approval", async () => {
   serveThread([message()]);
   const f = await asking();
   const shown = await page(f, f.id);
@@ -239,7 +265,7 @@ it("A7: an approved read returns the direct result through get_approval", async 
   expect(approved).toEqual({ status: "success", result: await answer(await read(f)) });
 });
 
-it("A7: a thread that disappears after metadata gives failed not_found through get_approval", async () => {
+it("a thread that disappears after metadata gives failed not_found through get_approval", async () => {
   serveThread([message()]);
   const f = await asking();
   const shown = await page(f, f.id);
@@ -262,7 +288,7 @@ it("A7: a thread that disappears after metadata gives failed not_found through g
   });
 });
 
-it("A8: label and search views read no credential and contact no Google service", async () => {
+it("label and search views read no credential and contact no Google service", async () => {
   const f = await fixture();
   const statements: string[] = [];
   const db = observeStatements(env.DB, (sql) => {
@@ -290,7 +316,7 @@ it("A8: label and search views read no credential and contact no Google service"
   }
 });
 
-it("A4: bounds each view request at ten seconds and clears its timers", async () => {
+it("bounds each view request at ten seconds and clears its timers", async () => {
   serveThread([message()]);
   const f = await asking();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

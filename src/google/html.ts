@@ -1,3 +1,5 @@
+import { boundedText, MAX_TEXT } from "./bounds";
+
 // HTML 4's 252 names, plus apos. Shared with Gmail search snippets.
 const ENTITIES: Readonly<Record<string, string>> = {
   AElig: "\u00c6",
@@ -266,6 +268,32 @@ export const decodeEntities = (text: string): string =>
     },
   );
 
+const contentIdFromSrc = (raw: string | null): string | null => {
+  const src = decodeEntities(raw ?? "").trim();
+  return src.startsWith("cid:") ? src.slice(4) : null;
+};
+
+/** Only actual src attributes reference inline parts; comments and text do not. */
+export async function referencedContentIds(html: readonly string[]): Promise<ReadonlySet<string>> {
+  const ids = new Set<string>();
+  for (const source of html) {
+    try {
+      await new HTMLRewriter()
+        .on("[src]", {
+          element(element) {
+            const id = contentIdFromSrc(element.getAttribute("src"));
+            if (id) ids.add(id);
+          },
+        })
+        .transform(new Response(source))
+        .text();
+    } catch {
+      // A parser limit in one HTML part must not hide the message or its other parts.
+    }
+  }
+  return ids;
+}
+
 const BLOCKS = new Set([
   "address",
   "article",
@@ -309,6 +337,7 @@ export async function htmlToText(html: string): Promise<string> {
   const node: string[] = [];
   const visible: Array<{ part: number; offset: number; position: number }> = [];
   let length = 0;
+  let cut = false;
   let last = "";
   let breaks = 0;
   let pendingSpace = false;
@@ -321,7 +350,12 @@ export async function htmlToText(html: string): Promise<string> {
   const links = new Set<{ address: string; first: number }>();
   // Each chunk is one line or a single newline. Only the new chunk is inspected.
   const write = (text: string) => {
-    if (!text) return;
+    if (!text || cut) return;
+    const available = MAX_TEXT + 1 - length;
+    if (text.length >= available) {
+      cut = true;
+      text = text.slice(0, available);
+    }
     const offset = text.search(/\S/);
     if (offset >= 0) {
       visible.push({ part: parts.length, offset, position: length + offset });
@@ -333,6 +367,7 @@ export async function htmlToText(html: string): Promise<string> {
     breaks = text === "\n" ? breaks + 1 : 0;
   };
   const newline = (blank = false) => {
+    if (cut) return;
     pendingSpace = false;
     if (length && breaks < (blank ? 2 : 1)) write("\n");
   };
@@ -342,10 +377,12 @@ export async function htmlToText(html: string): Promise<string> {
     if ((!last || last === "\n") && quotes) write("> ".repeat(quotes));
   };
   const append = (text: string, preserved = false) => {
+    if (cut) return;
     if (preserved) {
       const start = length;
       const lines = text.split("\n");
       for (let i = 0; i < lines.length; i++) {
+        if (cut) break;
         if (i) {
           pendingSpace = false;
           write("\n");
@@ -371,10 +408,14 @@ export async function htmlToText(html: string): Promise<string> {
     }
   };
   const flush = () => {
-    if (node.length && !hidden) append(decodeEntities(node.join("")), pre > 0);
+    if (node.length && !hidden && !cut) append(decodeEntities(node.join("")), pre > 0);
     node.length = 0;
   };
   const finishLink = (link: { address: string; first: number }) => {
+    if (cut) {
+      links.delete(link);
+      return;
+    }
     const first = visible[link.first];
     let same = first !== undefined && lastVisibleEnd - first.position === link.address.length;
     if (same && first) {
@@ -409,6 +450,7 @@ export async function htmlToText(html: string): Promise<string> {
     .on("*", {
       element(element) {
         flush();
+        if (cut) return;
         const tag = element.tagName;
         if (["script", "style", "title"].includes(tag)) {
           hidden++;
@@ -426,14 +468,14 @@ export async function htmlToText(html: string): Promise<string> {
         if (tag === "blockquote") quotes++;
         if (tag === "pre") pre++;
         if (tag === "li") append("- ");
-        if (tag === "img" && decodeEntities(element.getAttribute("src") ?? "").startsWith("cid:")) {
+        if (tag === "img" && contentIdFromSrc(element.getAttribute("src")) !== null) {
           const alt = decodeEntities(element.getAttribute("alt") ?? "");
           append(alt ? `[image: ${alt}]` : "[image]");
         }
-        const address = tag === "a" ? decodeEntities(element.getAttribute("href") ?? "") : "";
-        const link = /^(?:https?:|mailto:)/i.test(address)
-          ? { address, first: visible.length }
-          : null;
+        const address =
+          tag === "a" ? decodeEntities(element.getAttribute("href") ?? "").trim() : "";
+        const link =
+          address !== "" && !address.startsWith("#") ? { address, first: visible.length } : null;
         if (link) links.add(link);
         if (link || cell || (BLOCKS.has(tag) && tag !== "hr"))
           onEnd(element, () => {
@@ -448,7 +490,7 @@ export async function htmlToText(html: string): Promise<string> {
     })
     .onDocument({
       text(chunk) {
-        if (chunk.text) node.push(chunk.text);
+        if (chunk.text && !cut) node.push(chunk.text);
         if (chunk.lastInTextNode) flush();
       },
     });
@@ -457,7 +499,10 @@ export async function htmlToText(html: string): Promise<string> {
   // An unclosed link may never get an end-tag callback. Its text has already been emitted.
   for (const link of Array.from(links).reverse()) finishLink(link);
   const start = visible[0]?.position ?? length;
-  return parts
-    .join("")
-    .slice(Math.min(start, firstPreserved ?? start), Math.max(lastVisibleEnd, lastPreserved));
+  return boundedText(
+    parts
+      .join("")
+      .slice(Math.min(start, firstPreserved ?? start), Math.max(lastVisibleEnd, lastPreserved)),
+    cut,
+  );
 }

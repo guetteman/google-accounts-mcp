@@ -33,9 +33,9 @@ it.each([
   ],
   ["empty links", '<a href="https://example.com"></a>', "https://example.com"],
   [
-    "unsafe link schemes",
+    "relative and non-HTTP link addresses",
     '<a href="javascript:alert(1)">Keep text</a><a href="/relative"> here</a>',
-    "Keep text here",
+    "Keep text (javascript:alert(1)) here (/relative)",
   ],
   [
     "nested quotes",
@@ -98,6 +98,21 @@ it.each([
     "https://example.com/item",
   ],
   ["table cells without end tags", "<table><tr><td>one<td>two</table>", "one two"],
+  [
+    "padded link addresses",
+    '<a href=" https://other.example/login ">https://bank.example</a>',
+    "https://bank.example (https://other.example/login)",
+  ],
+  [
+    "protocol-relative link addresses",
+    '<a href="//other.example/login">https://bank.example</a>',
+    "https://bank.example (//other.example/login)",
+  ],
+  [
+    "fragment and empty links",
+    '<a href="#section">Section</a> <a href="  ">Empty</a> <a>No href</a>',
+    "Section Empty No href",
+  ],
 ])("converts %s", async (_rule, html, expected) => {
   expect(await htmlToText(html)).toBe(expected);
 });
@@ -143,13 +158,27 @@ it("uses the same complete entity decoder for snippets", () => {
 });
 
 it("converts 2 MB of table rows with links within twenty seconds", async () => {
-  const row = '<tr><td><a href="https://example.com/item">Item</a></td><td>$15.00</td></tr>';
+  const row =
+    '<tr><td class="item"><a href="https://example.com/item">Item</a></td><td>$15.00</td></tr>';
   const count = Math.ceil((2 * 1024 * 1024) / row.length);
   const html = `<table>${row.repeat(count)}</table>`;
   const text = await htmlToText(html);
-  // HTMLRewriter callbacks can monopolize one task. Let the test's elapsed timeout fire
-  // before checking content, even when the old synchronous builder blocked the event loop.
+  // Yield a task so synchronous parser callbacks cannot bypass the elapsed test timeout
+  // by resolving the conversion promise before the timeout callback can run.
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
   const expected = Array(count).fill("Item (https://example.com/item) $15.00").join("\n");
   expect(text === expected, "Every table row is converted in order").toBe(true);
+}, 20_000);
+
+it("bounds expanded quote prefixes while converting 4000 nested quotes and 10000 lines", async () => {
+  const html =
+    "<blockquote>".repeat(4000) + "line<br>".repeat(10000) + "</blockquote>".repeat(4000);
+  const text = await htmlToText(html);
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  expect(text.length).toBeLessThanOrEqual(1000000);
+  expect(
+    text.endsWith(
+      "\n[The rest of this message was left out: it is longer than 1,000,000 characters.]",
+    ),
+  ).toBe(true);
 }, 20_000);

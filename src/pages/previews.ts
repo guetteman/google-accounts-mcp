@@ -206,7 +206,7 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
           from: "gmail",
         },
         { name: "Last message date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
-        { name: "Starts at", text: "Message 4 of 7", from: "gmail" },
+        { name: "Starts at", text: "Message 4 of 7", from: "agent" },
       ],
     },
   },

@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { isoSeconds } from "../approvals/model";
+import { boundedRecipients, MAX_BODY_BYTES, shorten } from "./bounds";
 
 export const Headers = Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String }));
 interface RawPart {
@@ -42,6 +43,7 @@ export const header = (headers: typeof Headers.Type | undefined, name: string): 
 export type Body = (
   | { kind: "plain" | "html"; text: string }
   | { kind: "plain" | "html"; fetch: string }
+  | { kind: "plain" | "html"; omitted: string }
 ) & {
   /** A deferred plain alternative may turn out blank once its bytes have been fetched. */
   fallback?: Body[];
@@ -63,7 +65,7 @@ export interface Message {
   labels: readonly string[];
   body: Body[];
   html: string[];
-  attachments: Array<Attachment & { contentId: string; bodyId?: string }>;
+  attachments: Array<Attachment & { contentId: string }>;
 }
 export const decodeBody = (data: string): string =>
   new TextDecoder().decode(
@@ -103,7 +105,11 @@ export const readMessage = (raw: RawMessage): Message => {
   const parts: RawPart[] = [];
   const collect = (part: RawPart) => {
     parts.push(part);
-    if (part.mimeType === "text/html" && part.body.data !== undefined)
+    if (
+      part.mimeType === "text/html" &&
+      part.body.size <= MAX_BODY_BYTES &&
+      part.body.data !== undefined
+    )
       html.push(decodeBody(part.body.data));
     part.parts?.forEach(collect);
   };
@@ -114,7 +120,7 @@ export const readMessage = (raw: RawMessage): Message => {
       const alternatives = (part.parts ?? []).map(select);
       const plain = alternatives.find((bodies) =>
         bodies.some(
-          (body) => body.kind === "plain" && ("fetch" in body || body.text.trim() !== ""),
+          (body) => body.kind === "plain" && (!("text" in body) || body.text.trim() !== ""),
         ),
       );
       if (plain) {
@@ -127,6 +133,13 @@ export const readMessage = (raw: RawMessage): Message => {
     if (part.parts) return part.parts.flatMap(select);
     if (part.mimeType !== "text/plain" && part.mimeType !== "text/html") return [];
     const kind = part.mimeType === "text/plain" ? "plain" : "html";
+    if (part.body.size > MAX_BODY_BYTES)
+      return [
+        {
+          kind,
+          omitted: `[The body of this message is too large to read: ${part.body.size} bytes.]`,
+        },
+      ];
     return [
       part.body.data !== undefined
         ? { kind, text: decodeBody(part.body.data) }
@@ -136,16 +149,13 @@ export const readMessage = (raw: RawMessage): Message => {
     ];
   };
   const body = select(raw.payload);
-  // An unselected text alternative with attachmentId is still an attachment. A deferred
-  // fallback is removed by the read only if it actually becomes body.
-  const selected = new Set(body.flatMap((b) => ("fetch" in b ? [b.fetch] : [])));
   return {
     message: raw.id,
-    from: header(raw.payload.headers, "From"),
-    to: addresses(header(raw.payload.headers, "To")),
-    cc: addresses(header(raw.payload.headers, "Cc")),
+    from: shorten(header(raw.payload.headers, "From"), 500),
+    to: boundedRecipients(addresses(header(raw.payload.headers, "To"))),
+    cc: boundedRecipients(addresses(header(raw.payload.headers, "Cc"))),
     ...(raw.payload.headers?.some((h) => h.name.toLowerCase() === "bcc")
-      ? { bcc: addresses(header(raw.payload.headers, "Bcc")) }
+      ? { bcc: boundedRecipients(addresses(header(raw.payload.headers, "Bcc"))) }
       : {}),
     date: isoSeconds(Number(raw.internalDate)),
     labels: raw.labelIds ?? [],
@@ -154,15 +164,17 @@ export const readMessage = (raw: RawMessage): Message => {
     attachments: parts
       .filter(
         (part) =>
-          part.filename || (part.body.attachmentId && !selected.has(part.body.attachmentId)),
+          part.filename ||
+          (part.body.attachmentId &&
+            part.mimeType !== "text/plain" &&
+            part.mimeType !== "text/html"),
       )
       .map((part) => ({
         attachment: part.partId || "0",
-        filename: part.filename,
-        type: part.mimeType,
+        filename: shorten(part.filename, 200),
+        type: shorten(part.mimeType, 100),
         size: part.body.size,
         contentId: header(part.headers, "Content-ID").replace(/^<|>$/g, ""),
-        ...(part.body.attachmentId ? { bodyId: part.body.attachmentId } : {}),
       })),
   };
 };
