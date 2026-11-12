@@ -2,6 +2,7 @@ import { Effect, Result } from "effect";
 import { readConfig } from "../config";
 import { readOwner, standing } from "../owner/owner";
 import { cleanupApprovals } from "./store";
+import { cleanupStatement } from "../once/store";
 export async function scheduled(_event: ScheduledController, env: Env) {
   const config = readConfig(env);
   if (Result.isFailure(config)) return;
@@ -21,4 +22,5 @@ export async function scheduled(_event: ScheduledController, env: Env) {
       Date.now(),
     ),
   );
+  await cleanupStatement(env.DB, Date.now()).run();
 }

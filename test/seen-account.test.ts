@@ -22,6 +22,7 @@ const context = async (f: Awaited<ReturnType<typeof fixture>>): Promise<CallCont
     connection: { connectionId: parseConnectionId(f.connection.id)!, app: f.connection.app },
     origin: ORIGIN,
     now: Date.now,
+    waitUntil: () => {},
   };
 };
 
