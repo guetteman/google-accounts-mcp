@@ -2,7 +2,13 @@ import { Effect } from "effect";
 import { decodeAllowedAccount } from "../accounts/store";
 import type { Config } from "../config";
 import { WriteUncertain } from "../db";
-import { accountRequests, CALL_DEADLINE, executeAccount, type CallContext } from "../mcp/call";
+import {
+  accountRequests,
+  CALL_DEADLINE,
+  executeAccount,
+  repeatAnswer,
+  type CallContext,
+} from "../mcp/call";
 import { classify, ToolFailure } from "../mcp/failures";
 import type { Outcome } from "../calls/store";
 import {
@@ -163,22 +169,30 @@ export const decide = (
           ...deps,
           connection: { connectionId: approval.connection.id, app: approval.connection.app },
           now: Date.now,
+          waitUntil: () => {},
         };
         let outcome: "success" | "failed" | "unknown" = "success";
         let audit: Outcome | null = "success";
         let payload: StoredPayload | null = null;
         try {
           const allowed = await decodeAllowedAccount(decision.credentials[0], deps.config.tokenKey);
-          payload = {
-            result: await executeAccount(
-              call,
-              view.tool,
-              allowed,
-              args,
-              deadline,
-              controller.signal,
-            ),
-          };
+          const executed = await executeAccount(
+            call,
+            view.tool,
+            allowed,
+            args,
+            deadline,
+            controller.signal,
+          );
+          if (executed.kind === "ran") payload = { result: executed.value };
+          else {
+            audit = "repeat";
+            if (executed.repeat.kind === "done")
+              payload = {
+                result: repeatAnswer(executed.repeat, allowed.credential.email, view.tool, args),
+              };
+            else outcome = "unknown";
+          }
         } catch (error) {
           const classified = classify(
             error,

@@ -36,6 +36,39 @@ export const get = <A>(
     return yield* Schema.decodeUnknownEffect(schema)(body).pipe(Effect.mapError(unavailable));
   });
 
+/** One change as the account. Only a 4xx response confirms that Google refused it. */
+export const change = <A>(
+  send: Send,
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  schema: Schema.Codec<A, unknown> | null,
+  refused: (status: number) => ToolFailure,
+  body?: unknown,
+): Effect.Effect<A, ToolFailure> =>
+  Effect.gen(function* () {
+    const uncertain = () => new ToolFailure({ code: "google_unavailable", unknown: true });
+    const response = yield* send(
+      (token, signal) =>
+        new Request(`${API}/${path}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          },
+          redirect: "manual",
+          signal,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }),
+    );
+    if (response.status >= 400 && response.status < 500)
+      return yield* Effect.fail(refused(response.status));
+    if (!response.ok) return yield* Effect.fail(uncertain());
+    if (schema === null) return undefined as A;
+    const text = yield* Effect.tryPromise({ try: () => response.text(), catch: uncertain });
+    const parsed = yield* Effect.try({ try: (): unknown => JSON.parse(text), catch: uncertain });
+    return yield* Schema.decodeUnknownEffect(schema)(parsed).pipe(Effect.mapError(uncertain));
+  });
+
 const Labels = Schema.Struct({
   labels: Schema.optionalKey(
     Schema.Array(

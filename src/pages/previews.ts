@@ -103,7 +103,7 @@ const connectionPreview = (scenario: string): Page => {
     settings: Object.fromEntries(
       allowed.flatMap((a, i) =>
         (scenario === "all-allowed" || i === 0
-          ? ["list_labels", "search_threads"]
+          ? ["list_labels", "search_threads", "create_draft"]
           : ["list_labels"]
         ).map((tool) => [
           `${a.id}:${tool}`,
@@ -124,6 +124,12 @@ const connectionPreview = (scenario: string): Page => {
         label: "Search mail",
         description:
           "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",
+      },
+      {
+        name: "create_draft",
+        group: "Draft",
+        label: "Create draft",
+        description: "Write a draft, new or as a reply. Nothing is sent.",
       },
     ],
     requiredGmailScopes: GMAIL_SCOPES.length,
@@ -211,6 +217,53 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
     },
   },
 
+  "approval-waiting-draft": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Create draft",
+        action: "create a draft",
+        joiner: "in",
+      },
+      values: [
+        { name: "To", text: "Sam Lee <sam@example.com>", from: "agent" },
+        { name: "Cc", text: "Kim <kim@northwind.example>", from: "agent" },
+        { name: "Subject", text: "Notes for Thursday's meeting", from: "agent" },
+        { name: "Duplicate", text: "2 (a deliberate copy of an earlier call)", from: "agent" },
+        {
+          name: "Body",
+          text: "Hi Sam,\n\nHere are the notes for our meeting on Thursday. Please review the budget before we meet.\n\nThanks,\nAlex",
+          from: "agent",
+        },
+      ],
+    },
+  },
+  "approval-waiting-reply": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Create draft",
+        action: "create a draft",
+        joiner: "in",
+      },
+      values: [
+        { name: "Answers a message from", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
+        { name: "Its subject", text: "Invoice for October", from: "gmail" },
+        { name: "Its date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+        { name: "To", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
+        { name: "Subject", text: "Re: Invoice for October", from: "gmail" },
+        {
+          name: "Body",
+          text: "Hi Kim,\n\nThe invoice looks correct. I'll arrange payment on Friday.\n\nThanks,\nAlex",
+          from: "agent",
+        },
+      ],
+    },
+  },
   "approval-cannot-show": {
     ...approvalBase,
     state: { kind: "waiting", shown: false, changed: false, digest: null },

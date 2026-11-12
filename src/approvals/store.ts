@@ -23,6 +23,8 @@ import {
 import { parseAccountId } from "../accounts/model";
 import { parseAccountTool } from "../mcp/tools";
 import { parseConnectionId } from "../connections/model";
+import type { Identity } from "../once/identity";
+import { liveRowWhere, rowStatement, decodeRow, type Repeat } from "../once/store";
 
 const won = Symbol("Won");
 export type WonBrand = { readonly [won]: true };
@@ -143,16 +145,26 @@ export const createApproval = (
     uses: readonly Use[];
     arguments: Sealed;
     at: number;
+    identity?: Identity;
   },
-) =>
+): Effect.Effect<
+  | "created"
+  | "limit"
+  | "unavailable"
+  | { waiting: { id: ApprovalId; expiresAt: number } }
+  | { repeat: Repeat },
+  WriteUncertain
+> =>
   Effect.tryPromise({
     try: async () => {
       const { id, call, tool, at } = input;
       const results = await ctx.db.batch([
         ctx.db
-          .prepare(`INSERT INTO approvals (id,generation,connection_id,call_id,tool,uses,created_at,expires_at,state,arguments)
-          SELECT ?1,?2,?3,?4,?5,?6,?7,?8,'waiting',?9
+          .prepare(`INSERT INTO approvals (id,generation,connection_id,call_id,tool,uses,created_at,expires_at,state,arguments,identity)
+          SELECT ?1,?2,?3,?4,?5,?6,?7,?8,'waiting',?9,?11
           WHERE ${usable("?3", "?2", "?6", "?7", "?10")}
+          AND (?11 IS NULL OR (NOT ${liveRowWhere("?11", "?7")}
+            AND NOT EXISTS (SELECT 1 FROM approvals WHERE connection_id = ?3 AND identity = ?11 AND state = 'waiting' AND expires_at > ?7)))
           AND (SELECT count(*) FROM approvals WHERE connection_id = ?3 AND generation = ?2 AND state = 'waiting' AND expires_at > ?7) < ${WAITING_LIMIT} RETURNING id`)
           .bind(
             id,
@@ -165,6 +177,7 @@ export const createApproval = (
             at + APPROVAL_LIFETIME,
             input.arguments,
             ctx.owner.email,
+            input.identity ?? null,
           ),
         ctx.db
           .prepare(`UPDATE calls SET outcome = 'pending' WHERE id = ?1 AND connection_id = ?2
@@ -175,12 +188,39 @@ export const createApproval = (
             `SELECT count(*) AS count FROM approvals WHERE connection_id = ?1 AND state = 'waiting' AND expires_at > ?2 AND ${ownerGuard("?3", "?4")}`,
           )
           .bind(ctx.connection.connectionId, at, ctx.owner.generation, ctx.owner.email),
+        ...(input.identity
+          ? [
+              rowStatement(ctx.db, input.identity),
+              ctx.db
+                .prepare(`SELECT id, expires_at FROM approvals WHERE connection_id = ?1 AND identity = ?2
+            AND state = 'waiting' AND expires_at > ?3 AND ${ownerGuard("?4", "?5")}`)
+                .bind(
+                  ctx.connection.connectionId,
+                  input.identity,
+                  at,
+                  ctx.owner.generation,
+                  ctx.owner.email,
+                ),
+            ]
+          : []),
       ]);
-      return results[0]!.results.length
-        ? ("created" as const)
-        : Number((results[2]!.results[0] as { count: number }).count) >= WAITING_LIMIT
-          ? ("limit" as const)
-          : ("unavailable" as const);
+      if (results[0]!.results.length) return "created";
+      if (input.identity) {
+        const repeat = decodeRow(results[3]!, at);
+        if (repeat) return { repeat };
+        const waiting = results[4]!.results[0];
+        if (waiting) {
+          const row = Schema.decodeUnknownSync(
+            Schema.Struct({ id: Schema.String, expires_at: Schema.Int }),
+          )(waiting);
+          const id = parseApprovalId(row.id);
+          if (!id) throw new WriteUncertain();
+          return { waiting: { id, expiresAt: row.expires_at } };
+        }
+      }
+      return Number((results[2]!.results[0] as { count: number }).count) >= WAITING_LIMIT
+        ? ("limit" as const)
+        : ("unavailable" as const);
     },
     catch: () => new WriteUncertain(),
   });
