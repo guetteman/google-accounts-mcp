@@ -64,6 +64,40 @@ it.each([
   ["unclosed blockquote", "<section><blockquote>Quoted</section><p>After</p>", "> Quoted\nAfter"],
   ["preformatted at edges", "<pre>  code \n\n   tail\t  </pre>", "  code \n\n   tail\t  "],
   ["whitespace-only pre", "<pre>   </pre>", "   "],
+  [
+    "table cell boundaries",
+    "<table><tr><th>Total</th><td>$15.00</td></tr></table>",
+    "Total $15.00",
+  ],
+  [
+    "nested table cells",
+    "<table><tr><td>one<table><tr><td>two</td><td>three</td></tr></table>four</td><td>five</td></tr></table>",
+    "one\ntwo three\nfour five",
+  ],
+  [
+    "table cell whitespace",
+    "<table><tr><td>Total </td><td> $15.00 </td></tr><tr><td> Tax</td><td>$1.00</td></tr></table>",
+    "Total $15.00\nTax $1.00",
+  ],
+  [
+    "self-closing SVG link",
+    '<p>a</p><svg><a href="https://x.example/"/></svg><p>after</p>',
+    "a\nhttps://x.example/\nafter",
+  ],
+  [
+    "self-closing MathML link",
+    '<p>a</p><math><a href="https://x.example/"/></math><p>after</p>',
+    "a\nhttps://x.example/\nafter",
+  ],
+  ["self-closing SVG block", "<p>a</p><svg><section/></svg><p>after</p>", "a\nafter"],
+  ["self-closing MathML block", "<p>a</p><math><section/></math><p>after</p>", "a\nafter"],
+  ["self-closing hidden element", "<p>a</p><svg><style/></svg><p>after</p>", "a\nafter"],
+  [
+    "fragmented link label",
+    '<a href="https://example.com/item">  <b>https://</b>example.com/<i>item</i>  </a>',
+    "https://example.com/item",
+  ],
+  ["table cells without end tags", "<table><tr><td>one<td>two</table>", "one two"],
 ])("converts %s", async (_rule, html, expected) => {
   expect(await htmlToText(html)).toBe(expected);
 });
@@ -107,3 +141,15 @@ it("uses the same complete entity decoder for snippets", () => {
     "\u00a0é Α 🙂 ' &unknown;",
   );
 });
+
+it("converts 2 MB of table rows with links within twenty seconds", async () => {
+  const row = '<tr><td><a href="https://example.com/item">Item</a></td><td>$15.00</td></tr>';
+  const count = Math.ceil((2 * 1024 * 1024) / row.length);
+  const html = `<table>${row.repeat(count)}</table>`;
+  const text = await htmlToText(html);
+  // HTMLRewriter callbacks can monopolize one task. Let the test's elapsed timeout fire
+  // before checking content, even when the old synchronous builder blocked the event loop.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  const expected = Array(count).fill("Item (https://example.com/item) $15.00").join("\n");
+  expect(text === expected, "Every table row is converted in order").toBe(true);
+}, 20_000);

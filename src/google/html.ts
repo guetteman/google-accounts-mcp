@@ -300,36 +300,110 @@ const BLOCKS = new Set([
   "ul",
 ]);
 
-/** Streaming HTML parsing keeps malformed mail readable without building or repairing a tree. */
+/**
+ * Streaming parsing tolerates malformed mail. Output is joined once; each link comparison
+ * examines at most its address's length, independent of text emitted before the link.
+ */
 export async function htmlToText(html: string): Promise<string> {
-  let output = "";
-  let node = "";
+  const parts: string[] = [];
+  const node: string[] = [];
+  const visible: Array<{ part: number; offset: number; position: number }> = [];
+  let length = 0;
+  let last = "";
+  let breaks = 0;
+  let pendingSpace = false;
+  let lastVisibleEnd = 0;
   let hidden = 0;
   let quotes = 0;
   let pre = 0;
   let firstPreserved: number | null = null;
   let lastPreserved = 0;
-  const links: Array<{ address: string; start: number }> = [];
+  const links = new Set<{ address: string; first: number }>();
+  // Each chunk is one line or a single newline. Only the new chunk is inspected.
+  const write = (text: string) => {
+    if (!text) return;
+    const offset = text.search(/\S/);
+    if (offset >= 0) {
+      visible.push({ part: parts.length, offset, position: length + offset });
+      lastVisibleEnd = length + text.trimEnd().length;
+    }
+    parts.push(text);
+    length += text.length;
+    last = text.at(-1)!;
+    breaks = text === "\n" ? breaks + 1 : 0;
+  };
   const newline = (blank = false) => {
-    if (output && !(blank ? output.endsWith("\n\n") : output.endsWith("\n"))) output += "\n";
+    pendingSpace = false;
+    if (length && breaks < (blank ? 2 : 1)) write("\n");
+  };
+  const beforeText = () => {
+    if (pendingSpace && last && last !== "\n" && last !== " ") write(" ");
+    pendingSpace = false;
+    if ((!last || last === "\n") && quotes) write("> ".repeat(quotes));
   };
   const append = (text: string, preserved = false) => {
-    const start = output.length;
-    if (!preserved) text = text.replace(/\s+/g, " ");
-    for (const character of text) {
-      if (!preserved && character === " " && (!output || /[ \n]$/.test(output))) continue;
-      if ((!output || output.endsWith("\n")) && character !== "\n" && quotes)
-        output += "> ".repeat(quotes);
-      output += character;
-    }
-    if (preserved && text) {
-      firstPreserved ??= start;
-      lastPreserved = output.length;
+    if (preserved) {
+      const start = length;
+      const lines = text.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (i) {
+          pendingSpace = false;
+          write("\n");
+        }
+        if (lines[i]) {
+          beforeText();
+          write(lines[i]!);
+        }
+      }
+      if (text) {
+        firstPreserved ??= start;
+        lastPreserved = length;
+      }
+    } else {
+      text = text.replace(/\s+/g, " ");
+      if (text.startsWith(" ")) pendingSpace = true;
+      const core = text.trim();
+      if (core) {
+        beforeText();
+        write(core);
+      }
+      if (text.endsWith(" ")) pendingSpace = true;
     }
   };
   const flush = () => {
-    if (!hidden) append(decodeEntities(node), pre > 0);
-    node = "";
+    if (node.length && !hidden) append(decodeEntities(node.join("")), pre > 0);
+    node.length = 0;
+  };
+  const finishLink = (link: { address: string; first: number }) => {
+    const first = visible[link.first];
+    let same = first !== undefined && lastVisibleEnd - first.position === link.address.length;
+    if (same && first) {
+      // Compare only the address-length range, never flatten or slice the preceding output.
+      let part = first.part;
+      let offset = first.offset;
+      let at = 0;
+      while (at < link.address.length) {
+        const text = parts[part++]!;
+        const count = Math.min(text.length - offset, link.address.length - at);
+        if (text.slice(offset, offset + count) !== link.address.slice(at, at + count)) {
+          same = false;
+          break;
+        }
+        at += count;
+        offset = 0;
+      }
+    }
+    if (!first) append(link.address);
+    else if (!same) append(` (${link.address})`);
+    links.delete(link);
+  };
+  const onEnd = (element: Element, finish: () => void) => {
+    try {
+      element.onEndTag(finish);
+    } catch {
+      // Foreign-content self-closing tags have no end tag. Close their state now.
+      finish();
+    }
   };
   const rewriter = new HTMLRewriter()
     .on("*", {
@@ -338,13 +412,15 @@ export async function htmlToText(html: string): Promise<string> {
         const tag = element.tagName;
         if (["script", "style", "title"].includes(tag)) {
           hidden++;
-          element.onEndTag(() => {
+          onEnd(element, () => {
             flush();
             hidden--;
           });
           return;
         }
         if (hidden) return;
+        const cell = tag === "td" || tag === "th";
+        if (cell) append(" ");
         if (BLOCKS.has(tag)) newline();
         if (tag === "br") newline(true);
         if (tag === "blockquote") quotes++;
@@ -356,39 +432,32 @@ export async function htmlToText(html: string): Promise<string> {
         }
         const address = tag === "a" ? decodeEntities(element.getAttribute("href") ?? "") : "";
         const link = /^(?:https?:|mailto:)/i.test(address)
-          ? { address, start: output.length }
+          ? { address, first: visible.length }
           : null;
-        if (link) links.push(link);
-        if (link || (BLOCKS.has(tag) && tag !== "hr"))
-          element.onEndTag(() => {
+        if (link) links.add(link);
+        if (link || cell || (BLOCKS.has(tag) && tag !== "hr"))
+          onEnd(element, () => {
             flush();
-            if (link) {
-              const text = output.slice(link.start).trim();
-              if (!text) append(link.address);
-              else if (text !== link.address) append(` (${link.address})`);
-              links.splice(links.indexOf(link), 1);
-            }
+            if (link) finishLink(link);
             if (tag === "blockquote") quotes--;
             if (tag === "pre") pre--;
+            if (cell) append(" ");
             if (BLOCKS.has(tag)) newline();
           });
       },
     })
     .onDocument({
       text(chunk) {
-        node += chunk.text;
+        if (chunk.text) node.push(chunk.text);
         if (chunk.lastInTextNode) flush();
       },
     });
   await rewriter.transform(new Response(html)).text();
   flush();
   // An unclosed link may never get an end-tag callback. Its text has already been emitted.
-  for (const link of links.reverse()) {
-    const text = output.slice(link.start).trim();
-    if (!text) append(link.address);
-    else if (text !== link.address) append(` (${link.address})`);
-  }
-  const start = output.length - output.trimStart().length;
-  const end = output.trimEnd().length;
-  return output.slice(Math.min(start, firstPreserved ?? start), Math.max(end, lastPreserved));
+  for (const link of Array.from(links).reverse()) finishLink(link);
+  const start = visible[0]?.position ?? length;
+  return parts
+    .join("")
+    .slice(Math.min(start, firstPreserved ?? start), Math.max(lastVisibleEnd, lastPreserved));
 }
