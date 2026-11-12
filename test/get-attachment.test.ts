@@ -71,21 +71,19 @@ it("returns bounded metadata in order and exact PDF, PNG, text and binary resour
   expect(google.attachmentRequests).toEqual([]);
 });
 
-it("returns exact bytes when filename shortening splits a Unicode character", async () => {
+it("returns exact bytes when Gmail supplies an unpaired surrogate in the filename", async () => {
   const f = await allowedAttachment();
-  serveAttachment(filePart("application/pdf", "a".repeat(198) + "🙂.pdf"));
+  serveAttachment(filePart("application/pdf", "file-" + String.fromCharCode(0xd83d) + ".pdf"));
   const out = await blocks(await download(f));
   expect(out.isError).toBeUndefined();
   const filename = metadata(out).filename as string;
   expect(filename.split("").map((char) => char.charCodeAt(0))).toEqual([
-    ...Array<number>(198).fill(97),
-    0xd83d,
-    0x2026,
+    102, 105, 108, 101, 45, 0xd83d, 46, 112, 100, 102,
   ]);
   expect(out.content[1]).toMatchObject({
     type: "resource",
     resource: {
-      uri: "attachment://file/" + "a".repeat(198) + "%EF%BF%BD%E2%80%A6",
+      uri: "attachment://file/file-%EF%BF%BD.pdf",
     },
   });
   expect(resourceBytes(out)).toEqual(CONTENT);
@@ -153,6 +151,44 @@ it("downloads every listed position, omitted attachments, and child 0 of a named
   const single = { ...message(MESSAGE), payload: { ...filePart(), partId: "" } };
   google.messageAnswers.set(MESSAGE, () => Response.json(single));
   expect(resourceBytes(await blocks(await download(f, { attachment: "0" })))).toEqual(CONTENT);
+});
+
+it("downloads an attached mail as one file and refuses positions inside it", async () => {
+  const f = await allowedAttachment(codeClient);
+  await permission(f, f.personal, true, "read_thread");
+  const bytes = new TextEncoder().encode("Subject: Attached mail\r\n\r\nInner body\r\n");
+  const raw = serveAttachment({
+    ...filePart("message/rfc822", "forwarded.eml"),
+    body: { size: bytes.length, attachmentId: "attached-mail" },
+    parts: [{ ...filePart("application/pdf", "inner.pdf"), partId: "2.0" }],
+  });
+  serveThread([raw]);
+  google.attachmentAnswers.set("attached-mail", () =>
+    Response.json({ size: bytes.length, data: Buffer.from(bytes).toString("base64url") }),
+  );
+  const listed = (await answer(await read(f))) as unknown as ThreadResult;
+  expect(listed.messages[0]!.attachments).toEqual([
+    { attachment: "2", filename: "forwarded.eml", type: "message/rfc822", size: bytes.length },
+  ]);
+  const out = await blocks(await download(f));
+  expect(metadata(out)).toEqual({
+    account: PERSONAL,
+    message: MESSAGE,
+    ...listed.messages[0]!.attachments[0],
+  });
+  expect(out.content[1]).toMatchObject({
+    type: "resource",
+    resource: { uri: "attachment://file/forwarded.eml", mimeType: "message/rfc822" },
+  });
+  expect(resourceBytes(out)).toEqual(bytes);
+  await fileError(
+    await download(f, { attachment: "2.0" }),
+    "not_found",
+    /No attachment "2.0" exists/,
+  );
+  expect(google.attachmentRequests).toEqual([
+    `${MESSAGES_URL}/${MESSAGE}/attachments/attached-mail`,
+  ]);
 });
 
 it("reads inline, freshly fetched and empty bytes with only the necessary GET requests", async () => {

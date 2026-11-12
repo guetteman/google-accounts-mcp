@@ -1,6 +1,6 @@
 import { abortAllDurableObjects } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import { resetBindings } from "./support/reset";
 
 it("resets D1 and KV whose instances have been evicted, including the migration state", async () => {
@@ -20,5 +20,18 @@ it("resets D1 and KV whose instances have been evicted, including the migration 
   expect(await env.OAUTH_KV.get("isolation-probe")).toBeNull();
   expect(await env.DB.prepare("SELECT state FROM owner WHERE id = 1").first()).toEqual({
     state: "unpinned",
+  });
+});
+
+describe("file storage isolation after eviction", { concurrent: false, shuffle: false }, () => {
+  it("stores file bytes and evicts the KV instance before the next test", async () => {
+    const bytes = new Uint8Array([0, 255, 254, 1]);
+    await env.FILES_KV.put("file:isolation-probe", bytes.buffer);
+    expect(await env.FILES_KV.get("file:isolation-probe", "arrayBuffer")).toEqual(bytes.buffer);
+    await abortAllDurableObjects();
+  });
+
+  it("does not retain the file stored by the previous test", async () => {
+    expect(await env.FILES_KV.get("file:isolation-probe", "arrayBuffer")).toBeNull();
   });
 });
