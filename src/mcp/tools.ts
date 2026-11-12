@@ -82,6 +82,13 @@ export type Tool =
       name: AccountTool;
       label: string;
       group: Group;
+      /**
+       * True when neither the owner nor another tool can revert what one call did: a sent mail, a
+       * message deleted for good. False when it can be reverted: a draft can be deleted, and a
+       * message in the trash can be restored for 30 days. The connection's page names the tools
+       * that say true before it sets them to Allowed.
+       */
+      irreversible: boolean;
       permissionDescription: string;
       description: string;
       annotations: ToolAnnotations;
@@ -104,6 +111,7 @@ type AccountDefinition<A extends DecodedArgs> = {
   name: string;
   label: string;
   group: Group;
+  irreversible: boolean;
   permissionDescription: string;
   description: string;
   annotations: ToolAnnotations;
@@ -268,6 +276,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "list_labels",
     annotations: { readOnlyHint: true },
     group: "Find and read",
+    irreversible: false,
     label: "List labels",
     permissionDescription: "See the names of this account's Gmail labels.",
     description:
@@ -287,6 +296,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "search_threads",
     annotations: { readOnlyHint: true },
     group: "Find and read",
+    irreversible: false,
     label: "Search mail",
     permissionDescription:
       "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",
@@ -332,6 +342,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     annotations: { readOnlyHint: true },
     label: "Read thread",
     group: "Find and read",
+    irreversible: false,
     permissionDescription:
       "Read every message of a thread in full, and see the names of its attachments.",
     description: `Returns the messages of one thread of one Google account, oldest first, as plain text. \`account\` is the address of an account that list_accounts returns. \`thread\` is a thread ID that search_threads returned for that account; an ID works only in the account that returned it. \`message_count\` is the number of messages in the thread. Each message has its ID, its position in the thread, \`from\`, \`to\`, \`cc\`, its date, its label IDs, its text, and its attachments. \`bcc\` is present when the message has that header, which is normally mail that the account wrote. A message that is a draft has \`draft\`, its draft ID. HTML mail is converted to plain text, and a link keeps its address in parentheses. An attachment has an ID, a file name, a media type, and a size in bytes; the result holds no file. \`inline: true\` marks an image that stands inside the body; converted HTML says \`[image: name]\` where it stood. A very long field is shortened: a list of recipients ends with \`… and N more\`, and \`attachments_left_out\` counts the attachments that are not listed. A result has at most ${LIMIT.toLocaleString("en-US")} characters. When it has \`next_page\`, it stops before the end of the thread: send the same call with \`page\` set to that value to get the rest. A message with \`text_cut\` does not hold its whole text: \`end\` means that the next page continues it, \`start\` that it continues the page before, and \`both\` means both. Reading changes nothing in Gmail: unread mail stays unread. When the owner sets this tool to ask, it returns a pending approval with a link instead of messages; get_approval returns the messages after the owner approves.`,
@@ -383,6 +394,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "change_labels",
     label: "Change labels",
     group: "Organize",
+    // A label that a call removed can be added back, and an archived thread returns to the inbox.
+    irreversible: false,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     permissionDescription:
       "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam, or take it out.",
@@ -430,6 +443,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     name: "create_draft",
     label: "Create draft",
     group: "Draft",
+    // The owner can delete a draft, and writing one sends nothing.
+    irreversible: false,
     permissionDescription: "Write a draft, new or as a reply. Nothing is sent.",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     description:
@@ -538,6 +553,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     label: "Move to trash",
     group: "Trash and delete",
+    // restore_messages takes a message out of the trash, for the 30 days that Gmail keeps it.
+    irreversible: false,
     permissionDescription:
       "Move messages to the trash. Gmail deletes a message for good after 30 days there.",
     description: `Moves messages of one Google account to the trash. \`account\` is the address of an account that list_accounts returns. \`messages\` is a list of 1 to ${MAX_ITEMS} different message IDs that read_thread returned for that account; an ID works only in the account that returned it. Only the named messages move: the other messages of their threads stay where they are. In the trash, a message loses the label INBOX and keeps its other labels. Gmail deletes a message for good after 30 days in the trash, and restore_messages takes it out before that. In the result, \`messages\` holds each message that moved, with its label IDs after the change. \`not_found\` lists the IDs that the account does not have. \`unconfirmed\` lists the IDs for which Google did not confirm the change: call again with those IDs. Each of the two is present only when it is not empty. When no message moved, the call returns an error. Calling again with the same IDs is safe: a message that is already in the trash stays there. When the owner sets this tool to ask, it returns a pending approval with a link instead; get_approval returns the result after the owner approves.`,
@@ -557,6 +574,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     label: "Restore from trash",
     group: "Trash and delete",
+    // trash_messages puts the message back in the trash.
+    irreversible: false,
     permissionDescription: "Take messages out of the trash.",
     description: `Takes messages of one Google account out of the trash. \`account\` is the address of an account that list_accounts returns. \`messages\` is a list of 1 to ${MAX_ITEMS} different message IDs that read_thread returned for that account; an ID works only in the account that returned it. Only the named messages are restored. In the result, \`messages\` holds each restored message with its label IDs after the change. A restored message is not back in the inbox: Gmail removes the label INBOX when a message goes to the trash and does not add it back, while the message keeps its other labels, such as UNREAD, STARRED, and the owner's own labels. It stays out of the trash and out of the inbox. \`not_found\` lists the IDs that the account does not have, which includes messages that were deleted for good. \`unconfirmed\` lists the IDs for which Google did not confirm the change: call again with those IDs. Each of the two is present only when it is not empty. When no message was restored, the call returns an error. Calling again with the same IDs is safe. When the owner sets this tool to ask, it returns a pending approval with a link instead; get_approval returns the result after the owner approves.`,
     input: MessagesInput,
@@ -575,6 +594,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     label: "Delete permanently",
     group: "Trash and delete",
+    // Gmail cannot bring a deleted message back.
+    irreversible: true,
     permissionDescription: "Delete messages for good, without the trash. Nobody can recover them.",
     description: `Deletes messages of one Google account for good. Gmail cannot bring them back, and they do not go to the trash. Use trash_messages when the owner may want a message back. \`account\` is the address of an account that list_accounts returns. \`messages\` is a list of 1 to ${MAX_ITEMS} different message IDs that read_thread returned for that account; an ID works only in the account that returned it. Only the named messages are deleted: the other messages of their threads stay. In the result, \`messages\` holds the IDs that were deleted. \`not_found\` lists the IDs that the account does not have. \`unconfirmed\` lists the IDs for which Google did not confirm the delete: call again with those IDs. Each of the two is present only when it is not empty. When no message was deleted, the call returns an error. A deleted message counts as not found. So when an ID was unconfirmed, or a call failed, got no answer, or ended as unknown, and a later call reports that ID as not found, the message is gone. When the owner sets this tool to ask, it returns a pending approval with a link instead; get_approval returns the result after the owner approves.`,
     input: MessagesInput,
