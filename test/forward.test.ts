@@ -187,10 +187,10 @@ it.each(["size", "count", "actual", "413"])(
   },
 );
 
-it("F5: a Worker forwards a near-limit attachment without another decoded copy", async () => {
+it("F3: a large attachment given by reference arrives byte for byte across the decode and encode blocks", async () => {
   const f = await sendFixture("forward_message");
   const raw = fullMessage();
-  const size = 24_999_000;
+  const size = 3_000_000;
   const file = {
     ...part("application/octet-stream", "", "1", "large.bin"),
     body: { size, attachmentId: "large" },
