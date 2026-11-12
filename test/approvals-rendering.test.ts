@@ -25,7 +25,7 @@ it("renders who asks, the account, the full request and UTC times before Approve
   const tool = TOOLS.find((t) => t.kind === "account")!;
   if (tool.kind !== "account") throw new Error("Missing account tool");
   vi.spyOn(tool.view, "values").mockReturnValue(
-    Effect.succeed([{ name: "Request", text: "Last request value" }]),
+    Effect.succeed([{ name: "Request", text: "Last request value", from: "agent" }]),
   );
   const html = await (await f.mcp.browser.get(`/approvals/${id}`)).text();
   const text = textOf(html);

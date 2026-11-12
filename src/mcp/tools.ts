@@ -1,10 +1,12 @@
 import type { Tool as McpTool } from "@modelcontextprotocol/server";
+import type { ViewValue } from "../approvals/model";
 import { getApproval } from "../approvals/result";
 import { Data, Effect, Result, Schema } from "effect";
 import type { Unavailable } from "../db";
 import { accountMessage } from "../accounts/model";
 import { listVisibleAccounts } from "../accounts/store";
-import { listLabels, searchThreads } from "../google/gmail";
+import { LIMIT, placeOf, readThread } from "../google/thread";
+import { listLabels, searchThreads, threadSummary } from "../google/gmail";
 import { readListedTools } from "../permissions/store";
 import type { CallContext } from "./call";
 import type { ToolFailure } from "./failures";
@@ -45,7 +47,8 @@ export type Tool =
         empty: string;
         values: (
           args: DecodedArgs,
-        ) => Effect.Effect<ReadonlyArray<{ name: string; text: string }>, ViewUnavailable>;
+          send: Send,
+        ) => Effect.Effect<ReadonlyArray<ViewValue>, ViewUnavailable | ToolFailure>;
       };
       run: (
         send: Send,
@@ -67,7 +70,8 @@ type AccountDefinition<A extends DecodedArgs> = {
     empty: string;
     values: (
       args: A,
-    ) => Effect.Effect<ReadonlyArray<{ name: string; text: string }>, ViewUnavailable>;
+      send: Send,
+    ) => Effect.Effect<ReadonlyArray<ViewValue>, ViewUnavailable | ToolFailure>;
   };
   run: (send: Send, account: { email: string }, args: A) => Effect.Effect<unknown, ToolFailure>;
 };
@@ -170,9 +174,11 @@ export const TOOLS: ReadonlyArray<Tool> = [
       // The page marks every value as the agent's text, so each one is a value of the call.
       values: (args) =>
         Effect.succeed([
-          { name: "Query", text: args.query },
-          { name: "Limit", text: String(args.limit ?? DEFAULT_LIMIT) },
-          ...(args.page === undefined ? [] : [{ name: "Page", text: args.page }]),
+          { name: "Query", text: args.query, from: "agent" },
+          { name: "Limit", text: String(args.limit ?? DEFAULT_LIMIT), from: "agent" },
+          ...(args.page === undefined
+            ? []
+            : [{ name: "Page", text: args.page, from: "agent" as const }]),
         ]),
     },
     run: (send, account, args) =>
@@ -181,6 +187,62 @@ export const TOOLS: ReadonlyArray<Tool> = [
         limit: args.limit ?? DEFAULT_LIMIT,
         page: args.page,
       }).pipe(Effect.map((found) => ({ account: account.email, ...found }))),
+  }),
+  accountTool({
+    name: "read_thread",
+    label: "Read thread",
+    permissionDescription:
+      "Read every message of a thread in full, and see the names of its attachments.",
+    description: `Returns the messages of one thread of one Google account, oldest first, as plain text. \`account\` is the address of an account that list_accounts returns. \`thread\` is a thread ID that search_threads returned for that account; an ID works only in the account that returned it. \`message_count\` is the number of messages in the thread. Each message has its ID, its position in the thread, \`from\`, \`to\`, \`cc\`, its date, its label IDs, its text, and its attachments. \`bcc\` is present only on mail that the account wrote. A message that is a draft has \`draft\`, its draft ID. HTML mail is converted to plain text, and a link keeps its address in parentheses. An attachment has an ID, a file name, a media type, and a size in bytes; the result holds no file. \`inline: true\` marks an image that stands inside the body; converted HTML says \`[image: name]\` where it stood. A result has at most ${LIMIT.toLocaleString("en-US")} characters. When it has \`next_page\`, it stops before the end of the thread: send the same call with \`page\` set to that value to get the rest. A message with \`text_cut\` does not hold its whole text: \`end\` means that the next page continues it, \`start\` that it continues the page before, and \`both\` means both. Reading changes nothing in Gmail: unread mail stays unread. When the owner sets this tool to ask, it returns a pending approval with a link instead of messages; get_approval returns the messages after the owner approves.`,
+    input: Schema.Struct({
+      account: Schema.String,
+      thread: Schema.String.check(Schema.isBetweenLength(1, 64)),
+      page: Schema.optionalKey(Schema.String.check(Schema.isBetweenLength(1, 100))),
+    }),
+    expects: {
+      account: "a string",
+      thread: "a thread ID that search_threads returned",
+      page: "the next_page value of an earlier result",
+    },
+    view: {
+      action: "read a thread",
+      joiner: "in",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      values: (args, send) =>
+        Effect.gen(function* () {
+          const summary = yield* threadSummary(send, args.thread);
+          const date = new Intl.DateTimeFormat("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+            timeZone: "UTC",
+          }).format(summary.date);
+          const time = new Intl.DateTimeFormat("en-GB", {
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: "UTC",
+          }).format(summary.date);
+          const values: ViewValue[] = [
+            { name: "Subject", text: summary.subject, from: "gmail" },
+            { name: "Messages", text: String(summary.messages.length), from: "gmail" },
+            { name: "Last message from", text: summary.from, from: "gmail" },
+            { name: "Last message date", text: `${date} at ${time} UTC`, from: "gmail" },
+          ];
+          if (args.page !== undefined) {
+            const place = placeOf(args.page);
+            const position = place ? summary.messages.indexOf(place.message) : -1;
+            if (!place || position < 0) return yield* Effect.fail(new ViewUnavailable());
+            values.push({
+              name: "Starts at",
+              from: "gmail",
+              text: `Message ${position + 1} of ${summary.messages.length}${place.offset ? `, after its first ${place.offset.toLocaleString("en-US")} characters` : ""}`,
+            });
+          }
+          return values;
+        }),
+    },
+    run: (send, account, args) =>
+      readThread(send, { account: account.email, thread: args.thread, page: args.page }),
   }),
   {
     kind: "plain",

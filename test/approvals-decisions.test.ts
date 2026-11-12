@@ -17,7 +17,7 @@ it("shows the whole request in UTC before Approve and covers every displayed val
   const f = await fixture();
   await setting(f, "ask");
   const id = await ask(f);
-  const values = [{ name: "Note", text: "Plain text" }];
+  const values = [{ name: "Note", text: "Plain text", from: "agent" as const }];
   vi.spyOn(tool.view, "values").mockReturnValue(Effect.succeed(values));
   const p = await page(f, id);
   expect(p.request).toEqual({
@@ -95,7 +95,9 @@ it("renders untrusted values as quoted text and replaces invisible characters", 
   ];
   const characters = hidden.map((code) => String.fromCodePoint(parseInt(code, 16)));
   const text = '<a href="https://evil.example">click</a>' + characters.join("") + "\n\t";
-  vi.spyOn(tool.view, "values").mockReturnValue(Effect.succeed([{ name: "Body", text }]));
+  vi.spyOn(tool.view, "values").mockReturnValue(
+    Effect.succeed([{ name: "Body", text, from: "agent" }]),
+  );
   const html = (await (await f.mcp.browser.get(`/approvals/${id}`)).text()).replace(
     /<script[\s\S]*?<\/script>/g,
     "",

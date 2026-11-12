@@ -130,6 +130,14 @@ export function deferred() {
   return { promise, resolve };
 }
 export const google = {
+  methods: [] as string[],
+  attachmentRequests: [] as string[],
+  attachmentAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
+  draftRequests: [] as string[],
+  draftAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
   labelRequests: [] as Array<{
     url: string;
     method: string;
@@ -168,6 +176,11 @@ export const google = {
   reset() {
     this.release();
     this.codes.clear();
+    this.methods = [];
+    this.attachmentRequests = [];
+    this.attachmentAnswers.clear();
+    this.draftRequests = [];
+    this.draftAnswers = [];
     this.labelRequests = [];
     this.labelAnswers = [];
     this.threadRequests = [];
@@ -299,7 +312,9 @@ export const google = {
           new HttpResponse(null, { status: 200 })
         );
       }),
-      http.get(LABELS_URL, async ({ request }) => {
+      http.all(LABELS_URL, async ({ request }) => {
+        this.methods.push(request.method);
+        if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
         this.labelRequests.push({
           url: request.url,
           method: request.method,
@@ -308,7 +323,9 @@ export const google = {
         });
         return this.labelAnswers.shift()?.(request) ?? HttpResponse.json(LABELS_RESPONSE);
       }),
-      http.get(THREADS_URL, async ({ request }) => {
+      http.all(THREADS_URL, async ({ request }) => {
+        this.methods.push(request.method);
+        if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
         this.threadRequests.push({
           url: request.url,
           authorization: request.headers.get("Authorization"),
@@ -316,7 +333,9 @@ export const google = {
         });
         return (await this.threadListAnswers.shift()?.(request)) ?? HttpResponse.json(THREAD_LIST);
       }),
-      http.get(`${THREADS_URL}/:id`, async ({ request, params }) => {
+      http.all(`${THREADS_URL}/:id`, async ({ request, params }) => {
+        this.methods.push(request.method);
+        if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
         this.threadRequests.push({
           url: request.url,
           authorization: request.headers.get("Authorization"),
@@ -328,7 +347,26 @@ export const google = {
           (THREADS[id] ? HttpResponse.json(THREADS[id]) : new HttpResponse(null, { status: 404 }))
         );
       }),
+      http.all(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/:message/attachments/:attachment",
+        async ({ request, params }) => {
+          this.methods.push(request.method);
+          this.attachmentRequests.push(request.url);
+          if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+          return (
+            (await this.attachmentAnswers.get(String(params.attachment))?.(request)) ??
+            new HttpResponse(null, { status: 404 })
+          );
+        },
+      ),
+      http.all("https://gmail.googleapis.com/gmail/v1/users/me/drafts", async ({ request }) => {
+        this.methods.push(request.method);
+        this.draftRequests.push(request.url);
+        if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+        return (await this.draftAnswers.shift()?.(request)) ?? HttpResponse.json({});
+      }),
       http.get(GMAIL, ({ request }) => {
+        this.methods.push(request.method);
         this.events.push("gmail");
         this.gmailTokens.push(request.headers.get("Authorization")!);
         const answer = this.gmailAnswers.shift() ?? 200;

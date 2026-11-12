@@ -1,8 +1,9 @@
+import { ToolFailure } from "../mcp/failures";
 import { Effect } from "effect";
 import { APP_LABELS } from "../connections/model";
 import { openArguments } from "./text";
 import type { TokenKey } from "../config";
-import { decodeArgs, TOOLS, type DecodedArgs } from "../mcp/tools";
+import { decodeArgs, TOOLS, type DecodedArgs, type Send } from "../mcp/tools";
 import type { Approval, ApprovalPageProps, ApprovalRequest } from "./model";
 
 // Property order is explicit, including each value in the order the owner reads it.
@@ -24,7 +25,7 @@ export const viewDigest = async (request: ApprovalRequest) => {
       joiner: request.tool.joiner,
       empty: request.tool.empty,
     },
-    values: request.values.map(({ name, text }) => ({ name, text })),
+    values: request.values.map(({ name, text, from }) => ({ name, text, from })),
   });
   return Array.from(
     new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical))),
@@ -41,6 +42,7 @@ export async function approvalView(
   now: number,
   changed = false,
   failureMessage: string | null = null,
+  send?: Send,
 ) {
   const tool = TOOLS.find((t) => t.kind === "account" && t.name === row.tool);
   if (!tool || tool.kind !== "account") throw new Error("Unknown approval tool");
@@ -69,7 +71,12 @@ export async function approvalView(
       if (opened !== null) {
         const parsed = decodeArgs(tool, opened);
         if (parsed.ok) {
-          const values = await Effect.runPromise(tool.view.values(parsed.value));
+          const values = await Effect.runPromise(
+            tool.view.values(
+              parsed.value,
+              send ?? (() => Effect.fail(new ToolFailure({ code: "google_unavailable" }))),
+            ),
+          );
           request.values = values;
           digest = await viewDigest(request);
           decoded = parsed.value;

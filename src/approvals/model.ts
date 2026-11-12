@@ -62,7 +62,13 @@ export interface ApprovalRequest {
   connection: { id: string; name: string; app: string };
   account: { name: string; email: string; workspace: boolean };
   tool: { label: string; action: string; joiner: string; empty: string };
-  values: ReadonlyArray<{ name: string; text: string }>;
+  values: ReadonlyArray<ViewValue>;
+}
+/** One value of a view. Its text is the agent's own, or was read from the account's mail. */
+export interface ViewValue {
+  name: string;
+  text: string;
+  from: "agent" | "gmail";
 }
 export type ApprovalState =
   | { kind: "waiting"; shown: boolean; changed: boolean; digest: string | null }

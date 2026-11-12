@@ -13,6 +13,7 @@ export const failures = {
     message: () =>
       `This connection already has ${WAITING_LIMIT} calls waiting for approval. Wait for the owner to decide or for an approval to expire.`,
   },
+  not_found: { outcome: "refused", message: () => "The requested item does not exist." },
   invalid_arguments: { outcome: "refused", message: () => "The arguments are not valid." },
   account_not_available: {
     outcome: "refused",
@@ -66,9 +67,13 @@ export const failures = {
     ) => string;
   }
 >;
+export type Missing = "thread" | "message" | "draft" | "attachment" | "label";
+export const notFound = (kind: Missing, id: string): ToolFailure =>
+  new ToolFailure({ code: "not_found", missing: { kind, id } });
 export class ToolFailure extends Data.TaggedError("ToolFailure")<{
   code: keyof typeof failures;
   unknown?: boolean;
+  missing?: { kind: Missing; id: string };
   reason?: "arguments_too_large";
   /** The field that is wrong, with what it must be. */
   field?: { name: string; expects: string };
@@ -96,7 +101,15 @@ export function classify(
                 ? "The arguments are too large. The limit is 256 KB."
                 : failure.field
                   ? `The ${failure.field.name} field must be ${failure.field.expects}.`
-                  : entry.message(text.input, text.email, text.origin, text.tool, text.connection),
+                  : failure.missing
+                    ? `No ${failure.missing.kind} "${failure.missing.id}" exists in ${text.email}. A ${failure.missing.kind} ID works only in the account that returned it.`
+                    : entry.message(
+                        text.input,
+                        text.email,
+                        text.origin,
+                        text.tool,
+                        text.connection,
+                      ),
           },
   };
 }
