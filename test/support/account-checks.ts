@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { beforeEach, afterEach, expect, vi } from "vite-plus/test";
 import { google, issuedTokens, MARKER } from "./google";
 import { network } from "./network";
@@ -20,7 +21,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   google.release();
-  const output = [await kvDump(), observedBodies];
+  const output = [await kvDump(), await kvDump(env.FILES_KV), observedBodies];
   output.push(recordedConsole());
   const serialized = JSON.stringify(output, (_key, value) =>
     value instanceof Error

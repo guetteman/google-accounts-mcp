@@ -656,6 +656,8 @@ it("executeAccount fails closed on an unclassified exception after the creating 
   const owner = await Effect.runPromise(readOwner(env.DB));
   const ctx: CallContext = {
     db: env.DB,
+    files: env.FILES_KV,
+    reader: { client: null },
     config: config.success,
     owner: { generation: owner.generation, email: owner.email! },
     connection: { connectionId: parseConnectionId(f.connection.id)!, app: f.connection.app },

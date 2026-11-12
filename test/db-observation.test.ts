@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vite-plus/test";
 import { dump, writeRecordingDb } from "./support/db";
 
@@ -32,4 +33,12 @@ describe("D1 write observation", () => {
     ]);
     expect(await dump()).toEqual(before);
   });
+});
+
+it("includes both KV namespaces in an unchanged-state snapshot", async () => {
+  await env.OAUTH_KV.put("oauth-proof", "oauth-value");
+  await env.FILES_KV.put("file:proof", "file-value");
+  const snapshot = await dump();
+  expect(snapshot.OAUTH_KV).toEqual([{ name: "oauth-proof", value: "oauth-value" }]);
+  expect(snapshot.FILES_KV).toEqual([{ name: "file:proof", value: "file-value" }]);
 });

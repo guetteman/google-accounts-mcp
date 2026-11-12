@@ -29,8 +29,8 @@ export const LABELS_RESPONSE = {
     },
   ],
 };
-export const THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 export const MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+export const THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 export const unhandledMessages: string[] = [];
 afterEach(() => {
   expect(unhandledMessages, "Every message request must have an explicit test answer").toEqual([]);
@@ -102,6 +102,10 @@ export const THREAD_LINES = [
   },
 ];
 export const issuedTokens = new Set<string>();
+const authorized = (request: { headers: { get(name: string): string | null } }): boolean => {
+  const bearer = /^Bearer (.+)$/.exec(request.headers.get("Authorization") ?? "")?.[1];
+  return bearer !== undefined && issuedTokens.has(bearer);
+};
 export const token = () => {
   const value = `${MARKER}${crypto.randomUUID()}`;
   issuedTokens.add(value);
@@ -137,6 +141,11 @@ export function deferred() {
 }
 export const google = {
   methods: [] as string[],
+  messageRequests: [] as string[],
+  messageAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
   attachmentRequests: [] as string[],
   attachmentAnswers: new Map<
     string,
@@ -154,11 +163,6 @@ export const google = {
   draftCreateAnswers: [] as Array<
     (request: Pick<Request, "signal">) => Response | Promise<Response>
   >,
-  messageRequests: [] as string[],
-  messageAnswers: new Map<
-    string,
-    (request: Pick<Request, "signal">) => Response | Promise<Response>
-  >(),
   labelRequests: [] as Array<{
     url: string;
     method: string;
@@ -222,14 +226,14 @@ export const google = {
     this.release();
     this.codes.clear();
     this.methods = [];
+    this.messageRequests = [];
+    this.messageAnswers.clear();
     this.attachmentRequests = [];
     this.attachmentAnswers.clear();
     this.draftRequests = [];
     this.draftAnswers = [];
     this.draftCreates = [];
     this.draftCreateAnswers = [];
-    this.messageRequests = [];
-    this.messageAnswers.clear();
     this.labelRequests = [];
     this.labelAnswers = [];
     this.threadRequests = [];
@@ -418,6 +422,19 @@ export const google = {
           (THREADS[id] ? HttpResponse.json(THREADS[id]) : new HttpResponse(null, { status: 404 }))
         );
       }),
+      http.all(`${MESSAGES_URL}/:message`, async ({ request, params }) => {
+        // Trash fixtures own every message request while active, including missing answers.
+        if (this.trashAnswers.size > 0 || request.method === "DELETE")
+          return this.trashAnswer(request, String(params.message));
+        this.methods.push(request.method);
+        this.messageRequests.push(request.url);
+        if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+        if (!authorized(request)) return new HttpResponse(null, { status: 401 });
+        return (
+          (await this.messageAnswers.get(String(params.message))?.(request)) ??
+          new HttpResponse(null, { status: 404 })
+        );
+      }),
       http.all(`${THREADS_URL}/:id/modify`, async ({ request, params }) => {
         this.methods.push(request.method);
         const id = String(params.id);
@@ -469,6 +486,7 @@ export const google = {
           this.methods.push(request.method);
           this.attachmentRequests.push(request.url);
           if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+          if (!authorized(request)) return new HttpResponse(null, { status: 401 });
           return (
             (await this.attachmentAnswers.get(String(params.attachment))?.(request)) ??
             new HttpResponse(null, { status: 404 })
@@ -498,22 +516,6 @@ export const google = {
         if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
         return (await this.draftAnswers.shift()?.(request)) ?? HttpResponse.json({});
       }),
-      http.all(
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages/:id",
-        async ({ request, params }) => {
-          // A test of the trash tools sets trashAnswers; then every message request is theirs,
-          // and one without an answer fails the test instead of looking like a missing message.
-          if (this.trashAnswers.size > 0 || request.method === "DELETE")
-            return this.trashAnswer(request, String(params.id));
-          this.methods.push(request.method);
-          this.messageRequests.push(request.url);
-          if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
-          return (
-            (await this.messageAnswers.get(String(params.id))?.(request)) ??
-            new HttpResponse(null, { status: 404 })
-          );
-        },
-      ),
       http.get(GMAIL, ({ request }) => {
         this.methods.push(request.method);
         this.events.push("gmail");

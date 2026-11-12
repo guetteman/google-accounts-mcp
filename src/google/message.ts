@@ -3,7 +3,7 @@ import { isoSeconds } from "../approvals/model";
 import { boundedRecipients, PAGE_BODY_BYTES, shorten } from "./bounds";
 
 export const Headers = Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String }));
-interface RawPart {
+export interface RawPart {
   readonly partId: string;
   readonly mimeType: string;
   readonly filename: string;
@@ -102,10 +102,35 @@ export const addresses = (value: string): string[] => {
   if (value.slice(start).trim()) result.push(value.slice(start).trim());
   return result;
 };
+/** One listing rule for read_thread and position lookup. Only multipart parts are containers. */
+const attachmentParts = (raw: RawMessage): RawPart[] => {
+  const parts: RawPart[] = [];
+  const collect = (part: RawPart) => {
+    if (part.mimeType.startsWith("multipart/")) {
+      part.parts?.forEach(collect);
+      return;
+    }
+    if (
+      part.filename ||
+      (part.body.attachmentId && part.mimeType !== "text/plain" && part.mimeType !== "text/html")
+    )
+      parts.push(part);
+  };
+  collect(raw.payload);
+  return parts;
+};
+export const attachmentFields = (part: RawPart): Attachment & { contentId: string } => ({
+  attachment: part.partId || "0",
+  filename: shorten(part.filename, 200),
+  type: shorten(part.mimeType, 100),
+  size: part.body.size,
+  contentId: header(part.headers, "Content-ID").replace(/^<|>$/g, ""),
+});
+export const attachmentPart = (raw: RawMessage, attachment: string): RawPart | null =>
+  attachmentParts(raw).find((part) => (part.partId || "0") === attachment) ?? null;
 /** MIME selection stays pure. Bytes are decoded only after the page grants their cost. */
 export const readMessage = (raw: RawMessage): Message => {
   const html: BodyPart[] = [];
-  const parts: RawPart[] = [];
   const sources = new Map<RawPart, BodyPart>();
   const source = (part: RawPart): BodyPart => {
     const found = sources.get(part);
@@ -128,7 +153,6 @@ export const readMessage = (raw: RawMessage): Message => {
       part.parts?.forEach(collect);
       return;
     }
-    parts.push(part);
     if (
       part.mimeType === "text/html" &&
       part.body.size <= PAGE_BODY_BYTES &&
@@ -174,20 +198,6 @@ export const readMessage = (raw: RawMessage): Message => {
     labels: raw.labelIds ?? [],
     body,
     html,
-    attachments: parts
-      .filter(
-        (part) =>
-          part.filename ||
-          (part.body.attachmentId &&
-            part.mimeType !== "text/plain" &&
-            part.mimeType !== "text/html"),
-      )
-      .map((part) => ({
-        attachment: part.partId || "0",
-        filename: shorten(part.filename, 200),
-        type: shorten(part.mimeType, 100),
-        size: part.body.size,
-        contentId: header(part.headers, "Content-ID").replace(/^<|>$/g, ""),
-      })),
+    attachments: attachmentParts(raw).map(attachmentFields),
   };
 };
