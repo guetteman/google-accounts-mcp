@@ -28,6 +28,73 @@ export const LABELS_RESPONSE = {
     },
   ],
 };
+export const THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
+// Shapes observed on a real account on 2026-11-11 (issue #23), with made-up values. The list
+// holds only IDs and snippets, snippets are HTML-escaped, and a thread's messages come oldest
+// first with internalDate in milliseconds. Fields the tool must omit are included.
+export const THREAD_LIST = {
+  threads: [
+    {
+      id: "19a1b2c3d4e5f601",
+      snippet: "Don&#39;t forget &quot;lunch&quot; &lt;today&gt; &amp; bring it",
+      historyId: "12345678",
+    },
+    { id: "19a1b2c3d4e5f602", snippet: "Your receipt is attached", historyId: "12345679" },
+  ],
+  nextPageToken: "0a1b2c3d4e5f6a7b8c9d",
+  resultSizeEstimate: 201,
+};
+const message = (id: string, at: string, from: string, subject: string, labelIds: string[]) => ({
+  id,
+  threadId: "ignored",
+  labelIds,
+  snippet: "ignored",
+  payload: {
+    mimeType: "text/html",
+    headers: [
+      { name: "From", value: from },
+      { name: "Subject", value: subject },
+    ],
+  },
+  sizeEstimate: 1024,
+  historyId: "12345678",
+  internalDate: at,
+});
+export const THREADS: Record<string, object> = {
+  "19a1b2c3d4e5f601": {
+    id: "19a1b2c3d4e5f601",
+    historyId: "12345678",
+    messages: [
+      message("m1", "1794300000000", "Sam <sam@example.com>", "Lunch", ["INBOX"]),
+      message("m2", "1794390096000", "Kim Lee <kim@example.com>", "Re: Lunch", ["UNREAD", "INBOX"]),
+    ],
+  },
+  "19a1b2c3d4e5f602": {
+    id: "19a1b2c3d4e5f602",
+    historyId: "12345679",
+    messages: [message("m3", "1794200000000", "billing@example.com", "Receipt", ["INBOX"])],
+  },
+};
+export const THREAD_LINES = [
+  {
+    thread: "19a1b2c3d4e5f601",
+    subject: "Lunch",
+    from: "Kim Lee <kim@example.com>",
+    date: "2026-11-11T09:41:36Z",
+    snippet: `Don't forget "lunch" <today> & bring it`,
+    messages: 2,
+    unread: true,
+  },
+  {
+    thread: "19a1b2c3d4e5f602",
+    subject: "Receipt",
+    from: "billing@example.com",
+    date: "2026-11-09T04:53:20Z",
+    snippet: "Your receipt is attached",
+    messages: 1,
+    unread: false,
+  },
+];
 export const issuedTokens = new Set<string>();
 export const token = () => {
   const value = `${MARKER}${crypto.randomUUID()}`;
@@ -70,6 +137,20 @@ export const google = {
     redirect: RequestRedirect;
   }>,
   labelAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
+  threadRequests: [] as Array<{
+    url: string;
+    authorization: string | null;
+    redirect: RequestRedirect;
+  }>,
+  /** Answers for the list of threads, then the default list. */
+  threadListAnswers: [] as Array<
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >,
+  /** Answers for one thread by its ID, in place of the default thread. */
+  threadAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
   codes: new Map<string, Code>(),
   exchangeAnswer: "ok" as Answer,
   refreshAnswers: [] as Answer[],
@@ -89,6 +170,9 @@ export const google = {
     this.codes.clear();
     this.labelRequests = [];
     this.labelAnswers = [];
+    this.threadRequests = [];
+    this.threadListAnswers = [];
+    this.threadAnswers.clear();
     this.exchangeAnswer = "ok";
     this.revokeAnswer = "ok";
     this.refreshAnswers = [];
@@ -223,6 +307,26 @@ export const google = {
           redirect: request.redirect,
         });
         return this.labelAnswers.shift()?.(request) ?? HttpResponse.json(LABELS_RESPONSE);
+      }),
+      http.get(THREADS_URL, async ({ request }) => {
+        this.threadRequests.push({
+          url: request.url,
+          authorization: request.headers.get("Authorization"),
+          redirect: request.redirect,
+        });
+        return (await this.threadListAnswers.shift()?.(request)) ?? HttpResponse.json(THREAD_LIST);
+      }),
+      http.get(`${THREADS_URL}/:id`, async ({ request, params }) => {
+        this.threadRequests.push({
+          url: request.url,
+          authorization: request.headers.get("Authorization"),
+          redirect: request.redirect,
+        });
+        const id = String(params.id);
+        return (
+          (await this.threadAnswers.get(id)?.(request)) ??
+          (THREADS[id] ? HttpResponse.json(THREADS[id]) : new HttpResponse(null, { status: 404 }))
+        );
       }),
       http.get(GMAIL, ({ request }) => {
         this.events.push("gmail");

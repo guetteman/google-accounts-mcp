@@ -12,7 +12,7 @@ export const failures = {
     message: () =>
       `This connection already has ${WAITING_LIMIT} calls waiting for approval. Wait for the owner to decide or for an approval to expire.`,
   },
-  invalid_arguments: { outcome: "refused", message: () => "The account field must be a string." },
+  invalid_arguments: { outcome: "refused", message: () => "The arguments are not valid." },
   account_not_available: {
     outcome: "refused",
     message: (input: string) =>
@@ -55,6 +55,8 @@ export class ToolFailure extends Data.TaggedError("ToolFailure")<{
   code: keyof typeof failures;
   unknown?: boolean;
   reason?: "arguments_too_large";
+  /** The field that is wrong, with what it must be. */
+  field?: { name: string; expects: string };
 }> {}
 
 export function classify(
@@ -77,7 +79,9 @@ export function classify(
             message:
               failure.reason === "arguments_too_large"
                 ? "The arguments are too large. The limit is 256 KB."
-                : entry.message(text.input, text.email, text.origin),
+                : failure.field
+                  ? `The ${failure.field.name} field must be ${failure.field.expects}.`
+                  : entry.message(text.input, text.email, text.origin),
           },
   };
 }

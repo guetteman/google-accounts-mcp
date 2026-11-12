@@ -41,15 +41,18 @@ it("links each connection to its own permissions page and shows only the account
   expect(props.accounts.map((a) => a.id)).toEqual([f.personal.id, f.northwind.id]);
   expect(props.settings).toEqual({ [`${f.personal.id}:list_labels`]: "allow" });
   for (const account of [f.personal, f.northwind])
-    expect(html).toContain(`aria-label="List labels on ${account.name} for Claude"`);
+    for (const tool of ["List labels", "Search mail"])
+      expect(html).toContain(`aria-label="${tool} on ${account.name} for Claude"`);
+  // One control for each tool of each account: both tools of Personal, then both of Northwind.
   const groups = [...html.matchAll(/role="radiogroup"[^>]*>([\s\S]*?)<\/div>/g)];
-  expect(groups).toHaveLength(2);
+  expect(groups).toHaveLength(4);
   expect(groups[0]![1]).toMatch(
     /aria-checked="true"[^>]*aria-label="Allowed"|aria-label="Allowed"[^>]*aria-checked="true"/,
   );
-  expect(groups[1]![1]).toMatch(
-    /aria-checked="true"[^>]*aria-label="Not allowed"|aria-label="Not allowed"[^>]*aria-checked="true"/,
-  );
+  for (const group of groups.slice(1))
+    expect(group[1]).toMatch(
+      /aria-checked="true"[^>]*aria-label="Not allowed"|aria-label="Not allowed"[^>]*aria-checked="true"/,
+    );
 });
 
 it.each(["revoked", "expired"])(

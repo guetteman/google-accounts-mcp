@@ -3,7 +3,7 @@ import { APPROVAL_LIFETIME, type ApprovalId } from "../approvals/model";
 import { pendingAnswer } from "../approvals/result";
 import { sealArguments } from "../approvals/text";
 import { classify, failures, ToolFailure } from "./failures";
-import { Effect, Result, Schema } from "effect";
+import { Effect, Result } from "effect";
 import {
   ProtocolError,
   ProtocolErrorCode,
@@ -14,7 +14,7 @@ import type { ActiveConnection } from "../connections/model";
 import { normalizeEmail, type Owner } from "../owner/owner";
 import type { AccountStatus, Credential } from "../accounts/model";
 import { allowedAccountStatement, decodeAllowedAccount } from "../accounts/store";
-import { withGoogle, type TokenError } from "../accounts/tokens";
+import { googleSession, type TokenError } from "../accounts/tokens";
 import {
   closeCall,
   decodeCallId,
@@ -22,8 +22,10 @@ import {
   type CallId,
   type Outcome,
 } from "../calls/store";
-import { TOOLS, type Send, type Tool } from "./tools";
+import { decodeArgs, TOOLS, type DecodedArgs, type Send, type Tool } from "./tools";
 export const MAX_ARGUMENTS_BYTES = 256 * 1024;
+/** A tool call answers within this time, below the 25 seconds of an approved run. */
+export const CALL_DEADLINE = 20_000;
 
 export interface CallContext {
   db: D1Database;
@@ -54,26 +56,28 @@ export async function executeAccount(
   ctx: CallContext,
   tool: Extract<Tool, { kind: "account" }>,
   allowed: Allowed,
-  args: import("./tools").DecodedArgs,
-  deadline = Infinity,
+  args: DecodedArgs,
+  deadline: number,
   signal?: AbortSignal,
 ) {
   if (allowed.status.kind === "missing_access" || allowed.status.kind === "unreadable")
     throw new ToolFailure({ code: `account_${allowed.status.kind}` });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let controller: AbortController | undefined;
+  // A tool can send several requests at once, so each attempt owns its timer.
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const session = googleSession(ctx, allowed.credential);
   const send: Send = (build) =>
-    withGoogle(ctx, allowed.credential, (token) => {
-      // withGoogle can retry after a 401. Each attempt owns a fresh request and deadline.
+    session((token) => {
+      // The session can retry after a 401. Each attempt owns a fresh request and deadline.
       if (ctx.now() >= deadline || signal?.aborted)
         throw new ToolFailure({ code: "google_unavailable", unknown: true });
-      clearTimeout(timer);
-      controller = new AbortController();
-      timer = setTimeout(
-        () => {
-          controller?.abort();
-        },
-        Math.min(10000, deadline - ctx.now()),
+      const controller = new AbortController();
+      timers.add(
+        setTimeout(
+          () => {
+            controller.abort();
+          },
+          Math.min(10000, deadline - ctx.now()),
+        ),
       );
       return build(
         token,
@@ -87,7 +91,7 @@ export async function executeAccount(
     if (Result.isFailure(result)) throw result.failure;
     return result.success;
   } finally {
-    clearTimeout(timer);
+    for (const timer of timers) clearTimeout(timer);
   }
 }
 export async function runCall(
@@ -122,8 +126,14 @@ export async function runCall(
         if (Result.isFailure(plain)) throw plain.failure;
         value = plain.success;
       } else {
-        const decoded = Schema.decodeUnknownOption(tool.input)(args);
-        if (decoded._tag === "None") throw new ToolFailure({ code: "invalid_arguments" });
+        const decoded = decodeArgs(tool, args);
+        if (!decoded.ok) {
+          const name = decoded.field ?? "account";
+          throw new ToolFailure({
+            code: "invalid_arguments",
+            field: { name, expects: tool.expects[name] ?? "valid" },
+          });
+        }
         const json = JSON.stringify(decoded.value);
         if (new TextEncoder().encode(json).byteLength > MAX_ARGUMENTS_BYTES)
           throw new ToolFailure({ code: "invalid_arguments", reason: "arguments_too_large" });
@@ -164,7 +174,7 @@ export async function runCall(
           }
           outcome = null;
           value = pendingAnswer(ctx.origin, approval, at + APPROVAL_LIFETIME);
-        } else value = await executeAccount(ctx, tool, allowed, decoded.value);
+        } else value = await executeAccount(ctx, tool, allowed, decoded.value, at + CALL_DEADLINE);
       }
       result = { content: [{ type: "text", text: JSON.stringify(value) }] };
     }

@@ -1,8 +1,8 @@
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { APP_LABELS } from "../connections/model";
 import { openArguments } from "./text";
 import type { TokenKey } from "../config";
-import { TOOLS } from "../mcp/tools";
+import { decodeArgs, TOOLS, type DecodedArgs } from "../mcp/tools";
 import type { Approval, ApprovalPageProps, ApprovalRequest } from "./model";
 
 // Property order is explicit, including each value in the order the owner reads it.
@@ -61,14 +61,14 @@ export async function approvalView(
     },
     values: [],
   };
-  let decoded: { readonly account: string } | null = null;
+  let decoded: DecodedArgs | null = null;
   let digest: string | null = null;
   if (row.state === "waiting" && row.uses.length === 1) {
     try {
       const opened = await openArguments(key, row.id, row.arguments);
       if (opened !== null) {
-        const parsed = Schema.decodeUnknownOption(tool.input)(opened);
-        if (parsed._tag === "Some") {
+        const parsed = decodeArgs(tool, opened);
+        if (parsed.ok) {
           const values = await Effect.runPromise(tool.view.values(parsed.value));
           request.values = values;
           digest = await viewDigest(request);

@@ -21,6 +21,7 @@ import {
   type Use,
 } from "./model";
 import { parseAccountId } from "../accounts/model";
+import { parseAccountTool } from "../mcp/tools";
 import { parseConnectionId } from "../connections/model";
 
 const won = Symbol("Won");
@@ -29,7 +30,7 @@ const ApprovalRow = Schema.Struct({
   id: Schema.String,
   connection_id: Schema.String,
   call_id: Schema.Int,
-  tool: Schema.Literal("list_labels"),
+  tool: Schema.String,
   uses: Schema.String,
   created_at: Schema.Int,
   expires_at: Schema.Int,
@@ -43,9 +44,7 @@ const ApprovalRow = Schema.Struct({
   app: Schema.Literals(["claude-code", "claude-hosted", "chatgpt"]),
   accounts: Schema.String,
 });
-const Uses = Schema.Array(
-  Schema.Struct({ account: Schema.String, tool: Schema.Literal("list_labels") }),
-);
+const Uses = Schema.Array(Schema.Struct({ account: Schema.String, tool: Schema.String }));
 const Accounts = Schema.Array(
   Schema.Struct({
     id: Schema.String,
@@ -58,11 +57,13 @@ function decodeApproval(raw: unknown): Approval {
   const row = Schema.decodeUnknownSync(ApprovalRow)(raw);
   const id = parseApprovalId(row.id);
   const connection = parseConnectionId(row.connection_id);
-  if (!id || !connection) throw new WriteUncertain();
+  const tool = parseAccountTool(row.tool);
+  if (!id || !connection || !tool) throw new WriteUncertain();
   const uses = Schema.decodeUnknownSync(Uses)(JSON.parse(row.uses)).map((use) => {
     const account = parseAccountId(use.account);
-    if (!account) throw new WriteUncertain();
-    return { account, tool: use.tool };
+    const tool = parseAccountTool(use.tool);
+    if (!account || !tool) throw new WriteUncertain();
+    return { account, tool };
   });
   const accounts = Schema.decodeUnknownSync(Accounts)(JSON.parse(row.accounts)).map((account) => {
     const id = parseAccountId(account.id);
@@ -84,7 +85,7 @@ function decodeApproval(raw: unknown): Approval {
     connection: { id: connection, name: row.connection_name, app: row.app },
     accounts,
     uses,
-    tool: row.tool,
+    tool,
     call: row.call_id,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
