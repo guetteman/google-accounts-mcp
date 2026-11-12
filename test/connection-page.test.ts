@@ -70,6 +70,7 @@ it("renders tools under their groups in tool-list order, with no empty group", a
     name: "change_labels",
     label: "Change labels",
     group: "Organize",
+    irreversible: false,
     description:
       "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam, or take it out.",
   });
