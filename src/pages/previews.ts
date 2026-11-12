@@ -141,6 +141,7 @@ const approvalBase: ApprovalPageProps = {
       joiner: "of",
       empty: "This call has no other values. The sentence above is the whole call.",
     },
+    notes: [],
     values: [],
   },
   times: {
@@ -243,6 +244,16 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
 };
 export const previews: Readonly<Record<string, Page>> = {
   ...approvalPreviews,
+  "approval-waiting-notes": {
+    ...approvalBase,
+    request: {
+      ...approvalPreviews["approval-waiting-thread"]!.request,
+      notes: [
+        { text: "This call archives this thread: it leaves the inbox.", warning: false },
+        { text: "A deleted message cannot be recovered.", warning: true },
+      ],
+    },
+  },
   ...Object.fromEntries(
     [
       "new-connection",

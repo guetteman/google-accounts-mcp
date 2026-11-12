@@ -260,6 +260,13 @@ function WaitingView({
                   }`}
             </p>
           </div>
+          {request.notes
+            .filter((note) => !note.warning)
+            .map((note, index) => (
+              <p key={index} className="text-base/7">
+                {note.text}
+              </p>
+            ))}
           {values.map((value) => (
             <Quoted
               key={value.name}
@@ -270,6 +277,14 @@ function WaitingView({
           {values.length > 0 && (
             <p className="text-sm text-muted-foreground">That is the whole call.</p>
           )}
+          {request.notes
+            .filter((note) => note.warning)
+            .map((note, index) => (
+              <Alert key={index} variant="warning">
+                <TriangleAlertIcon />
+                <AlertTitle>{note.text}</AlertTitle>
+              </Alert>
+            ))}
         </section>
       ) : (
         <Alert variant="warning">

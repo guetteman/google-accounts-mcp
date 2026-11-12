@@ -23,7 +23,7 @@ export function createMcpServer(ctx: CallContext): Server {
       tools: listed.success.tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        annotations: { readOnlyHint: true },
+        annotations: tool.annotations,
         // Effect's empty struct is not an object JSON Schema. Keep the existing contract.
         inputSchema:
           tool.kind === "plain"

@@ -1,5 +1,5 @@
 import type { Tool as McpTool } from "@modelcontextprotocol/server";
-import type { ViewValue } from "../approvals/model";
+import { viewDate, type ViewNote, type ViewValue } from "../approvals/model";
 import { getApproval } from "../approvals/result";
 import { Data, Effect, Result, Schema } from "effect";
 import type { Unavailable } from "../db";
@@ -20,12 +20,17 @@ export type AccountTool = string & { readonly __accountTool: unique symbol };
 export type Send = (
   build: (accessToken: string, signal: AbortSignal) => Request,
 ) => Effect.Effect<Response, ToolFailure>;
+/** What tools/list tells a client about a tool. A tool that changes mail says so. */
+export type ToolAnnotations =
+  | { readOnlyHint: true }
+  | { readOnlyHint: false; destructiveHint: boolean; idempotentHint: boolean };
 export type Tool =
   | {
       kind: "plain";
       name: "list_accounts" | "get_approval";
       inputSchema?: McpTool["inputSchema"];
       description: string;
+      annotations: ToolAnnotations;
       run: (
         ctx: CallContext,
         args: Record<string, unknown> | undefined,
@@ -38,6 +43,7 @@ export type Tool =
       group: Group;
       permissionDescription: string;
       description: string;
+      annotations: ToolAnnotations;
       input: Schema.Codec<DecodedArgs, unknown>;
       /** What each field must be, for the message of invalid_arguments. */
       expects: Readonly<Record<string, string>>;
@@ -45,6 +51,8 @@ export type Tool =
         action: string;
         joiner: string;
         empty: string;
+        /** Sentences that the page says about this call, from its arguments alone. */
+        notes?: (args: DecodedArgs) => ReadonlyArray<ViewNote>;
         values: (
           args: DecodedArgs,
           send: Send,
@@ -62,12 +70,15 @@ type AccountDefinition<A extends DecodedArgs> = {
   group: Group;
   permissionDescription: string;
   description: string;
+  annotations: ToolAnnotations;
   input: Schema.Codec<A, unknown>;
   expects: Readonly<Record<keyof A & string, string>>;
   view: {
     action: string;
     joiner: string;
     empty: string;
+    /** Sentences that the page says about this call, from its arguments alone. */
+    notes?: (args: A) => ReadonlyArray<ViewNote>;
     values: (
       args: A,
       send: Send,
@@ -107,6 +118,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   {
     kind: "plain",
     name: "list_accounts",
+    annotations: { readOnlyHint: true },
     description:
       "Lists the Google accounts this connection can use, as a JSON array. An empty array means the owner has not given this connection access to any account.",
     run: (ctx) =>
@@ -129,6 +141,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   },
   accountTool({
     name: "list_labels",
+    annotations: { readOnlyHint: true },
     group: "Find and read",
     label: "List labels",
     permissionDescription: "See the names of this account's Gmail labels.",
@@ -147,6 +160,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   }),
   accountTool({
     name: "search_threads",
+    annotations: { readOnlyHint: true },
     group: "Find and read",
     label: "Search mail",
     permissionDescription:
@@ -190,6 +204,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   }),
   accountTool({
     name: "read_thread",
+    annotations: { readOnlyHint: true },
     label: "Read thread",
     group: "Find and read",
     permissionDescription:
@@ -220,22 +235,11 @@ export const TOOLS: ReadonlyArray<Tool> = [
       values: (args, send) =>
         Effect.gen(function* () {
           const summary = yield* threadSummary(send, args.thread);
-          const date = new Intl.DateTimeFormat("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-            timeZone: "UTC",
-          }).format(summary.date);
-          const time = new Intl.DateTimeFormat("en-GB", {
-            hour: "2-digit",
-            minute: "2-digit",
-            timeZone: "UTC",
-          }).format(summary.date);
           const values: ViewValue[] = [
             { name: "Subject", text: summary.subject, from: "gmail" },
             { name: "Messages", text: String(summary.messages.length), from: "gmail" },
             { name: "Last message from", text: summary.from, from: "gmail" },
-            { name: "Last message date", text: `${date} at ${time} UTC`, from: "gmail" },
+            { name: "Last message date", text: viewDate(summary.date), from: "gmail" },
           ];
           if (args.page !== undefined) {
             const place = placeOf(args.page);
@@ -256,6 +260,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   {
     kind: "plain",
     name: "get_approval",
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
       properties: { approval: { type: "string" } },

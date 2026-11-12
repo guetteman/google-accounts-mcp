@@ -2,6 +2,8 @@ import { expect, it } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
 import type { ThreadResult } from "../src/google/thread";
+import { classify, notFound } from "../src/mcp/failures";
+import { parseConnectionId } from "../src/connections/model";
 import { google, THREADS_URL } from "./support/google";
 import { rpcResult } from "./support/oauth";
 import { answer } from "./support/approvals";
@@ -309,6 +311,31 @@ it.each([400, 404])(
     expect((await callRows()).at(-1)?.outcome).toBe("refused");
   },
 );
+
+it.each([
+  {
+    ids: ["a"],
+    message: `No thread "a" exists in ${PERSONAL}. A thread ID works only in the account that returned it.`,
+  },
+  {
+    ids: ["a", "b", "c"],
+    message: `None of the threads "a", "b", "c" exists in ${PERSONAL}. A thread ID works only in the account that returned it.`,
+  },
+])("classifies missing thread IDs $ids as refused", ({ ids, message }) => {
+  expect(
+    classify(
+      notFound("thread", ids),
+      { approved: false, aborted: false },
+      {
+        input: PERSONAL,
+        email: PERSONAL,
+        origin: "https://mail.example.com",
+        tool: "read_thread",
+        connection: parseConnectionId("aaaaaaaa-aaaa-4aaa-8aaa-000000000001")!,
+      },
+    ),
+  ).toEqual({ audit: "refused", error: { code: "not_found", message } });
+});
 
 it("rejects invalid arguments before Gmail, and maps other statuses and malformed messages to google_unavailable", async () => {
   const f = await allowed();

@@ -1,6 +1,6 @@
-import { Effect, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import type { Send } from "../mcp/tools";
-import { notFound, ToolFailure } from "../mcp/failures";
+import { notFound, ToolFailure, type Missing } from "../mcp/failures";
 import { isoSeconds } from "../approvals/model";
 import { decodeEntities } from "./html";
 import { Headers, InternalDate, header } from "./message";
@@ -33,6 +33,78 @@ export const get = <A>(
       catch: unavailable,
     });
     return yield* Schema.decodeUnknownEffect(schema)(body).pipe(Effect.mapError(unavailable));
+  });
+
+/** One change as the account. Only a 4xx response confirms that Google refused it. */
+export const change = <A>(
+  send: Send,
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  schema: Schema.Codec<A, unknown> | null,
+  refused: (status: number) => ToolFailure,
+  body?: unknown,
+): Effect.Effect<A, ToolFailure> =>
+  Effect.gen(function* () {
+    const uncertain = () => new ToolFailure({ code: "google_unavailable", unknown: true });
+    const response = yield* send(
+      (token, signal) =>
+        new Request(`${API}/${path}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          },
+          redirect: "manual",
+          signal,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }),
+    );
+    if (response.status >= 400 && response.status < 500)
+      return yield* Effect.fail(refused(response.status));
+    if (!response.ok) return yield* Effect.fail(uncertain());
+    if (schema === null) return undefined as A;
+    const text = yield* Effect.tryPromise({ try: () => response.text(), catch: uncertain });
+    const parsed = yield* Effect.try({ try: (): unknown => JSON.parse(text), catch: uncertain });
+    return yield* Schema.decodeUnknownEffect(schema)(parsed).pipe(Effect.mapError(uncertain));
+  });
+
+/**
+ * The most threads or messages that one call which changes mail may name. Approving a call of
+ * 15 makes about 34 requests to Google and Cloudflare Access (rebuilding the view, running,
+ * one token refresh, Access's keys on a cold Worker) plus about 6 D1 queries: about 40, inside
+ * the 50 subrequests of the Workers Free plan however D1 is counted.
+ */
+export const MAX_ITEMS = 15;
+
+/** Keep each item's outcome, sending the first alone to acquire the session's token once. */
+export const changeEach = <A>(
+  kind: Missing,
+  ids: readonly string[],
+  one: (id: string) => Effect.Effect<A, ToolFailure>,
+): Effect.Effect<{ changed: A[]; not_found: string[]; unconfirmed: string[] }, ToolFailure> =>
+  Effect.gen(function* () {
+    const attempt = (id: string) =>
+      Effect.result(one(id)).pipe(Effect.map((result) => ({ id, result })));
+    const first = yield* Effect.forEach(ids.slice(0, 1), attempt);
+    const initial = first[0]?.result;
+    if (initial && Result.isFailure(initial) && initial.failure.code !== "not_found")
+      return yield* Effect.fail(initial.failure);
+    const rest = yield* Effect.forEach(ids.slice(1), attempt, { concurrency: REQUESTS_AT_ONCE });
+    const changed: A[] = [];
+    const not_found: string[] = [];
+    const unconfirmed: string[] = [];
+    const failures: ToolFailure[] = [];
+    for (const { id, result } of [...first, ...rest]) {
+      if (Result.isSuccess(result)) changed.push(result.success);
+      else if (result.failure.code === "not_found") not_found.push(id);
+      else {
+        unconfirmed.push(id);
+        failures.push(result.failure);
+      }
+    }
+    if (changed.length > 0) return { changed, not_found, unconfirmed };
+    const failure = failures.find((failure) => failure.unknown) ?? failures[0];
+    return yield* Effect.fail(failure ?? notFound(kind, ids));
   });
 
 const Labels = Schema.Struct({
@@ -102,7 +174,7 @@ export const threadSummary = (
     ),
   );
 /** Cloudflare allows a Worker six connections at once for one request; five leave one free. */
-const THREADS_AT_ONCE = 5;
+export const REQUESTS_AT_ONCE = 5;
 export const searchThreads = (
   send: Send,
   input: { query: string; limit: number; page: string | undefined },
@@ -134,7 +206,7 @@ export const searchThreads = (
             unread: thread.unread,
           })),
         ),
-      { concurrency: THREADS_AT_ONCE },
+      { concurrency: REQUESTS_AT_ONCE },
     );
     return {
       threads,

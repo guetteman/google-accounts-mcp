@@ -68,16 +68,25 @@ export const failures = {
   }
 >;
 export type Missing = "thread" | "message" | "draft" | "attachment" | "label";
-export const notFound = (kind: Missing, id: string): ToolFailure =>
+export const notFound = (kind: Missing, id: string | readonly string[]): ToolFailure =>
   new ToolFailure({ code: "not_found", missing: { kind, id } });
 export class ToolFailure extends Data.TaggedError("ToolFailure")<{
   code: keyof typeof failures;
   unknown?: boolean;
-  missing?: { kind: Missing; id: string };
+  missing?: { kind: Missing; id: string | readonly string[] };
   reason?: "arguments_too_large";
   /** The field that is wrong, with what it must be. */
   field?: { name: string; expects: string };
 }> {}
+
+const missingMessage = ({ kind, id }: NonNullable<ToolFailure["missing"]>, email: string) => {
+  const ids = typeof id === "string" ? [id] : id;
+  const subject =
+    ids.length === 1
+      ? `No ${kind} "${ids[0]}"`
+      : `None of the ${kind}s ${ids.map((id) => `"${id}"`).join(", ")}`;
+  return `${subject} exists in ${email}. A ${kind} ID works only in the account that returned it.`;
+};
 
 export function classify(
   error: unknown,
@@ -102,7 +111,7 @@ export function classify(
                 : failure.field
                   ? `The ${failure.field.name} field must be ${failure.field.expects}.`
                   : failure.missing
-                    ? `No ${failure.missing.kind} "${failure.missing.id}" exists in ${text.email}. A ${failure.missing.kind} ID works only in the account that returned it.`
+                    ? missingMessage(failure.missing, text.email)
                     : entry.message(
                         text.input,
                         text.email,

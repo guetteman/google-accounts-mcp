@@ -104,7 +104,12 @@ export function accountRequests(
         token,
         signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
       );
-    }).pipe(Effect.mapError(tokenFailure));
+    }).pipe(
+      Effect.mapError(tokenFailure),
+      Effect.catchDefect((defect) =>
+        defect instanceof ToolFailure ? Effect.fail(defect) : Effect.die(defect),
+      ),
+    );
   return {
     send,
     close: () => {
