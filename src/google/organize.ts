@@ -88,7 +88,15 @@ export const changeLabels = (
   input: LabelChange & { account: string },
 ): Effect.Effect<ChangeResult, ToolFailure> =>
   Effect.gen(function* () {
-    const labels = yield* named(send, input);
+    // The label read comes before any change: when it is lost, nothing changed, so the failure
+    // is not an uncertain one.
+    const labels = yield* named(send, input).pipe(
+      Effect.mapError((failure) =>
+        failure.code === "google_unavailable" && failure.unknown
+          ? new ToolFailure({ code: "google_unavailable" })
+          : failure,
+      ),
+    );
     const missing = [...labels.add, ...labels.remove].find((label) => label.name === null);
     if (missing) return yield* Effect.fail(notFound("label", missing.id));
     const { changed, not_found, unconfirmed } = yield* changeEach(
