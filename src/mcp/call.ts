@@ -13,7 +13,11 @@ import type { Config } from "../config";
 import type { ActiveConnection } from "../connections/model";
 import { normalizeEmail, type Owner } from "../owner/owner";
 import type { AccountStatus, Credential } from "../accounts/model";
-import { allowedAccountStatement, decodeAllowedAccount } from "../accounts/store";
+import {
+  allowedAccountStatement,
+  decodeAllowedAccount,
+  seenAccountStatement,
+} from "../accounts/store";
 import { googleSession, type TokenError } from "../accounts/tokens";
 import {
   closeCall,
@@ -102,16 +106,21 @@ export async function runCall(
   const at = ctx.now();
   let id: CallId | null = null;
   let email = "";
+  let toolName = "";
   const input = typeof args?.account === "string" ? args.account : "";
   let unknownTool = false;
   let result: CallToolResult;
   let outcome: Outcome | null = "success";
   try {
     const tool = TOOLS.find((t) => t.name === name);
+    toolName = tool?.name ?? "";
     const account = tool?.kind === "account" ? normalizeEmail(input) : null;
     const statements = [recordStatement(ctx, tool?.name ?? null, account)];
     if (tool?.kind === "account" && account)
-      statements.push(allowedAccountStatement(ctx, tool.name, account));
+      statements.push(
+        allowedAccountStatement(ctx, tool.name, account),
+        seenAccountStatement(ctx, account),
+      );
     const batch = await ctx.db.batch(statements);
     id = decodeCallId(batch[0]!);
     if (!id) throw new ToolFailure({ code: "server_unavailable" });
@@ -138,7 +147,12 @@ export async function runCall(
         if (new TextEncoder().encode(json).byteLength > MAX_ARGUMENTS_BYTES)
           throw new ToolFailure({ code: "invalid_arguments", reason: "arguments_too_large" });
         const row = batch[1]?.results[0];
-        if (!row) throw new ToolFailure({ code: "account_not_available" });
+        if (!row) {
+          email = account ?? "";
+          throw new ToolFailure({
+            code: batch[2]?.results[0] ? "tool_not_allowed" : "account_not_available",
+          });
+        }
         const allowed: Allowed = await decodeAllowedAccount(row, ctx.config.tokenKey);
         email = allowed.credential.email;
         if ((row as { ask: unknown }).ask !== 0) {
@@ -182,7 +196,7 @@ export async function runCall(
     const classified = classify(
       error,
       { approved: false, aborted: false },
-      { input, email, origin: ctx.origin },
+      { input, email, origin: ctx.origin, tool: toolName, connection: ctx.connection.connectionId },
     );
     outcome = classified.audit;
     if (classified.audit === "failed") console.error("Tool call failed", classified.error?.code);

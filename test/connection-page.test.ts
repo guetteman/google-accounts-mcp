@@ -5,15 +5,13 @@ import { NOW } from "./support/accounts";
 import { seedConnection } from "./support/connections";
 import { fixture, permission, problemCases } from "./support/permissions";
 import { textOf } from "./support/worker";
+import type { FramePage } from "../src/pages/page";
+import { GROUPS } from "../src/mcp/groups";
 
 function pageProps(html: string) {
   const json = /<script\b[^>]*id="page-props"[^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];
   expect(json, "the server must provide the real connection page's hydration props").toBeDefined();
-  return JSON.parse(json!) as {
-    _tag: string;
-    accounts: Array<{ id: string }>;
-    settings: Record<string, "ask" | "allow">;
-  };
+  return JSON.parse(json!) as Extract<FramePage, { _tag: "Connection" }>;
 }
 
 it("links each connection to its own permissions page and shows only the accounts it can see", async () => {
@@ -40,19 +38,40 @@ it("links each connection to its own permissions page and shows only the account
   expect(props._tag).toBe("Connection");
   expect(props.accounts.map((a) => a.id)).toEqual([f.personal.id, f.northwind.id]);
   expect(props.settings).toEqual({ [`${f.personal.id}:list_labels`]: "allow" });
-  for (const account of [f.personal, f.northwind])
-    for (const tool of ["List labels", "Search mail"])
-      expect(html).toContain(`aria-label="${tool} on ${account.name} for Claude"`);
-  // One control for each tool of each account: both tools of Personal, then both of Northwind.
-  const groups = [...html.matchAll(/role="radiogroup"[^>]*>([\s\S]*?)<\/div>/g)];
-  expect(groups).toHaveLength(4);
-  expect(groups[0]![1]).toMatch(
-    /aria-checked="true"[^>]*aria-label="Allowed"|aria-label="Allowed"[^>]*aria-checked="true"/,
-  );
-  for (const group of groups.slice(1))
-    expect(group[1]).toMatch(
-      /aria-checked="true"[^>]*aria-label="Not allowed"|aria-label="Not allowed"[^>]*aria-checked="true"/,
+  for (const tool of props.tools) {
+    const control = new RegExp(
+      `role="radiogroup"[^>]*aria-label="${tool.label} on Personal for Claude"[^>]*>([\\s\\S]*?)<\\/div>`,
+    ).exec(html);
+    expect(control).not.toBeNull();
+    const setting = props.settings[`${f.personal.id}:${tool.name}`] ?? "deny";
+    const label = { deny: "Not allowed", ask: "Ask first", allow: "Allowed" }[setting];
+    const segment = [...control![1]!.matchAll(/<button\b[^>]*>/g)].find((match) =>
+      match[0].includes(`aria-label="${label}"`),
     );
+    expect(segment?.[0]).toContain('aria-checked="true"');
+  }
+  expect(props.accounts[1]).toMatchObject({ id: f.northwind.id, name: "Northwind" });
+  for (const tool of props.tools)
+    expect(props.settings[`${f.northwind.id}:${tool.name}`]).toBeUndefined();
+});
+
+it("renders both tools under Find and read, in tool-list order, and no empty group", async () => {
+  const f = await fixture();
+  const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
+  const props = pageProps(html);
+  expect(props.tools.map(({ name, group }) => ({ name, group }))).toEqual([
+    { name: "list_labels", group: "Find and read" },
+    { name: "search_threads", group: "Find and read" },
+  ]);
+  const first = html.slice(
+    html.indexOf("Tool permissions"),
+    html.indexOf('aria-label="All tools on Northwind'),
+  );
+  expect(textOf(first)).toContain("Find and read");
+  expect(first.indexOf('aria-label="List labels on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Search mail on Personal'),
+  );
+  for (const group of GROUPS.slice(1)) expect(textOf(html)).not.toContain(group);
 });
 
 it.each(["revoked", "expired"])(

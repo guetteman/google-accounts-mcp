@@ -3,7 +3,7 @@ import { callWorker, ORIGIN, testEnv } from "./worker";
 
 export interface RequestOptions {
   readonly method?: string;
-  readonly form?: Record<string, string>;
+  readonly form?: Record<string, string> | [string, string][];
   readonly headers?: Record<string, string>;
   readonly origin?: string | null;
   readonly env?: Env;
@@ -68,7 +68,7 @@ export class Browser {
   }
   post(
     path: string,
-    form: Record<string, string> = {},
+    form: Record<string, string> | [string, string][] = {},
     options: Omit<RequestOptions, "method" | "form"> = {},
   ) {
     return this.request(path, { ...options, method: "POST", form });

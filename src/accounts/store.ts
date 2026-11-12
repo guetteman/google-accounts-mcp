@@ -123,6 +123,11 @@ export const decodeAllowedAccount = async (row: unknown, tokenKey: TokenKey) => 
   const view = decodeView(row as ViewRow, `v1.${await keyId(tokenKey)}.`);
   return { credential, status: view.status };
 };
+export const seenAccountStatement = (ctx: CallContext, account: OwnerEmail) =>
+  ctx.db
+    .prepare(`SELECT 1 AS seen FROM accounts a WHERE a.email = ?3 AND ${ownerGuard("?1", "?2")}
+    AND ${permittedWhere({ connection: "?4", now: "?5", ownerEmail: "?2" })}`)
+    .bind(ctx.owner.generation, ctx.owner.email, account, ctx.connection.connectionId, ctx.now());
 interface IdentityRow {
   id: AccountId;
   sub: string;

@@ -1,4 +1,5 @@
 import type { ApprovalPageProps } from "../../src/approvals/model";
+import type { FramePage } from "../../src/pages/page";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import { chromium } from "playwright-core";
@@ -202,16 +203,26 @@ export async function hydrateAccounts(input: {
       };
     }
     if (input.connection) {
-      const controls = page.getByRole("radiogroup");
-      const before = await controls.evaluateAll((els) =>
-        els.map((el) => ({
-          name: el.getAttribute("aria-label"),
-          selected: el.querySelector('[aria-checked="true"]')?.getAttribute("aria-label"),
-        })),
+      const props = JSON.parse(
+        /<script\b[^>]*id="page-props"[^>]*>([\s\S]*?)<\/script>/i.exec(input.html)![1]!,
+      ) as Extract<FramePage, { _tag: "Connection" }>;
+      const account = props.accounts[0]!;
+      const before = await Promise.all(
+        props.tools.map((tool) =>
+          page
+            .getByRole("radiogroup", {
+              name: `${tool.label} on ${account.name} for ${props.connection.name}`,
+              exact: true,
+            })
+            .evaluate((el) => ({
+              name: el.getAttribute("aria-label"),
+              selected: el.querySelector('[aria-checked="true"]')?.getAttribute("aria-label"),
+            })),
+        ),
       );
       let collapsed = false;
       try {
-        await page.getByRole("button", { name: /Personal.*\d+ tools?/ }).click();
+        await page.getByRole("button", { name: account.name, exact: true }).click();
         collapsed = !(await page
           .getByRole("radiogroup", { name: "List labels on Personal for Claude", exact: true })
           .isVisible());

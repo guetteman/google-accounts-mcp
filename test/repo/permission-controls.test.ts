@@ -40,7 +40,7 @@ beforeAll(async () => {
   const styles = outputs.filter((asset) => asset.fileName.endsWith(".css"));
   const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">${styles.map((asset) => `<link rel="stylesheet" href="/${asset.fileName}">`).join("")}</head><body><div id="root"></div><script type="module" src="/${entry.fileName}"></script></body></html>`;
   server = createServer((request, response) => {
-    const path = request.url!;
+    const path = new URL(request.url!, "http://localhost").pathname;
     if (path === "/") {
       response.setHeader("Content-Type", "text/html");
       response.end(html);
@@ -60,16 +60,24 @@ afterAll(async () => {
 
 const control = (page: Page, account = "Northwind") =>
   page.getByRole("radiogroup", { name: `List labels on ${account} for Claude`, exact: true });
+const accountControl = (page: Page, account = "Northwind") =>
+  page.getByRole("radiogroup", { name: `All tools on ${account} for Claude`, exact: true });
+const searchControl = (page: Page, account = "Northwind") =>
+  page.getByRole("radiogroup", { name: `Search mail on ${account} for Claude`, exact: true });
+const panel = (page: Page, account = "Northwind") =>
+  page
+    .locator('[data-slot="collapsible"]')
+    .filter({ has: page.getByRole("button", { name: account, exact: true }) });
 const segment = (group: Locator, name: "Allowed" | "Not allowed" | "Ask first") =>
   group.getByRole("radio", { name, exact: true });
 async function selected(group: Locator, value: "Allowed" | "Not allowed" | "Ask first" | null) {
   for (const name of ["Not allowed", "Ask first", "Allowed"] as const)
     expect(await segment(group, name).getAttribute("aria-checked")).toBe(String(value === name));
 }
-async function open(width = 1280) {
+async function open(width = 1280, groups = false) {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(1500);
-  await page.goto(origin);
+  await page.goto(groups ? `${origin}/?groups` : origin);
   // Resolve the real component before testing interaction; never replace it with a fake.
   try {
     await expect
@@ -187,9 +195,9 @@ it("moves keyboard focus with arrows and Tab without changing a permission", asy
   }
 });
 
-it.each([390, 1280])(
-  "keeps every control in the same position through saving, success and failure at %s px",
-  async (width) => {
+it.each([390, 1280].flatMap((width) => ["tool", "account"].map((scope) => ({ width, scope }))))(
+  "keeps every control in the same position through saving, success and failure for a $scope at $width px",
+  async ({ width, scope }) => {
     const page = await open(width);
     try {
       const routes = await pending(page);
@@ -201,9 +209,9 @@ it.each([390, 1280])(
           }),
         );
       const before = await boxes();
-      expect(before).toHaveLength(4);
+      expect(before).toHaveLength(12);
       for (const outcome of ["ok", "unavailable", "unknown"]) {
-        const group = control(
+        const group = (scope === "tool" ? control : accountControl)(
           page,
           outcome === "ok"
             ? "Northwind"
@@ -213,6 +221,8 @@ it.each([390, 1280])(
         );
         const sent = page.waitForRequest((r) => r.method() === "POST");
         await segment(group, "Allowed").click();
+        if (scope === "account")
+          await page.getByRole("button", { name: "Set to Allowed", exact: true }).click();
         await sent;
         await frames(page);
         expect(await boxes()).toEqual(before);
@@ -300,6 +310,27 @@ it.each([
   }
 });
 
+it.each(["tool", "account"])("retries the same %s choice after unavailable", async (scope) => {
+  const page = await open();
+  try {
+    const routes = await pending(page);
+    const group = (scope === "tool" ? control : accountControl)(page, "Personal");
+    await segment(group, "Not allowed").click();
+    await expect.poll(() => routes.length).toBe(1);
+    await answer(routes[0]!, "unavailable");
+    await page.getByText(unavailable, { exact: true }).filter({ visible: true }).waitFor();
+    await segment(group, "Not allowed").click();
+    await expect.poll(() => routes.length).toBe(2);
+    expect(routes[1]!.request().postData()).toBe(routes[0]!.request().postData());
+    await answer(routes[1]!, "ok");
+    await expect
+      .poll(() => segment(group, "Not allowed").getAttribute("aria-checked"))
+      .toBe("true");
+  } finally {
+    await page.close();
+  }
+});
+
 it("clears the previous failure notice when the owner makes the next change", async () => {
   const page = await open();
   try {
@@ -327,7 +358,7 @@ it("never changes permissions when clicking names, addresses, problem text or gr
     await page
       .getByText("Google stopped accepting this server's access.", { exact: false })
       .click();
-    const header = page.getByRole("button", { name: /Northwind.*1 tool/ });
+    const header = page.getByRole("button", { name: "Northwind", exact: true });
     await header.click();
     expect(await control(page).isVisible()).toBe(false);
     await header.click();
@@ -366,18 +397,18 @@ it("names each permission and its state accessibly, provides tooltips and distin
     }
     expect(new Set(icons).size).toBe(3);
     expect(fills[0]).not.toBe(fills[2]);
-    // Text is in the tooltip and accessible name, never repeated beside an open control.
+    // The tool controls stay icon-only; the account controls spell out the choices.
     await page.mouse.move(0, 0);
     await page.keyboard.press("Escape");
     for (const word of ["Not allowed", "Ask first", "Allowed"])
       await expect
-        .poll(() => page.getByText(word, { exact: true }).filter({ visible: true }).count())
+        .poll(() => group.getByText(word, { exact: true }).filter({ visible: true }).count())
         .toBe(0);
-    const header = page.getByRole("button", { name: /Personal.*1 tool/ });
+    const header = page.getByRole("button", { name: "Personal", exact: true });
     await header.click();
     expect(await group.isVisible()).toBe(false);
     expect(await page.getByText("Allowed", { exact: true }).filter({ visible: true }).count()).toBe(
-      1,
+      4,
     );
   } finally {
     await page.close();
@@ -499,15 +530,380 @@ it("offers least-to-most access and confirms Ask first only after the server sav
     await answer(routes[0]!, "ok");
     await expect.poll(() => segment(group, "Ask first").getAttribute("aria-checked")).toBe("true");
     await selected(group, "Ask first");
-    await page.getByRole("button", { name: /Northwind.*1 tool/ }).click();
+    await page.getByRole("button", { name: "Northwind", exact: true }).click();
     expect(
       await page.getByText("Ask first", { exact: true }).filter({ visible: true }).count(),
-    ).toBe(1);
+    ).toBe(4);
     expect(
       await page
         .getByText(/sees an account once one of its tools is set to Ask first or Allowed/)
         .count(),
     ).toBe(1);
+  } finally {
+    await page.close();
+  }
+});
+
+it("keeps the labelled account control in the header and derives its mixed counts from the tools", async () => {
+  const page = await open();
+  try {
+    const personal = accountControl(page, "Personal");
+    await selected(personal, null);
+    expect(
+      await panel(page, "Personal").getByText("1 allowed · 1 not allowed", { exact: true }).count(),
+    ).toBe(1);
+    await selected(accountControl(page), "Not allowed");
+    expect(await page.getByText("Both tools", { exact: true }).count()).toBe(4);
+    for (const label of ["Not allowed", "Ask first", "Allowed"] as const) {
+      expect(await segment(personal, label).innerText()).toBe(label);
+      expect(await segment(personal, label).locator("svg").count()).toBe(1);
+    }
+    await page.getByRole("button", { name: "Personal", exact: true }).click();
+    expect(await personal.isVisible()).toBe(true);
+    expect(await control(page, "Personal").isVisible()).toBe(false);
+    expect(await panel(page, "Personal").locator("dl").count()).toBe(0);
+    expect(await panel(page, "Personal").locator('[data-slot="badge"]').count()).toBe(0);
+    expect(await panel(page, "Personal").getByText("Mixed", { exact: true }).count()).toBe(0);
+  } finally {
+    await page.close();
+  }
+});
+
+it("denies every tool in one request without confirmation and skips the selected account value", async () => {
+  const page = await open();
+  try {
+    const routes = await pending(page);
+    await segment(accountControl(page), "Not allowed").click();
+    await frames(page);
+    expect(routes).toEqual([]);
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await segment(accountControl(page, "Personal"), "Not allowed").click();
+    const request = await sent;
+    const form = new URLSearchParams(request.postData()!);
+    expect(new URL(request.url()).pathname).toBe(endpoint);
+    expect(form.get("account")).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    expect(form.get("setting")).toBe("deny");
+    expect(form.getAll("tool")).toEqual(["list_labels", "search_threads"]);
+    expect(await page.getByRole("alertdialog").count()).toBe(0);
+    await answer(routes[0]!, "ok");
+    await expect
+      .poll(() =>
+        segment(accountControl(page, "Personal"), "Not allowed").getAttribute("aria-checked"),
+      )
+      .toBe("true");
+    await segment(accountControl(page, "Personal"), "Not allowed").click();
+    await frames(page);
+    expect(routes).toHaveLength(1);
+  } finally {
+    await page.close();
+  }
+});
+
+it.each([
+  {
+    wanted: "Allowed" as const,
+    setting: "allow",
+    count: 1,
+    text: "Claude will be able to use every tool on Personal without asking you. This changes 1 tool.",
+  },
+  {
+    wanted: "Ask first" as const,
+    setting: "ask",
+    count: 2,
+    text: "Claude will be able to call every tool on Personal, and each call will wait for your approval. This changes 2 tools.",
+  },
+])(
+  "confirms $wanted with the changing count and returns focus after Cancel, Escape and confirmation",
+  async ({ wanted, setting, text }) => {
+    const page = await open(390);
+    try {
+      const routes = await pending(page);
+      const opener = segment(accountControl(page, "Personal"), wanted);
+      for (const close of ["Cancel", "Escape", "confirm"]) {
+        await opener.click();
+        const dialog = page.getByRole("alertdialog", {
+          name: `Set all tools on Personal to ${wanted}?`,
+          exact: true,
+        });
+        await dialog.waitFor();
+        expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
+          text,
+        );
+        expect(await dialog.getByRole("button", { name: "Cancel", exact: true }).count()).toBe(1);
+        expect(
+          await dialog.getByRole("button", { name: `Set to ${wanted}`, exact: true }).count(),
+        ).toBe(1);
+        expect(routes).toEqual([]);
+        if (close === "Escape") await page.keyboard.press("Escape");
+        else if (close === "Cancel")
+          await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        else {
+          const sent = page.waitForRequest((request) => request.method() === "POST");
+          await dialog.getByRole("button", { name: `Set to ${wanted}`, exact: true }).click();
+          const form = new URLSearchParams((await sent).postData()!);
+          expect(form.getAll("tool")).toEqual(["list_labels", "search_threads"]);
+          expect(form.get("setting")).toBe(setting);
+          expect(routes).toHaveLength(1);
+        }
+        await expect.poll(() => page.getByRole("alertdialog").count()).toBe(0);
+        await expect.poll(() => opener.evaluate((el) => el === document.activeElement)).toBe(true);
+      }
+      await answer(routes[0]!, "ok");
+      await expect
+        .poll(() => segment(accountControl(page, "Personal"), wanted).getAttribute("aria-checked"))
+        .toBe("true");
+      await expect
+        .poll(async () => {
+          const fill = (group: Locator) =>
+            segment(group, wanted).evaluate((el) => getComputedStyle(el).backgroundColor);
+          return (
+            (await fill(accountControl(page, "Personal"))) ===
+            (await fill(control(page, "Personal")))
+          );
+        })
+        .toBe(true);
+      await opener.click();
+      await frames(page);
+      expect(await page.getByRole("alertdialog").count()).toBe(0);
+      expect(routes).toHaveLength(1);
+    } finally {
+      await page.close();
+    }
+  },
+);
+
+it("keeps all old values and blocks every account control until the batch succeeds", async () => {
+  const page = await open();
+  try {
+    const routes = await pending(page);
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await segment(accountControl(page), "Allowed").click();
+    await page.getByRole("button", { name: "Set to Allowed", exact: true }).click();
+    await sent;
+    for (const group of [accountControl(page), control(page), searchControl(page)]) {
+      await selected(group, "Not allowed");
+      expect(await group.getAttribute("aria-busy")).toBe("true");
+      expect(await group.getAttribute("aria-disabled")).toBe("true");
+      await segment(group, "Ask first").click({ force: true });
+    }
+    expect(await panel(page).getByText("Saving…", { exact: true }).count()).toBe(1);
+    await frames(page);
+    expect(routes).toHaveLength(1);
+    await answer(routes[0]!, "ok");
+    await expect.poll(() => accountControl(page).getAttribute("aria-busy")).toBe("false");
+    for (const group of [accountControl(page), control(page), searchControl(page)]) {
+      await selected(group, "Allowed");
+      expect(await group.getAttribute("aria-disabled")).toBe("false");
+    }
+    expect(
+      await page
+        .getByText("Claude can see Personal and Northwind.", { exact: true })
+        .filter({ visible: true })
+        .count(),
+    ).toBe(1);
+    expect(await panel(page).getByText("Saving…", { exact: true }).count()).toBe(0);
+  } finally {
+    await page.close();
+  }
+});
+
+it.each(["unknown", "lost response"])(
+  "leaves the entire account unconfirmed after %s and permits another account's change",
+  async (outcome) => {
+    const page = await open();
+    try {
+      const routes = await pending(page);
+      const sent = page.waitForRequest((request) => request.method() === "POST");
+      await segment(accountControl(page, "Personal"), "Not allowed").click();
+      await sent;
+      if (outcome === "unknown") await answer(routes[0]!, outcome);
+      else await routes[0]!.abort("failed");
+      await panel(page, "Personal").getByText("Unconfirmed", { exact: true }).waitFor();
+      await page.getByText(unknown, { exact: true }).filter({ visible: true }).waitFor();
+      for (const group of [
+        accountControl(page, "Personal"),
+        control(page, "Personal"),
+        searchControl(page, "Personal"),
+      ]) {
+        await selected(group, null);
+        expect(await group.getAttribute("aria-disabled")).toBe("true");
+        await segment(group, "Allowed").click({ force: true });
+      }
+      await frames(page);
+      expect(routes).toHaveLength(1);
+      const next = page.waitForRequest((request) => request.method() === "POST");
+      await segment(control(page), "Allowed").click();
+      await next;
+      await answer(routes[1]!, "ok");
+      await expect
+        .poll(() => segment(control(page), "Allowed").getAttribute("aria-checked"))
+        .toBe("true");
+    } finally {
+      await page.close();
+    }
+  },
+);
+
+it.each([
+  { outcome: "unavailable", message: unavailable },
+  { outcome: "already_ended", message: "Claude already ended. Nothing changed." },
+  {
+    outcome: "not_found",
+    message: "This connection or account no longer exists. Nothing changed. Reload the page.",
+  },
+  { outcome: "invalid", message: "Nothing changed. Reload the page." },
+])(
+  "restores each account value after $outcome and keeps the existing notice",
+  async ({ outcome, message }) => {
+    const page = await open();
+    try {
+      const routes = await pending(page);
+      const sent = page.waitForRequest((request) => request.method() === "POST");
+      await segment(accountControl(page, "Personal"), "Not allowed").click();
+      await sent;
+      await answer(routes[0]!, outcome);
+      await page.getByText(message, { exact: true }).filter({ visible: true }).waitFor();
+      await selected(accountControl(page, "Personal"), null);
+      await selected(control(page, "Personal"), "Allowed");
+      await selected(searchControl(page, "Personal"), "Not allowed");
+      for (const group of [
+        accountControl(page, "Personal"),
+        control(page, "Personal"),
+        searchControl(page, "Personal"),
+      ])
+        expect(await group.getAttribute("aria-disabled")).toBe("false");
+    } finally {
+      await page.close();
+    }
+  },
+);
+
+it("derives the account value from confirmed tools while one saves, then disables it after that answer is lost", async () => {
+  const page = await open();
+  try {
+    const routes = await pending(page);
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await segment(control(page), "Allowed").click();
+    await sent;
+    await selected(accountControl(page), "Not allowed");
+    expect(await accountControl(page).getAttribute("aria-disabled")).toBe("true");
+    expect(await accountControl(page).getAttribute("aria-busy")).toBe("false");
+    expect(await panel(page).getByText("Saving…", { exact: true }).count()).toBe(0);
+    await segment(accountControl(page), "Allowed").click({ force: true });
+    expect(await page.getByRole("alertdialog").count()).toBe(0);
+    await answer(routes[0]!, "unknown");
+    await panel(page).getByText("Unconfirmed", { exact: true }).waitFor();
+    await selected(accountControl(page), null);
+    await selected(searchControl(page), "Not allowed");
+    const next = page.waitForRequest((request) => request.method() === "POST");
+    await segment(searchControl(page), "Allowed").click();
+    await next;
+    await answer(routes[1]!, "ok");
+    await expect.poll(() => searchControl(page).getAttribute("aria-busy")).toBe("false");
+    await selected(accountControl(page), null);
+    expect(await accountControl(page).getAttribute("aria-disabled")).toBe("true");
+    expect(await panel(page).getByText("Unconfirmed", { exact: true }).count()).toBe(1);
+  } finally {
+    await page.close();
+  }
+});
+
+it("accepts only one account activation before React commits the saving state", async () => {
+  const page = await open();
+  try {
+    const routes = await pending(page);
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await segment(accountControl(page, "Personal"), "Not allowed").evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await sent;
+    await frames(page);
+    expect(routes).toHaveLength(1);
+    await answer(routes[0]!, "ok");
+  } finally {
+    await page.close();
+  }
+});
+
+it("orders groups once per account, preserves tool order and starts only the first account open with several groups", async () => {
+  const page = await open(1280, true);
+  try {
+    const first = panel(page, "Personal");
+    expect(await first.getByRole("heading", { level: 4 }).allTextContents()).toEqual([
+      "Find and read",
+      "Draft",
+      "Send",
+    ]);
+    for (const [group, labels] of [
+      ["Find and read", ["List labels", "Search mail"]],
+      ["Draft", ["Create draft"]],
+      ["Send", ["Send mail"]],
+    ] as const) {
+      const section = first.getByRole("group", { name: group, exact: true });
+      expect(await section.locator('[data-slot="item-title"]').allTextContents()).toEqual(labels);
+      expect(await section.getByRole("radiogroup").count()).toBe(labels.length);
+    }
+    expect(await page.getByText("All 4 tools", { exact: true }).count()).toBe(4);
+    expect(await control(page, "Personal").isVisible()).toBe(true);
+    for (const name of [
+      "Northwind",
+      "Projects",
+      "Fabrikam Holdings International, Finance and Legal Operations",
+    ]) {
+      expect(
+        await page.getByRole("button", { name, exact: true }).getAttribute("aria-expanded"),
+      ).toBe("false");
+      expect(await accountControl(page, name).isVisible()).toBe(true);
+      expect(await control(page, name).isVisible()).toBe(false);
+    }
+    expect(await page.getByRole("heading", { level: 4 }).count()).toBe(3);
+    await page.getByRole("button", { name: "Northwind", exact: true }).click();
+    expect(await panel(page).getByRole("heading", { level: 4 }).allTextContents()).toEqual([
+      "Find and read",
+      "Draft",
+      "Send",
+    ]);
+  } finally {
+    await page.close();
+  }
+});
+
+it("shows ordered group values or counts only for a closed mixed account, and removes them after a lost answer", async () => {
+  const page = await open(390, true);
+  try {
+    const routes = await pending(page);
+    expect(
+      await panel(page)
+        .getByText("1 allowed · 2 ask first · 1 not allowed", { exact: true })
+        .count(),
+    ).toBe(1);
+    expect(await panel(page).locator("dl dt").allTextContents()).toEqual([
+      "Find and read",
+      "Draft",
+      "Send",
+    ]);
+    expect(await panel(page).locator("dl dd").allTextContents()).toEqual([
+      "1 allowed · 1 ask first",
+      "Ask first",
+      "Not allowed",
+    ]);
+    const header = page.getByRole("button", { name: "Northwind", exact: true });
+    await header.click();
+    expect(await control(page).isVisible()).toBe(true);
+    expect(await panel(page).locator("dl").count()).toBe(0);
+    await header.click();
+    expect(await panel(page, "Projects").locator("dl").count()).toBe(0);
+    expect(await panel(page).getByText("Mixed", { exact: true }).count()).toBe(0);
+    expect(await panel(page).locator('[data-slot="badge"]').count()).toBe(0);
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await segment(accountControl(page), "Not allowed").click();
+    const form = new URLSearchParams((await sent).postData()!);
+    expect(form.getAll("tool")).toEqual(["send", "list_labels", "draft", "search_threads"]);
+    await answer(routes[0]!, "unknown");
+    await panel(page).getByText("Unconfirmed", { exact: true }).waitFor();
+    expect(await panel(page).locator("dl").count()).toBe(0);
+    await selected(accountControl(page), null);
   } finally {
     await page.close();
   }

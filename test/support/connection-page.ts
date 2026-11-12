@@ -1,6 +1,9 @@
 import type { AccountView } from "../../src/accounts/model";
 import { parseAccountId } from "../../src/accounts/model";
 import { parseConnectionId } from "../../src/connections/model";
+import type { FramePage } from "../../src/pages/page";
+
+type ConnectionPage = Extract<FramePage, { _tag: "Connection" }>;
 
 export const connectionPage = {
   _tag: "Connection" as const,
@@ -12,7 +15,7 @@ export const connectionPage = {
   connection: {
     id: parseConnectionId("11111111-1111-4111-8111-111111111111")!,
     name: "Claude",
-    appLabel: "Claude",
+    appLabel: "Claude Code",
     status: { kind: "active" as const },
     created: "Nov 1",
     lastUsed: "Never",
@@ -51,10 +54,44 @@ export const connectionPage = {
   tools: [
     {
       name: "list_labels" as const,
+      group: "Find and read",
       label: "List labels",
       description: "See the names of this account's Gmail labels.",
+    },
+    {
+      name: "search_threads",
+      group: "Find and read",
+      label: "Search mail",
+      description:
+        "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",
     },
   ],
   settings: { "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:list_labels": "allow" as const },
   requiredGmailScopes: 5,
-};
+} satisfies ConnectionPage;
+
+export const groupedConnectionPage = {
+  ...connectionPage,
+  tools: [
+    { name: "send", label: "Send mail", description: "Send a message.", group: "Send" },
+    {
+      name: "list_labels",
+      label: "List labels",
+      description: "See Gmail labels.",
+      group: "Find and read",
+    },
+    { name: "draft", label: "Create draft", description: "Save a draft.", group: "Draft" },
+    {
+      name: "search_threads",
+      label: "Search mail",
+      description: "Find threads.",
+      group: "Find and read",
+    },
+  ],
+  settings: {
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:list_labels": "allow",
+    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:list_labels": "allow",
+    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:search_threads": "ask",
+    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:draft": "ask",
+  },
+} satisfies ConnectionPage;
