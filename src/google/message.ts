@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { isoSeconds } from "../approvals/model";
-import { boundedRecipients, MAX_BODY_BYTES, PAGE_BODY_BYTES, shorten } from "./bounds";
+import { boundedRecipients, PAGE_BODY_BYTES, shorten } from "./bounds";
 
 export const Headers = Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String }));
 interface RawPart {
@@ -124,14 +124,17 @@ export const readMessage = (raw: RawMessage): Message => {
     return body;
   };
   const collect = (part: RawPart) => {
+    if (part.mimeType.startsWith("multipart/")) {
+      part.parts?.forEach(collect);
+      return;
+    }
     parts.push(part);
     if (
       part.mimeType === "text/html" &&
-      part.body.size <= MAX_BODY_BYTES &&
+      part.body.size <= PAGE_BODY_BYTES &&
       part.body.data !== undefined
     )
       html.push(source(part));
-    part.parts?.forEach(collect);
   };
   collect(raw.payload);
   const readable = (body: Body) => body.kind === "alternative" || body.size <= PAGE_BODY_BYTES;
@@ -153,7 +156,7 @@ export const readMessage = (raw: RawMessage): Message => {
       if (plains.length || readableHtml) return chosen;
       return alternatives.find((bodies) => bodies.some((body) => body.kind === "plain")) ?? chosen;
     }
-    if (part.parts) return part.parts.flatMap(select);
+    if (part.mimeType.startsWith("multipart/")) return (part.parts ?? []).flatMap(select);
     if (part.filename) return [];
     if (part.mimeType !== "text/plain" && part.mimeType !== "text/html") return [];
     return [source(part)];
@@ -174,13 +177,10 @@ export const readMessage = (raw: RawMessage): Message => {
     attachments: parts
       .filter(
         (part) =>
-          // The root has no partId and is named 0, as its first part is. Only a root that is
-          // the whole message can be a file.
-          !(part === raw.payload && part.parts?.length) &&
-          (part.filename ||
-            (part.body.attachmentId &&
-              part.mimeType !== "text/plain" &&
-              part.mimeType !== "text/html")),
+          part.filename ||
+          (part.body.attachmentId &&
+            part.mimeType !== "text/plain" &&
+            part.mimeType !== "text/html"),
       )
       .map((part) => ({
         attachment: part.partId || "0",

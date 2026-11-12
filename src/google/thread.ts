@@ -7,7 +7,6 @@ import {
   BODY_PART_LEFT_OUT,
   BODY_BYTES_LEFT_OUT,
   HTML_UNREADABLE,
-  MAX_BODY_BYTES,
   MAX_TEXT,
   PAGE_BODY_BYTES,
   shorten,
@@ -83,7 +82,7 @@ class BodyBudget {
   private cost(bodies: readonly Body[], fallbacks: boolean) {
     const cost = { bytes: 0, requests: 0 };
     for (const part of bodyParts(bodies, fallbacks)) {
-      if (this.used.has(part) || part.size > MAX_BODY_BYTES) continue;
+      if (this.used.has(part) || part.size > PAGE_BODY_BYTES) continue;
       cost.bytes += part.size;
       if ("fetch" in part) cost.requests++;
     }
@@ -97,7 +96,7 @@ class BodyBudget {
     return this.cost(bodies, false).bytes <= this.left.bytes;
   }
   take(part: BodyPart): string | undefined {
-    if (part.size > MAX_BODY_BYTES)
+    if (part.size > PAGE_BODY_BYTES)
       return `[The body of this message is too large to read: ${part.size} bytes.]`;
     if (this.used.has(part)) return;
     if ("fetch" in part && this.left.requests === 0) return BODY_PART_LEFT_OUT;
