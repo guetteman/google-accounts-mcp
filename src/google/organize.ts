@@ -3,7 +3,6 @@ import type { Send } from "../mcp/tools";
 import { notFound, ToolFailure } from "../mcp/failures";
 import { viewDate, type ViewNote, type ViewValue } from "../approvals/model";
 import { change, changeEach, listLabels, REQUESTS_AT_ONCE, threadSummary } from "./gmail";
-import { shorten } from "./bounds";
 
 export const MAX_LABELS = 100;
 /** Moving mail to the trash or spam is not this tool's job; Gmail sets SENT and DRAFT itself. */
@@ -161,7 +160,7 @@ export const labelChangeValues = (
           return [
             {
               name: `${prefix} subject`,
-              text: shorten(summary.subject, 500),
+              text: summary.subject,
               from: "gmail" as const,
             },
             {
@@ -171,7 +170,7 @@ export const labelChangeValues = (
             },
             {
               name: `${prefix} last from`,
-              text: shorten(summary.from, 500),
+              text: summary.from,
               from: "gmail" as const,
             },
             { name: `${prefix} last date`, text: viewDate(summary.date), from: "gmail" as const },
