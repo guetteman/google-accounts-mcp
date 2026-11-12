@@ -1,7 +1,5 @@
-import { applyD1Migrations, reset } from "cloudflare:test";
-import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, expect, vi } from "vite-plus/test";
-import type { TestEnv } from "./env";
+import { resetBindings } from "./support/reset";
 
 beforeEach(async () => {
   // Resolve fixtures after a test's hoisted module reset, so mocked SSR components and
@@ -12,8 +10,7 @@ beforeEach(async () => {
   network.enable();
   unhandledFrames.length = 0;
   requests.length = 0;
-  await reset();
-  await applyD1Migrations(env.DB, (env as TestEnv).TEST_MIGRATIONS);
+  await resetBindings();
   freshAccessIssuer();
   access.reset();
   const { oauth } = await import("./support/oauth");

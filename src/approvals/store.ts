@@ -154,6 +154,34 @@ export const stillApproved = (ctx: ApprovalContext, won: Won): Effect.Effect<voi
     ),
   );
 
+const waitingStatement = (
+  ctx: Pick<CallContext, "db" | "owner" | "connection">,
+  identity: Identity,
+  now: number,
+) =>
+  ctx.db
+    .prepare(`SELECT id, expires_at FROM approvals WHERE connection_id = ?1 AND identity = ?2
+            AND state = 'waiting' AND expires_at > ?3 AND ${ownerGuard("?4", "?5")}`)
+    .bind(ctx.connection.connectionId, identity, now, ctx.owner.generation, ctx.owner.email);
+const decodeWaiting = (raw: unknown): { id: ApprovalId; expiresAt: number } | null => {
+  if (raw === undefined || raw === null) return null;
+  const row = Schema.decodeUnknownSync(
+    Schema.Struct({ id: Schema.String, expires_at: Schema.Int }),
+  )(raw);
+  const id = parseApprovalId(row.id);
+  if (!id) throw new WriteUncertain();
+  return { id, expiresAt: row.expires_at };
+};
+export const waitingApproval = (
+  ctx: Pick<CallContext, "db" | "owner" | "connection">,
+  identity: Identity,
+  now: number,
+): Effect.Effect<{ id: ApprovalId; expiresAt: number } | null, Unavailable> =>
+  Effect.tryPromise({
+    try: async () => decodeWaiting(await waitingStatement(ctx, identity, now).first<unknown>()),
+    catch: () => new Unavailable(),
+  });
+
 export const createApproval = (
   ctx: CallContext,
   input: {
@@ -207,34 +235,15 @@ export const createApproval = (
           )
           .bind(ctx.connection.connectionId, at, ctx.owner.generation, ctx.owner.email),
         ...(input.identity
-          ? [
-              rowStatement(ctx.db, input.identity),
-              ctx.db
-                .prepare(`SELECT id, expires_at FROM approvals WHERE connection_id = ?1 AND identity = ?2
-            AND state = 'waiting' AND expires_at > ?3 AND ${ownerGuard("?4", "?5")}`)
-                .bind(
-                  ctx.connection.connectionId,
-                  input.identity,
-                  at,
-                  ctx.owner.generation,
-                  ctx.owner.email,
-                ),
-            ]
+          ? [rowStatement(ctx.db, input.identity), waitingStatement(ctx, input.identity, at)]
           : []),
       ]);
       if (results[0]!.results.length) return "created";
       if (input.identity) {
         const repeat = decodeRow(results[3]!, at);
         if (repeat) return { repeat };
-        const waiting = results[4]!.results[0];
-        if (waiting) {
-          const row = Schema.decodeUnknownSync(
-            Schema.Struct({ id: Schema.String, expires_at: Schema.Int }),
-          )(waiting);
-          const id = parseApprovalId(row.id);
-          if (!id) throw new WriteUncertain();
-          return { waiting: { id, expiresAt: row.expires_at } };
-        }
+        const waiting = decodeWaiting(results[4]!.results[0]);
+        if (waiting) return { waiting };
       }
       return Number((results[2]!.results[0] as { count: number }).count) >= WAITING_LIMIT
         ? ("limit" as const)

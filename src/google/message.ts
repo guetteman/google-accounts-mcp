@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { isoSeconds } from "../approvals/model";
-import { boundedRecipients, MAX_BODY_BYTES, PAGE_BODY_BYTES, shorten } from "./bounds";
+import { boundedRecipients, PAGE_BODY_BYTES, shorten } from "./bounds";
 
 export const Headers = Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String }));
 export interface RawPart {
@@ -123,13 +123,16 @@ export const readMessage = (raw: RawMessage): Message => {
     return body;
   };
   const collect = (part: RawPart) => {
+    if (part.mimeType.startsWith("multipart/")) {
+      part.parts?.forEach(collect);
+      return;
+    }
     if (
       part.mimeType === "text/html" &&
-      part.body.size <= MAX_BODY_BYTES &&
+      part.body.size <= PAGE_BODY_BYTES &&
       part.body.data !== undefined
     )
       html.push(source(part));
-    part.parts?.forEach(collect);
   };
   collect(raw.payload);
   const readable = (body: Body) => body.kind === "alternative" || body.size <= PAGE_BODY_BYTES;
@@ -151,7 +154,7 @@ export const readMessage = (raw: RawMessage): Message => {
       if (plains.length || readableHtml) return chosen;
       return alternatives.find((bodies) => bodies.some((body) => body.kind === "plain")) ?? chosen;
     }
-    if (part.parts) return part.parts.flatMap(select);
+    if (part.mimeType.startsWith("multipart/")) return (part.parts ?? []).flatMap(select);
     if (part.filename) return [];
     if (part.mimeType !== "text/plain" && part.mimeType !== "text/html") return [];
     return [source(part)];
@@ -177,14 +180,15 @@ export const readMessage = (raw: RawMessage): Message => {
 export const attachmentParts = (raw: RawMessage): RawPart[] => {
   const files: RawPart[] = [];
   const collect = (part: RawPart) => {
-    // A multipart root and its first child can both be named 0. Only the child is a file.
+    if (part.mimeType.startsWith("multipart/")) {
+      part.parts?.forEach(collect);
+      return;
+    }
     if (
-      !(part === raw.payload && part.parts?.length) &&
-      (part.filename ||
-        (part.body.attachmentId && part.mimeType !== "text/plain" && part.mimeType !== "text/html"))
+      part.filename ||
+      (part.body.attachmentId && part.mimeType !== "text/plain" && part.mimeType !== "text/html")
     )
       files.push(part);
-    part.parts?.forEach(collect);
   };
   collect(raw.payload);
   return files;

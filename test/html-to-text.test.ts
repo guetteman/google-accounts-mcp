@@ -64,6 +64,7 @@ it.each([
   ["unclosed blockquote", "<section><blockquote>Quoted</section><p>After</p>", "> Quoted\nAfter"],
   ["preformatted at edges", "<pre>  code \n\n   tail\t  </pre>", "  code \n\n   tail\t  "],
   ["whitespace-only pre", "<pre>   </pre>", "   "],
+  ["trailing generated newline in pre", "<p>x</p><pre>line<br></pre>", "x\nline"],
   [
     "table cell boundaries",
     "<table><tr><th>Total</th><td>$15.00</td></tr></table>",
@@ -119,26 +120,25 @@ it.each([
 
 it("decodes an entity even when HTMLRewriter splits its text node into chunks", async () => {
   const OriginalResponse = Response;
-  // A real streaming Response makes the parser split one text node in the middle of an entity.
-  // A string-backed Response arrives in one chunk, however long the string is.
+  // Split the real input stream inside an entity, independently of the producer's chunk size.
   vi.stubGlobal(
     "Response",
     class extends OriginalResponse {
       constructor(body?: BodyInit | null, init?: ResponseInit) {
-        if (typeof body !== "string") {
-          super(body, init);
-          return;
-        }
-        const at = body.indexOf("&thetasym;") + 4;
-        const parts = [body.slice(0, at), body.slice(at)];
-        let next = 0;
+        const stream = new OriginalResponse(body, init).body;
         super(
-          new ReadableStream<Uint8Array>({
-            pull(controller) {
-              if (next < parts.length) controller.enqueue(new TextEncoder().encode(parts[next++]!));
-              else controller.close();
-            },
-          }),
+          stream?.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                const at = new TextDecoder().decode(chunk).indexOf("&thetasym;");
+                if (at < 0) controller.enqueue(chunk);
+                else {
+                  controller.enqueue(chunk.subarray(0, at + 4));
+                  controller.enqueue(chunk.subarray(at + 4));
+                }
+              },
+            }),
+          ),
           init,
         );
       }
@@ -196,4 +196,75 @@ it("stops parsing at the text bound before an unparseable tail", async () => {
       "\n[The rest of this message was left out: it is longer than 1,000,000 characters.]",
     ),
   ).toBe(true);
+});
+
+it("keeps the omission notice when an unclosed link reaches the text bound", async () => {
+  const html = "x".repeat(999990) + `<a href="https://example.com/${"a".repeat(100)}">link`;
+  const text = await htmlToText(html);
+  const notice =
+    "\n[The rest of this message was left out: it is longer than 1,000,000 characters.]";
+  expect(
+    text === "x".repeat(1000000 - notice.length) + notice,
+    "The unclosed link keeps the bounded prefix and omission notice",
+  ).toBe(true);
+});
+
+it("awaits the parser input's completion when text reaches the bound", async () => {
+  const OriginalResponse = Response;
+  const ended = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  vi.stubGlobal(
+    "Response",
+    class extends OriginalResponse {
+      constructor(body?: BodyInit | null, init?: ResponseInit) {
+        const reader = new OriginalResponse(body, init).body!.getReader();
+        super(
+          new ReadableStream<Uint8Array>({
+            async pull(controller) {
+              const chunk = await reader.read();
+              if (chunk.done) {
+                ended.resolve();
+                await release.promise;
+                controller.close();
+              } else controller.enqueue(chunk.value);
+            },
+            cancel(reason) {
+              return reader.cancel(reason);
+            },
+          }),
+          init,
+        );
+      }
+    },
+  );
+  const conversion = htmlToText("<blockquote>".repeat(500) + "x<br>".repeat(2000));
+  try {
+    await Promise.race([
+      ended.promise,
+      conversion.then(() => {
+        throw new Error("Conversion returned before its input finished");
+      }),
+    ]);
+    let settled = false;
+    void conversion.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release.resolve();
+    expect(
+      (await conversion).endsWith(
+        "\n[The rest of this message was left out: it is longer than 1,000,000 characters.]",
+      ),
+    ).toBe(true);
+  } finally {
+    release.resolve();
+    await conversion.catch(() => {});
+    vi.unstubAllGlobals();
+  }
 });

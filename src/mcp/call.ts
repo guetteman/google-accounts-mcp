@@ -1,4 +1,4 @@
-import { createApproval } from "../approvals/store";
+import { createApproval, waitingApproval } from "../approvals/store";
 import { APPROVAL_LIFETIME, CALL_DEADLINE, isoSeconds, type ApprovalId } from "../approvals/model";
 import { pendingAnswer } from "../approvals/result";
 import { sealArguments } from "../approvals/text";
@@ -372,33 +372,53 @@ export async function runCall(
             value = pendingAnswer(ctx.origin, approval, at + APPROVAL_LIFETIME);
           }
         } else {
-          const executed = await executeAccount(
-            ctx,
-            tool,
-            allowed,
-            decoded.value,
-            at + CALL_DEADLINE,
-            Effect.tryPromise({
-              try: () =>
-                ctx.db.batch([
-                  allowedAccountStatement(ctx, tool.name, account!),
-                  seenAccountStatement(ctx, account!),
-                ]),
-              catch: () => new ToolFailure({ code: "server_unavailable" }),
-            }).pipe(
-              Effect.flatMap((checked) => {
-                const row = checked[0]!.results[0];
-                if (!row) return Effect.fail(notAllowed(checked[1]!.results[0]));
-                return (row as { ask: unknown }).ask === 0
-                  ? Effect.void
-                  : Effect.fail(new ToolFailure({ code: "server_unavailable" }));
-              }),
-            ),
-          );
-          if (executed.kind === "repeat") {
+          const waiting = tool.create
+            ? await Effect.runPromise(
+                waitingApproval(
+                  ctx,
+                  await identityOf(ctx.config.tokenKey, {
+                    connection: ctx.connection.connectionId,
+                    account: allowed.credential.id,
+                    tool: tool.name,
+                    args: { ...decoded.value },
+                    defaults: tool.defaults,
+                  }),
+                  ctx.now(),
+                ),
+              )
+            : null;
+          if (waiting) {
             outcome = "repeat";
-            value = repeatAnswer(executed.repeat, email, tool, decoded.value);
-          } else value = executed.value;
+            value = pendingAnswer(ctx.origin, waiting.id, waiting.expiresAt);
+          } else {
+            const executed = await executeAccount(
+              ctx,
+              tool,
+              allowed,
+              decoded.value,
+              at + CALL_DEADLINE,
+              Effect.tryPromise({
+                try: () =>
+                  ctx.db.batch([
+                    allowedAccountStatement(ctx, tool.name, account!),
+                    seenAccountStatement(ctx, account!),
+                  ]),
+                catch: () => new ToolFailure({ code: "server_unavailable" }),
+              }).pipe(
+                Effect.flatMap((checked) => {
+                  const row = checked[0]!.results[0];
+                  if (!row) return Effect.fail(notAllowed(checked[1]!.results[0]));
+                  return (row as { ask: unknown }).ask === 0
+                    ? Effect.void
+                    : Effect.fail(new ToolFailure({ code: "server_unavailable" }));
+                }),
+              ),
+            );
+            if (executed.kind === "repeat") {
+              outcome = "repeat";
+              value = repeatAnswer(executed.repeat, email, tool, decoded.value);
+            } else value = executed.value;
+          }
         }
       }
       result = { content: [{ type: "text", text: JSON.stringify(value) }] };

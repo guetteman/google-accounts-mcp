@@ -1,5 +1,4 @@
 /** Bounds on fields and text supplied by a mail's sender, before page fitting. */
-export const MAX_BODY_BYTES = 5_000_000;
 export const PAGE_BODY_BYTES = 2_000_000;
 export const MAX_TEXT = 1_000_000;
 export const HTML_UNREADABLE = "[The HTML of this message could not be converted to text.]";
