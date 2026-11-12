@@ -172,6 +172,13 @@ it("preserves a failed label read and changes nothing", async () => {
   await expectError(await labelCall(f), "google_unavailable", unavailableMessage(PERSONAL));
   expect(google.modifyRequests).toEqual([]);
 });
+it("reports a lost label read as a failure that changed nothing", async () => {
+  const f = await allowed();
+  google.labelAnswers.push(() => HttpResponse.error());
+  await expectError(await labelCall(f), "google_unavailable", unavailableMessage(PERSONAL));
+  expect(google.modifyRequests).toEqual([]);
+  expect((await callRows()).at(-1)?.outcome).toBe("failed");
+});
 
 it.each([
   { add: ["missing_add"], remove: ["INBOX"], id: "missing_add" },
