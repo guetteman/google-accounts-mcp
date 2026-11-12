@@ -403,3 +403,38 @@ it("O4 W6: an approved final database failure ends failed with its error and a c
   expect(google.sends).toEqual([]);
   expect(google.deletes).toEqual(["draft-1"]);
 });
+
+it("W4: the reserve also bounds preparation waiting for a token refresh", async () => {
+  const f = await sendFixture();
+  const at = Date.now();
+  const entered = deferred();
+  google.draftCreateAnswers.push(() => new Response(null, { status: 401 }));
+  google.refreshAnswers.push((signal) => {
+    entered.resolve();
+    return never({ signal });
+  });
+  const db = observeStatements(
+    env.DB,
+    () => {},
+    (sql) => {
+      if (sql.startsWith("INSERT INTO once")) vi.mocked(Date.now).mockReturnValue(at + 8_000);
+    },
+  );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let finished = false;
+  const work = sendCall(f, "send_message", {}, testEnv({ DB: db })).then((response) => {
+    finished = true;
+    return response;
+  });
+  await entered.promise;
+  try {
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(finished).toBe(true);
+    await expectError(await work, "google_unavailable", /Google could not complete/);
+    expect(google.sends).toEqual([]);
+    expect(await onceRows()).toEqual([]);
+  } finally {
+    await vi.advanceTimersByTimeAsync(3_000);
+    await work;
+  }
+});

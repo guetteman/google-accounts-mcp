@@ -485,3 +485,20 @@ it.each(sendCases)(
     expect(google.draftCreates.length + google.uploads.length).toBe(name === "send_draft" ? 0 : 1);
   },
 );
+
+it("O12: ask then allow returns the same pending approval until Approve sends once", async () => {
+  const f = await sendFixture("send_message", "ask");
+  const pending = await answer(await sendCall(f));
+  await setSend(f, "send_message", "allow");
+  expect(await answer(await sendCall(f))).toEqual(pending);
+  expect(google.sends).toEqual([]);
+  expect(google.draftCreates).toEqual([]);
+  expect(await onceRows()).toEqual([]);
+  expect(await rows()).toHaveLength(1);
+  expect((await callRows()).map((r) => r.outcome)).toEqual(["pending", "repeat"]);
+  expect((await approve(f, pending.approval as string)).state.kind).toBe("succeeded");
+  expect(google.sends).toHaveLength(1);
+  expect(google.draftCreates).toHaveLength(1);
+  expect((await answer(await sendCall(f))).repeat_of).toBe(isoSeconds(Date.now()));
+  expect(google.sends).toHaveLength(1);
+});

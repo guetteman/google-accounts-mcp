@@ -343,3 +343,29 @@ it.each(["create unreadable", "create lost", "create unanswered", "read lost"])(
     expect(google.sends).toHaveLength(1);
   },
 );
+
+it("F3: an attached mail is one file and its inner body and files stay inside it", async () => {
+  const f = await sendFixture("forward_message");
+  const raw = fullMessage();
+  const attached = "From: sam@example.com\r\nSubject: Attached\r\n\r\nInside the attached mail.";
+  const mail = {
+    ...part("message/rfc822", attached, "1", "original.eml"),
+    parts: [
+      part("text/plain", "MUST_STAY_INSIDE", "1.0"),
+      part("application/pdf", "INNER_FILE", "1.1", "inner.pdf"),
+    ],
+  };
+  raw.payload = {
+    ...tree("multipart/mixed", [part("text/plain", "Outer body", "0"), mail]),
+    headers: raw.payload.headers,
+  };
+  serveFull(raw);
+  await answer(await sendCall(f, "forward_message"));
+  const sent = mime(google.uploads[0]!.message);
+  expect(sent.parts).toHaveLength(2);
+  expect(new TextDecoder().decode(sent.parts[0]!.data)).toContain("Outer body");
+  expect(new TextDecoder().decode(sent.parts[0]!.data)).not.toContain("MUST_STAY_INSIDE");
+  expect(sent.parts[1]!.headers["Content-Type"]).toBe("message/rfc822");
+  expect(new TextDecoder().decode(sent.parts[1]!.data)).toBe(attached);
+  expect(google.attachmentRequests).toEqual([]);
+});

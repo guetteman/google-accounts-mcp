@@ -198,7 +198,7 @@ it.each(["headers", "text", "html", "parts", "bytes", "files"])(
         ...part("text/html", "<p>" + "x".repeat(1_000_001) + "</p>"),
         headers: raw.payload.headers,
       };
-    if (kind === "bytes") raw.payload.body = { size: 5_000_001, attachmentId: "too-big" };
+    if (kind === "bytes") raw.payload.body = { size: 2_000_001, attachmentId: "too-big" };
     if (kind === "parts")
       raw.payload = {
         ...tree(

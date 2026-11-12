@@ -135,6 +135,15 @@ export async function executeAccount(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(0, reserve - ctx.now()));
     const unavailable = () => new ToolFailure({ code: "google_unavailable" });
+    const stopped = Effect.callback<never, ToolFailure>((resume) => {
+      const fail = () => resume(Effect.fail(unavailable()));
+      if (controller.signal.aborted) {
+        fail();
+        return;
+      }
+      controller.signal.addEventListener("abort", fail, { once: true });
+      return Effect.sync(() => controller.signal.removeEventListener("abort", fail));
+    });
     const send: Send = (build) =>
       requests
         .send((token, signal) => {
@@ -144,6 +153,8 @@ export async function executeAccount(
           return request;
         })
         .pipe(
+          // Token acquisition can be waiting before a request is built. It shares the reserve.
+          Effect.raceFirst(stopped),
           Effect.mapError((failure) =>
             controller.signal.aborted || ctx.now() >= reserve ? unavailable() : failure,
           ),
