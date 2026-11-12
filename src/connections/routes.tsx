@@ -157,6 +157,7 @@ connectionRoutes.get("/connections/:id", ownerOnly, async (c) => {
       label: t.label,
       description: t.permissionDescription,
       group: t.group,
+      irreversible: t.irreversible,
     })),
     requiredGmailScopes: GMAIL_SCOPES.length,
   });

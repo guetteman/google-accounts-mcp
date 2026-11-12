@@ -7,6 +7,7 @@ import { fixture, permission, problemCases } from "./support/permissions";
 import { textOf } from "./support/worker";
 import type { FramePage } from "../src/pages/page";
 import { GROUPS } from "../src/mcp/groups";
+import { TOOLS } from "../src/mcp/tools";
 
 function pageProps(html: string) {
   const json = /<script\b[^>]*id="page-props"[^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];
@@ -70,6 +71,7 @@ it("renders tools under their groups in tool-list order, with no empty group", a
     name: "change_labels",
     label: "Change labels",
     group: "Organize",
+    irreversible: false,
     description:
       "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam, or take it out.",
   });
@@ -189,3 +191,23 @@ it.each(["00000000-0000-4000-8000-000000000000", "not-an-id"])(
       expect(html).not.toContain(value);
   },
 );
+
+it("tells the page which tools cannot be undone, from each tool's own declaration", async () => {
+  const f = await fixture();
+  const tool = TOOLS.find((tool) => tool.name === "search_threads")!;
+  if (tool.kind !== "account") throw new Error("search_threads has a setting");
+  const original = tool.irreversible;
+  tool.irreversible = true;
+  try {
+    const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
+    const shown = pageProps(html).tools.map(({ name, irreversible }) => ({ name, irreversible }));
+    expect(shown).toContainEqual({ name: "search_threads", irreversible: true });
+    expect(shown).toEqual(
+      TOOLS.flatMap((tool) =>
+        tool.kind === "account" ? [{ name: tool.name, irreversible: tool.irreversible }] : [],
+      ),
+    );
+  } finally {
+    tool.irreversible = original;
+  }
+});
