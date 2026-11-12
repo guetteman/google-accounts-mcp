@@ -2,6 +2,7 @@ import type { ApprovalPageProps } from "../approvals/model";
 import type { AcceptedClient } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
 import type { ConfigName } from "../config";
+import type { Group } from "../mcp/groups";
 
 import type { AccountView } from "../accounts/model";
 import type { AccountsAlert } from "../accounts/flow";
@@ -23,6 +24,7 @@ export type FramePage =
         name: string;
         label: string;
         description: string;
+        group: Group;
       }>;
       readonly settings: Readonly<Record<string, "ask" | "allow">>;
       readonly requiredGmailScopes: number;

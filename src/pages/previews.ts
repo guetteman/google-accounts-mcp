@@ -101,19 +101,26 @@ const connectionPreview = (scenario: string): Page => {
     },
     accounts,
     settings: Object.fromEntries(
-      allowed.map((a, i) => [
-        `${a.id}:list_labels`,
-        scenario === "some-allowed" && i === 0 ? "ask" : "allow",
-      ]),
+      allowed.flatMap((a, i) =>
+        (scenario === "all-allowed" || i === 0
+          ? ["list_labels", "search_threads"]
+          : ["list_labels"]
+        ).map((tool) => [
+          `${a.id}:${tool}`,
+          scenario !== "all-allowed" && i === 0 ? "ask" : "allow",
+        ]),
+      ),
     ),
     tools: [
       {
         name: "list_labels",
+        group: "Find and read",
         label: "List labels",
         description: "See the names of this account's Gmail labels.",
       },
       {
         name: "search_threads",
+        group: "Find and read",
         label: "Search mail",
         description:
           "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",

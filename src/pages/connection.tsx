@@ -12,6 +12,7 @@ import {
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
+  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -19,7 +20,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -63,10 +63,12 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ConnectionView } from "../connections/model";
+import { GROUPS } from "../mcp/groups";
 import type { FramePage } from "./page";
 import { OwnerFrame } from "./frame";
 import { AccountStatusText } from "./accounts";
@@ -74,8 +76,11 @@ import { postAction } from "./actions";
 import { outcomeMessage, permissionMessage } from "./connection-actions";
 
 type Props = Omit<Extract<FramePage, { _tag: "Connection" }>, "_tag">;
+type Account = Props["accounts"][number];
+type Tool = Props["tools"][number];
 type Action = "name" | "revoke";
 type ControlState = { value: Setting; phase: "confirmed" | "saving" } | { phase: "unconfirmed" };
+type Pending = { account: Account; wanted: "ask" | "allow"; count: number };
 const values = [
   { value: "deny", label: "Not allowed", icon: BanIcon },
   { value: "ask", label: "Ask first", icon: CircleQuestionMarkIcon },
@@ -83,15 +88,40 @@ const values = [
 ] as const;
 const labelOf = (setting: Setting) => values.find((value) => value.value === setting)!.label;
 const selected: Record<Setting, string> = {
-  deny: "aria-checked:bg-background aria-checked:text-foreground aria-checked:shadow-xs aria-checked:hover:bg-background",
-  ask: "aria-checked:bg-background aria-checked:text-foreground aria-checked:shadow-xs aria-checked:ring-1 aria-checked:ring-foreground aria-checked:ring-inset aria-checked:hover:bg-background",
+  deny: "data-[state=on]:bg-background aria-checked:bg-background aria-checked:text-foreground aria-checked:shadow-xs aria-checked:hover:bg-background",
+  ask: "data-[state=on]:bg-background aria-checked:bg-background aria-checked:text-foreground aria-checked:shadow-xs aria-checked:ring-1 aria-checked:ring-foreground aria-checked:ring-inset aria-checked:hover:bg-background",
   allow:
-    "aria-checked:bg-primary aria-checked:text-primary-foreground aria-checked:hover:bg-primary aria-checked:hover:text-primary-foreground",
+    "data-[state=on]:bg-primary aria-checked:bg-primary aria-checked:text-primary-foreground aria-checked:hover:bg-primary aria-checked:hover:text-primary-foreground",
 };
+const keyOf = (account: Account, tool: Tool) => `${account.id}:${tool.name}`;
+const commonValue = (states: readonly ControlState[]): Setting | "" => {
+  const first = states[0];
+  if (!first || first.phase === "unconfirmed") return "";
+  return states.every((state) => state.phase !== "unconfirmed" && state.value === first.value)
+    ? first.value
+    : "";
+};
+const countsOf = (states: readonly ControlState[]) =>
+  values
+    .toReversed()
+    .map(({ value, label }) => ({
+      label: label.toLowerCase(),
+      count: states.filter((state) => state.phase !== "unconfirmed" && state.value === value)
+        .length,
+    }))
+    .filter(({ count }) => count > 0)
+    .map(({ count, label }) => `${count} ${label}`)
+    .join(" · ");
 
 export function ConnectionPage(props: Props) {
   const [connection, setConnection] = useState(props.connection);
   const [dialog, setDialog] = useState<Action | null>(null);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const groups = GROUPS.map((name) => ({
+    name,
+    tools: props.tools.filter((tool) => tool.group === name),
+  })).filter((group) => group.tools.length > 0);
   const [controls, setControls] = useState<Record<string, ControlState>>(() =>
     Object.fromEntries(
       props.accounts.flatMap((a) =>
@@ -104,7 +134,9 @@ export function ConnectionPage(props: Props) {
   );
   // A synchronous lock also covers two input events before React commits the saving state.
   const locked = useRef(new Set<string>());
-  const [closed, setClosed] = useState(new Set<string>());
+  const [closed, setClosed] = useState(
+    () => new Set(groups.length > 1 ? props.accounts.slice(1).map((account) => account.id) : []),
+  );
   const [message, setMessage] = useState<string | null>(props.permissionNotice ?? null);
   const active = connection.status.kind === "active";
   const visible = props.accounts.filter((a) =>
@@ -131,36 +163,61 @@ export function ConnectionPage(props: Props) {
       <span className="font-medium">{connection.name} can't see any of your accounts yet.</span>
     );
   const uncertainSummary = `Reload the page to confirm which accounts ${connection.name} can see.`;
-  const save = async (
-    account: Props["accounts"][number],
-    tool: Props["tools"][number],
-    wanted: Setting,
-  ) => {
-    const key = `${account.id}:${tool.name}`;
-    const state = controls[key];
-    if (!state || state.phase !== "confirmed" || state.value === wanted || locked.current.has(key))
+  const save = async (account: Account, tools: readonly Tool[], wanted: Setting) => {
+    const before = tools.map((tool) => ({
+      key: keyOf(account, tool),
+      state: controls[keyOf(account, tool)]!,
+    }));
+    if (before.some(({ key, state }) => state.phase !== "confirmed" || locked.current.has(key)))
       return;
-    locked.current.add(key);
+    if (before.every(({ state }) => state.phase !== "unconfirmed" && state.value === wanted))
+      return;
+    for (const { key } of before) locked.current.add(key);
     setMessage(null);
-    setControls((previous) => ({ ...previous, [key]: { ...state, phase: "saving" } }));
-    const { outcome } = await postAction(`/connections/${connection.id}/permissions`, {
-      account: account.id,
-      tool: tool.name,
-      setting: wanted,
-    });
     setControls((previous) => ({
       ...previous,
-      [key]:
-        outcome === "unknown"
-          ? { phase: "unconfirmed" }
-          : { phase: "confirmed", value: outcome === "ok" ? wanted : state.value },
+      ...Object.fromEntries(
+        before.map(({ key, state }): [string, ControlState] => [
+          key,
+          state.phase === "unconfirmed" ? state : { ...state, phase: "saving" },
+        ]),
+      ),
     }));
-    if (outcome !== "unknown") locked.current.delete(key);
+    const { outcome } = await postAction(`/connections/${connection.id}/permissions`, [
+      ["account", account.id],
+      ["setting", wanted],
+      ...tools.map((tool): [string, string] => ["tool", tool.name]),
+    ]);
+    setControls((previous) => ({
+      ...previous,
+      ...Object.fromEntries(
+        before.map(({ key, state }): [string, ControlState] => [
+          key,
+          outcome === "unknown"
+            ? { phase: "unconfirmed" }
+            : outcome === "ok"
+              ? { phase: "confirmed", value: wanted }
+              : state,
+        ]),
+      ),
+    }));
+    if (outcome !== "unknown") for (const { key } of before) locked.current.delete(key);
     // Only Dismiss or the owner's next change clears a notice. A save that was already in flight
     // must not hide it; only "couldn't confirm", the one that warns of unknown access, replaces it.
     const notice = permissionMessage(outcome, connection.name);
     const uncertainNotice = permissionMessage("unknown", connection.name);
     if (notice) setMessage((current) => (current && notice !== uncertainNotice ? current : notice));
+  };
+  const chooseAll = (account: Account, wanted: Setting) => {
+    const states = props.tools.map((tool) => controls[keyOf(account, tool)]!);
+    if (states.some((state) => state.phase !== "confirmed")) return;
+    const count = states.filter(
+      (state) => state.phase !== "unconfirmed" && state.value !== wanted,
+    ).length;
+    if (count === 0) return;
+    if (wanted === "deny") return void save(account, props.tools, wanted);
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPending({ account, wanted, count });
   };
   return (
     <OwnerFrame frame={props.frame}>
@@ -259,8 +316,8 @@ export function ConnectionPage(props: Props) {
                   ),
                 )}
               </div>
-              <section className="flex flex-col">
-                <div className="flex max-w-2xl flex-col gap-1 pb-2">
+              <section className="@container flex flex-col">
+                <div className="flex max-w-2xl flex-col gap-1 pb-6">
                   <h2 className="text-base font-medium">Tool permissions</h2>
                   <p className="text-sm text-muted-foreground">
                     Choose what {connection.name} can use on each Google account. With Ask first,
@@ -271,17 +328,23 @@ export function ConnectionPage(props: Props) {
                 </div>
                 {props.accounts.map((account) => {
                   const open = !closed.has(account.id);
-                  const states = props.tools.map((t) => controls[`${account.id}:${t.name}`]!);
-                  const common = new Set(
-                    states.flatMap((state) => (state.phase === "unconfirmed" ? [] : [state.value])),
-                  );
-                  const word = states.some((s) => s.phase === "unconfirmed")
-                    ? "Unconfirmed"
-                    : states.some((s) => s.phase === "saving")
-                      ? "Saving…"
-                      : common.size === 1
-                        ? labelOf([...common][0]!)
-                        : "Mixed";
+                  const states = props.tools.map((tool) => controls[keyOf(account, tool)]!);
+                  const phase = states.some((state) => state.phase === "unconfirmed")
+                    ? "unconfirmed"
+                    : states.every((state) => state.phase === "saving")
+                      ? "saving"
+                      : "confirmed";
+                  const value = commonValue(states);
+                  const note =
+                    phase === "unconfirmed"
+                      ? "Unconfirmed"
+                      : phase === "saving"
+                        ? "Saving…"
+                        : value
+                          ? ""
+                          : countsOf(states);
+                  const showGroups =
+                    !open && groups.length > 1 && !value && phase !== "unconfirmed";
                   return (
                     <Collapsible
                       key={account.id}
@@ -294,81 +357,144 @@ export function ConnectionPage(props: Props) {
                           return set;
                         })
                       }
-                      className="border-b"
+                      className="border-t py-6 last:border-b"
                     >
-                      <div className="flex flex-col gap-1 py-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <h3 className="min-w-0 flex-1">
-                            <CollapsibleTrigger className="group/trigger flex items-start gap-2 rounded-sm text-left text-base font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
-                              <ChevronDownIcon className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=closed]/trigger:-rotate-90" />
-                              <span className="wrap-anywhere">
-                                <span>{account.name}</span>
-                                <Badge
-                                  variant="outline"
-                                  className="ml-2 align-middle font-normal text-muted-foreground"
-                                >
-                                  {props.tools.length}
-                                  <span className="sr-only">
-                                    {props.tools.length === 1 ? " tool" : " tools"}
-                                  </span>
-                                </Badge>
-                              </span>
+                      <div className="flex flex-col gap-4">
+                        <div className="flex flex-col gap-1">
+                          <h3>
+                            <CollapsibleTrigger className="group/trigger flex w-full items-start justify-between gap-3 rounded-sm text-left text-base font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+                              <span className="min-w-0 wrap-anywhere">{account.name}</span>
+                              <ChevronDownIcon className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/trigger:rotate-180" />
                             </CollapsibleTrigger>
                           </h3>
-                          {!open && (
-                            <span className="w-24 shrink-0 text-right text-sm text-muted-foreground">
-                              {word}
-                            </span>
+                          <p className="text-sm wrap-anywhere text-muted-foreground">
+                            {account.email}
+                            {account.workspace && " · Workspace"}
+                          </p>
+                          {account.status.kind !== "ready" && (
+                            <p className="max-w-2xl pt-1 text-sm text-muted-foreground">
+                              <AccountStatusText
+                                account={account}
+                                requiredGmailScopes={props.requiredGmailScopes}
+                              />{" "}
+                              If a tool is set to Ask first or Allowed, {connection.name} sees this
+                              problem too.{" "}
+                              <a
+                                href="/accounts"
+                                className="text-foreground underline underline-offset-4"
+                              >
+                                {["needs_reconnect", "missing_access"].includes(account.status.kind)
+                                  ? "Reconnect on Accounts"
+                                  : "Go to Accounts"}
+                              </a>
+                            </p>
                           )}
                         </div>
-                        <p className="pl-6 text-sm wrap-anywhere text-muted-foreground">
-                          {account.email}
-                          {account.workspace && " · Workspace"}
-                        </p>
-                        {account.status.kind !== "ready" && (
-                          <p className="max-w-2xl pt-1 pl-6 text-sm text-muted-foreground">
-                            <AccountStatusText
-                              account={account}
-                              requiredGmailScopes={props.requiredGmailScopes}
-                            />{" "}
-                            If a tool is set to Ask first or Allowed, {connection.name} sees this
-                            problem too.{" "}
-                            <a
-                              href="/accounts"
-                              className="text-foreground underline underline-offset-4"
-                            >
-                              {["needs_reconnect", "missing_access"].includes(account.status.kind)
-                                ? "Reconnect on Accounts"
-                                : "Go to Accounts"}
-                            </a>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                          <p className="text-sm font-medium @3xl:w-44 @3xl:shrink-0">
+                            {props.tools.length === 2
+                              ? "Both tools"
+                              : props.tools.length === 1
+                                ? "All tools"
+                                : `All ${props.tools.length} tools`}
                           </p>
-                        )}
+                          <p
+                            className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-muted-foreground"
+                            aria-live="polite"
+                          >
+                            {note === "Saving…" && <Spinner aria-hidden className="size-3.5" />}
+                            {note}
+                          </p>
+                          <PermissionControl
+                            labelled
+                            label={`All tools on ${account.name} for ${connection.name}`}
+                            value={value}
+                            phase={phase}
+                            waiting={states.some((state) => state.phase === "saving")}
+                            choose={(wanted) => chooseAll(account, wanted)}
+                          />
+                        </div>
                       </div>
+                      {showGroups && (
+                        <dl
+                          className={cn(
+                            "flex flex-col gap-1.5 pt-4 text-sm",
+                            phase === "saving" && "opacity-50",
+                          )}
+                        >
+                          {groups.map((group) => {
+                            const states = group.tools.map(
+                              (tool) => controls[keyOf(account, tool)]!,
+                            );
+                            const value = commonValue(states);
+                            return (
+                              <div key={group.name} className="flex gap-3">
+                                <dt className="w-40 shrink-0 text-muted-foreground @3xl:w-44">
+                                  {group.name}
+                                </dt>
+                                <dd
+                                  className={cn(
+                                    "min-w-0 flex-1",
+                                    value === "deny" && "text-muted-foreground",
+                                  )}
+                                >
+                                  {value ? labelOf(value) : countsOf(states)}
+                                </dd>
+                              </div>
+                            );
+                          })}
+                        </dl>
+                      )}
                       <CollapsibleContent>
-                        <ItemGroup className="gap-0">
-                          {props.tools.map((tool) => (
-                            <Item
-                              key={tool.name}
-                              className="flex-nowrap gap-3 rounded-none border-0 py-2 pr-0 pl-6"
-                            >
-                              <ItemContent className="min-w-0 gap-0.5">
-                                <ItemTitle className="line-clamp-none font-normal">
-                                  {tool.label}
-                                </ItemTitle>
-                                <ItemDescription className="line-clamp-none">
-                                  {tool.description}
-                                </ItemDescription>
-                              </ItemContent>
-                              <ItemActions>
-                                <PermissionControl
-                                  label={`${tool.label} on ${account.name} for ${connection.name}`}
-                                  state={controls[`${account.id}:${tool.name}`]!}
-                                  choose={(wanted) => void save(account, tool, wanted)}
-                                />
-                              </ItemActions>
-                            </Item>
-                          ))}
-                        </ItemGroup>
+                        <div className="flex flex-col gap-5 pt-6 @3xl:gap-3 @3xl:pt-4">
+                          {groups.map((group) => {
+                            const heading = `${account.id}-${group.name.replaceAll(" ", "-")}`;
+                            return (
+                              <div
+                                key={group.name}
+                                role="group"
+                                aria-labelledby={heading}
+                                className="flex flex-col gap-1 @3xl:flex-row @3xl:gap-3"
+                              >
+                                <h4
+                                  id={heading}
+                                  className="text-sm leading-snug text-muted-foreground @3xl:w-44 @3xl:shrink-0 @3xl:pt-1.5"
+                                >
+                                  {group.name}
+                                </h4>
+                                <ItemGroup className="min-w-0 flex-1 gap-0 has-data-[size=xs]:gap-0">
+                                  {group.tools.map((tool) => {
+                                    const state = controls[keyOf(account, tool)]!;
+                                    return (
+                                      <Item
+                                        key={tool.name}
+                                        size="xs"
+                                        className="flex-nowrap items-start gap-3 rounded-none border-0 px-0 py-1"
+                                      >
+                                        <ItemContent className="min-w-0 py-0.5">
+                                          <ItemTitle className="line-clamp-none font-normal">
+                                            {tool.label}
+                                          </ItemTitle>
+                                          <ItemDescription className="line-clamp-none">
+                                            {tool.description}
+                                          </ItemDescription>
+                                        </ItemContent>
+                                        <ItemActions>
+                                          <PermissionControl
+                                            label={`${tool.label} on ${account.name} for ${connection.name}`}
+                                            value={state.phase === "unconfirmed" ? "" : state.value}
+                                            phase={state.phase}
+                                            choose={(wanted) => void save(account, [tool], wanted)}
+                                          />
+                                        </ItemActions>
+                                      </Item>
+                                    );
+                                  })}
+                                </ItemGroup>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </CollapsibleContent>
                     </Collapsible>
                   );
@@ -394,6 +520,36 @@ export function ConnectionPage(props: Props) {
             </AlertAction>
           </Alert>
         </div>
+      )}
+      {pending && (
+        <AlertDialog open onOpenChange={(open) => !open && setPending(null)}>
+          <AlertDialogContent
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              opener.current?.focus();
+            }}
+          >
+            <AlertDialogHeader className="place-items-start text-left">
+              <AlertDialogTitle className="wrap-anywhere">
+                Set all tools on {pending.account.name} to {labelOf(pending.wanted)}?
+              </AlertDialogTitle>
+              <AlertDialogDescription className="wrap-anywhere">
+                {pending.wanted === "allow"
+                  ? `${connection.name} will be able to use every tool on ${pending.account.name} without asking you.`
+                  : `${connection.name} will be able to call every tool on ${pending.account.name}, and each call will wait for your approval.`}{" "}
+                This changes {pending.count} {pending.count === 1 ? "tool" : "tools"}.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => void save(pending.account, props.tools, pending.wanted)}
+              >
+                Set to {labelOf(pending.wanted)}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
       {dialog && (
         <ConnectionDialog
@@ -427,53 +583,70 @@ export function ConnectionPage(props: Props) {
 }
 function PermissionControl({
   label,
-  state,
+  value,
+  phase,
+  waiting = false,
+  labelled = false,
   choose,
 }: {
   label: string;
-  state: ControlState;
+  value: Setting | "";
+  phase: ControlState["phase"];
+  waiting?: boolean;
+  labelled?: boolean;
   choose: (value: Setting) => void;
 }) {
-  const value = state.phase === "unconfirmed" ? "" : state.value;
-  const blocked = state.phase !== "confirmed";
+  const blocked = phase !== "confirmed" || waiting;
   return (
     <ToggleGroup
       type="single"
       role="radiogroup"
       aria-label={label}
-      aria-busy={state.phase === "saving"}
+      aria-busy={phase === "saving"}
       aria-disabled={blocked}
       value={value}
       size="lg"
       spacing={0.5}
-      className={cn("shrink-0 rounded-lg bg-muted p-0.5", state.phase === "saving" && "opacity-50")}
+      className={cn(
+        "shrink-0 rounded-lg bg-muted p-0.5",
+        labelled && "w-full @3xl:w-fit",
+        phase === "saving" && "opacity-50",
+      )}
       onValueChange={(next) => {
         if (!blocked && next) choose(next as Setting);
       }}
     >
-      {values.map((segment) => (
-        <Tooltip key={segment.value}>
-          <TooltipTrigger asChild>
-            <ToggleGroupItem
-              value={segment.value}
-              role="radio"
-              aria-label={segment.label}
-              aria-checked={value === segment.value}
-              aria-disabled={blocked}
-              className={cn(
-                "rounded-md text-muted-foreground hover:bg-transparent",
-                selected[segment.value],
-              )}
-              onClick={(event) => {
-                if (blocked) event.preventDefault();
-              }}
-            >
-              <segment.icon />
-            </ToggleGroupItem>
-          </TooltipTrigger>
-          <TooltipContent>{segment.label}</TooltipContent>
-        </Tooltip>
-      ))}
+      {values.map((segment) => {
+        const item = (
+          <ToggleGroupItem
+            key={segment.value}
+            value={segment.value}
+            role="radio"
+            aria-label={segment.label}
+            aria-checked={value === segment.value}
+            aria-disabled={blocked}
+            className={cn(
+              "rounded-md text-muted-foreground hover:bg-transparent",
+              labelled && "min-w-0 flex-1 gap-1.5 px-1.5 @3xl:flex-none @3xl:px-3",
+              selected[segment.value],
+            )}
+            onClick={(event) => {
+              if (blocked) event.preventDefault();
+            }}
+          >
+            <segment.icon />
+            {labelled && segment.label}
+          </ToggleGroupItem>
+        );
+        return labelled ? (
+          item
+        ) : (
+          <Tooltip key={segment.value}>
+            <TooltipTrigger asChild>{item}</TooltipTrigger>
+            <TooltipContent>{segment.label}</TooltipContent>
+          </Tooltip>
+        );
+      })}
     </ToggleGroup>
   );
 }

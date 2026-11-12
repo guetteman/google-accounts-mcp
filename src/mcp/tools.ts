@@ -8,6 +8,7 @@ import { listLabels, searchThreads } from "../google/gmail";
 import { readListedTools } from "../permissions/store";
 import type { CallContext } from "./call";
 import type { ToolFailure } from "./failures";
+import type { Group } from "./groups";
 export class ViewUnavailable extends Data.TaggedError("ViewUnavailable") {}
 /** What every tool with a setting takes. A tool reads its own fields through its typed definition. */
 export type DecodedArgs = { readonly account: string };
@@ -32,6 +33,7 @@ export type Tool =
       kind: "account";
       name: AccountTool;
       label: string;
+      group: Group;
       permissionDescription: string;
       description: string;
       input: Schema.Codec<DecodedArgs, unknown>;
@@ -54,6 +56,7 @@ export type Tool =
 type AccountDefinition<A extends DecodedArgs> = {
   name: string;
   label: string;
+  group: Group;
   permissionDescription: string;
   description: string;
   input: Schema.Codec<A, unknown>;
@@ -122,6 +125,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   },
   accountTool({
     name: "list_labels",
+    group: "Find and read",
     label: "List labels",
     permissionDescription: "See the names of this account's Gmail labels.",
     description:
@@ -139,6 +143,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   }),
   accountTool({
     name: "search_threads",
+    group: "Find and read",
     label: "Search mail",
     permissionDescription:
       "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",

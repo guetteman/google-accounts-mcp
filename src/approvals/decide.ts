@@ -126,6 +126,8 @@ export const decide = (
               input: args.account,
               email: view.page.request.account.email,
               origin: deps.origin,
+              tool: approval.tool,
+              connection: approval.connection.id,
             },
           );
           audit = classified.audit;

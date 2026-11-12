@@ -78,10 +78,14 @@ connectionRoutes.post("/connections/:id/permissions", ownerOnly, readForm, async
   const connectionId = parseConnectionId(c.req.param("id"));
   const form = c.get("form");
   const accountId = parseAccountId(form.get("account"));
-  const tool = parseAccountTool(form.get("tool"));
+  const tools = [...new Set(form.getAll("tool"))].map(parseAccountTool);
   const setting = form.get("setting");
   if (!connectionId || !accountId) return c.json({ outcome: "not_found" }, 404);
-  if (!tool || (setting !== "deny" && setting !== "ask" && setting !== "allow"))
+  if (
+    !tools.length ||
+    tools.some((tool) => tool === null) ||
+    (setting !== "deny" && setting !== "ask" && setting !== "allow")
+  )
     return c.json({ outcome: "invalid" }, 400);
   const result = await Effect.runPromise(
     Effect.result(
@@ -91,7 +95,7 @@ connectionRoutes.post("/connections/:id/permissions", ownerOnly, readForm, async
         {
           connectionId,
           accountId,
-          tool,
+          tools: tools.filter((tool) => tool !== null),
           setting,
         },
         Date.now(),
@@ -152,6 +156,7 @@ connectionRoutes.get("/connections/:id", ownerOnly, async (c) => {
       name: t.name,
       label: t.label,
       description: t.permissionDescription,
+      group: t.group,
     })),
     requiredGmailScopes: GMAIL_SCOPES.length,
   });

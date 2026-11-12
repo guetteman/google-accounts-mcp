@@ -2,6 +2,7 @@ import { Data } from "effect";
 import { accountMessage } from "../accounts/model";
 import type { Outcome } from "../calls/store";
 import { WAITING_LIMIT } from "../approvals/model";
+import type { ConnectionId } from "../connections/model";
 export const failures = {
   approval_not_available: {
     outcome: "refused",
@@ -47,9 +48,23 @@ export const failures = {
     outcome: "failed",
     message: () => "The server could not complete the call. Try again later.",
   },
+  tool_not_allowed: {
+    outcome: "refused",
+    message: (_: string, email: string, origin: string, tool: string, connection: ConnectionId) =>
+      `The owner has not allowed ${tool} on ${email} for this connection. The owner can change this at ${origin}/connections/${connection}.`,
+  },
 } satisfies Record<
   string,
-  { outcome: Outcome; message: (input: string, email: string, origin: string) => string }
+  {
+    outcome: Outcome;
+    message: (
+      input: string,
+      email: string,
+      origin: string,
+      tool: string,
+      connection: ConnectionId,
+    ) => string;
+  }
 >;
 export class ToolFailure extends Data.TaggedError("ToolFailure")<{
   code: keyof typeof failures;
@@ -62,7 +77,7 @@ export class ToolFailure extends Data.TaggedError("ToolFailure")<{
 export function classify(
   error: unknown,
   when: { approved: boolean; aborted: boolean },
-  text: { input: string; email: string; origin: string },
+  text: { input: string; email: string; origin: string; tool: string; connection: ConnectionId },
 ): { audit: Outcome | null; error: { code: keyof typeof failures; message: string } | null } {
   const failure =
     error instanceof ToolFailure ? error : new ToolFailure({ code: "server_unavailable" });
@@ -81,7 +96,7 @@ export function classify(
                 ? "The arguments are too large. The limit is 256 KB."
                 : failure.field
                   ? `The ${failure.field.name} field must be ${failure.field.expects}.`
-                  : entry.message(text.input, text.email, text.origin),
+                  : entry.message(text.input, text.email, text.origin, text.tool, text.connection),
           },
   };
 }

@@ -30,7 +30,12 @@ export const permittedWhere = ({
 export const setPermission = (
   db: D1Database,
   owner: Owner,
-  change: { connectionId: ConnectionId; accountId: AccountId; tool: AccountTool; setting: Setting },
+  change: {
+    connectionId: ConnectionId;
+    accountId: AccountId;
+    tools: readonly AccountTool[];
+    setting: Setting;
+  },
   now: number,
 ) =>
   Effect.gen(function* () {
@@ -41,32 +46,33 @@ export const setPermission = (
       ownerEmail: "?5",
       now: "?6",
     });
-    const values = [
-      change.connectionId,
-      change.accountId,
-      change.tool,
-      owner.generation,
-      owner.email,
-      now,
-    ];
     const results = yield* Effect.tryPromise({
       try: () =>
         db.batch<{ state: string; expires_at: number; account_exists: number }>([
-          ...(change.setting === "deny"
-            ? endApprovals(
-                db,
-                owner,
-                { connection: change.connectionId, account: change.accountId, tool: change.tool },
-                now,
+          ...change.tools.flatMap((tool) => [
+            ...(change.setting === "deny"
+              ? endApprovals(
+                  db,
+                  owner,
+                  { connection: change.connectionId, account: change.accountId, tool },
+                  now,
+                )
+              : []),
+            db
+              .prepare(
+                change.setting !== "deny"
+                  ? `INSERT INTO permissions (connection_id,account_id,tool,ask) SELECT ?1,?2,?3,${change.setting === "ask" ? 1 : 0} WHERE ${guard} ON CONFLICT(connection_id,account_id,tool) DO UPDATE SET ask = excluded.ask`
+                  : `DELETE FROM permissions WHERE connection_id = ?1 AND account_id = ?2 AND tool = ?3 AND ${guard}`,
               )
-            : []),
-          db
-            .prepare(
-              change.setting !== "deny"
-                ? `INSERT INTO permissions (connection_id,account_id,tool,ask) SELECT ?1,?2,?3,${change.setting === "ask" ? 1 : 0} WHERE ${guard} ON CONFLICT(connection_id,account_id,tool) DO UPDATE SET ask = excluded.ask`
-                : `DELETE FROM permissions WHERE connection_id = ?1 AND account_id = ?2 AND tool = ?3 AND ${guard}`,
-            )
-            .bind(...values),
+              .bind(
+                change.connectionId,
+                change.accountId,
+                tool,
+                owner.generation,
+                owner.email,
+                now,
+              ),
+          ]),
           db
             .prepare(`SELECT c.state, c.expires_at,
         EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?2 AND a.generation = ?3 AND a.state = 'live') AS account_exists

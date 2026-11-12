@@ -11,7 +11,6 @@ import {
   googleTraffic,
   permission,
   PERSONAL,
-  refusedMessage,
   textResult,
   toolCall,
   unavailableMessage,
@@ -147,8 +146,8 @@ it("has its own setting: a connection that may list labels may not search", asyn
   const before = googleTraffic().length;
   await expectError(
     await search(f, { query: "a" }),
-    "account_not_available",
-    refusedMessage(PERSONAL),
+    "tool_not_allowed",
+    `The owner has not allowed search_threads on ${PERSONAL} for this connection. The owner can change this at https://accounts-mcp.example.com/connections/${f.connection.id}.`,
   );
   expect(googleTraffic().slice(before)).toEqual([]);
 });

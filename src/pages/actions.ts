@@ -5,7 +5,7 @@ export interface ActionResult {
 }
 export async function postAction(
   url: string,
-  fields: Record<string, string> = {},
+  fields: Record<string, string> | [string, string][] = {},
   send: typeof fetch = fetch,
 ): Promise<ActionResult> {
   try {
