@@ -5,6 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { chromium, type Browser, type Locator, type Page, type Route } from "playwright-core";
 import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
+import { TOOLS } from "../../src/mcp/tools";
 
 let browser: Browser;
 let origin: string;
@@ -76,7 +77,7 @@ async function selected(group: Locator, value: "Allowed" | "Not allowed" | "Ask 
   for (const name of ["Not allowed", "Ask first", "Allowed"] as const)
     expect(await segment(group, name).getAttribute("aria-checked")).toBe(String(value === name));
 }
-async function open(width = 1280, fixture?: "groups" | "irreversible") {
+async function open(width = 1280, fixture?: "groups" | "irreversible" | `tools=${string}`) {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(1500);
   await page.goto(fixture ? `${origin}/?${fixture}` : origin);
@@ -1057,3 +1058,82 @@ it.each([
     }
   },
 );
+
+// The fixtures above name tools that do not exist. This is the server's own list, as the
+// connection's route gives it to the page, so the guarantee holds for the tools an owner sees.
+const realTools = TOOLS.flatMap((tool) =>
+  tool.kind === "account"
+    ? [
+        {
+          name: tool.name,
+          label: tool.label,
+          description: tool.permissionDescription,
+          group: tool.group,
+          irreversible: tool.irreversible,
+        },
+      ]
+    : [],
+);
+const withRealTools = `tools=${encodeURIComponent(JSON.stringify(realTools))}` as const;
+
+it("names Delete permanently, of the server's real tools, when all tools go to Allowed", async () => {
+  expect(realTools.filter((tool) => tool.irreversible).map((tool) => tool.label)).toEqual([
+    "Delete permanently",
+  ]);
+  const page = await open(390, withRealTools);
+  try {
+    const routes = await pending(page);
+    await segment(accountControl(page, "Personal"), "Allowed").click();
+    const dialog = page.getByRole("alertdialog", {
+      name: "Set all tools on Personal to Allowed?",
+      exact: true,
+    });
+    await dialog.waitFor();
+    // List labels is already Allowed on Personal, so every other tool changes.
+    expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
+      `Claude will be able to use every tool on Personal without asking you, including Delete permanently, which cannot be undone. This changes ${realTools.length - 1} tools.`,
+    );
+    expect(routes).toEqual([]);
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await dialog.getByRole("button", { name: "Set to Allowed", exact: true }).click();
+    const form = new URLSearchParams((await sent).postData()!);
+    expect(form.getAll("tool")).toEqual(
+      realTools.map((tool) => tool.name).filter((name) => name !== "list_labels"),
+    );
+    expect(form.getAll("tool")).toContain("delete_messages");
+    expect(form.get("setting")).toBe("allow");
+  } finally {
+    await page.close();
+  }
+});
+
+it("asks before delete_messages alone goes to Allowed, and not before trash_messages", async () => {
+  const page = await open(390, withRealTools);
+  try {
+    const routes = await pending(page);
+    await segment(toolControl(page, "Delete permanently"), "Allowed").click();
+    const dialog = page.getByRole("alertdialog", {
+      name: "Set Delete permanently on Personal to Allowed?",
+      exact: true,
+    });
+    await dialog.waitFor();
+    expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
+      "Claude will be able to use Delete permanently on Personal without asking you. What this tool does cannot be undone.",
+    );
+    expect(routes).toEqual([]);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect.poll(() => page.getByRole("alertdialog").count()).toBe(0);
+    await frames(page);
+    expect(routes).toEqual([]);
+    // The trash can be undone for 30 days, so it is saved at once.
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await segment(toolControl(page, "Move to trash"), "Allowed").click();
+    const form = new URLSearchParams((await sent).postData()!);
+    expect(form.getAll("tool")).toEqual(["trash_messages"]);
+    expect(form.get("setting")).toBe("allow");
+    expect(await page.getByRole("alertdialog").count()).toBe(0);
+    expect(routes).toHaveLength(1);
+  } finally {
+    await page.close();
+  }
+});

@@ -111,6 +111,18 @@ it("publishes the expected annotations for every tool", async () => {
       name: "create_draft",
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
+    {
+      name: "trash_messages",
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    {
+      name: "restore_messages",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: "delete_messages",
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
     { name: "get_approval", annotations: { readOnlyHint: true } },
   ]);
 });

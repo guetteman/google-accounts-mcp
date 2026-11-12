@@ -177,6 +177,31 @@ export const threadSummary = (
       }),
     ),
   );
+export interface MessageSummary {
+  from: string;
+  subject: string;
+  date: number;
+}
+/** One message as a view shows it, with bounded headers. */
+export const messageSummary = (
+  send: Send,
+  message: string,
+): Effect.Effect<MessageSummary, ToolFailure> =>
+  get(
+    send,
+    `messages/${encodeURIComponent(message)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`,
+    Schema.Struct({
+      internalDate: InternalDate,
+      payload: Schema.optionalKey(Schema.Struct({ headers: Schema.optionalKey(Headers) })),
+    }),
+    (status) => (status === 404 || status === 400 ? notFound("message", message) : unavailable()),
+  ).pipe(
+    Effect.map((value) => ({
+      from: shorten(header(value.payload?.headers, "From"), 500),
+      subject: shorten(header(value.payload?.headers, "Subject"), 500),
+      date: Number(value.internalDate),
+    })),
+  );
 /** Cloudflare allows a Worker six connections at once for one request; five leave one free. */
 export const REQUESTS_AT_ONCE = 5;
 export const searchThreads = (
