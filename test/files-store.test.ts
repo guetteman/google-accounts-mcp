@@ -23,12 +23,11 @@ it("round trips 12,000,000 bytes with metadata and expiry through encrypted KV",
     filename: "notes.txt",
     type: "text/plain",
     charset: "iso-8859-1",
-    size: 12_000_000,
   });
   const opened = await Effect.runPromise(getFile(env.FILES_KV, ref));
   expect(opened).not.toBeNull();
   expect({ ...opened, bytes: undefined }).toEqual({ ...original, bytes: undefined });
-  expect(Buffer.from(await crypto.subtle.digest("SHA-256", new Uint8Array(opened!.bytes)))).toEqual(
+  expect(Buffer.from(await crypto.subtle.digest("SHA-256", opened!.bytes))).toEqual(
     Buffer.from(await crypto.subtle.digest("SHA-256", original.bytes)),
   );
   expect((await env.FILES_KV.list()).keys).toEqual([
@@ -68,16 +67,4 @@ it("treats a wrong key, swapped name, damaged value, missing value and KV failur
     await Effect.runPromise(getFile(env.FILES_KV, { ...a, name: `file:${crypto.randomUUID()}` })),
   ).toBeNull();
   expect(await Effect.runPromise(getFile(failingKv("all", env.FILES_KV), a))).toBeNull();
-});
-
-it("refuses more than 25,000,000 bytes without writing a value", async () => {
-  const out = await Effect.runPromise(
-    Effect.result(putFile(env.FILES_KV, file(new Uint8Array(25_000_001)), expiry())),
-  );
-  expect(out).toMatchObject({ _tag: "Failure", failure: { _tag: "Unavailable" } });
-  expect((await env.FILES_KV.list()).keys).toEqual([]);
-  const ref = await Effect.runPromise(
-    putFile(env.FILES_KV, file(new Uint8Array(25_000_000)), expiry()),
-  );
-  expect(ref.size).toBe(25_000_000);
 });

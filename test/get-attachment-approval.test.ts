@@ -11,6 +11,7 @@ import { readOwner } from "../src/owner/owner";
 import { renderPage } from "../src/pages/render";
 import { previews } from "../src/pages/previews";
 import type { TestEnv } from "./env";
+import { clients } from "./support/oauth";
 import { NOW } from "./support/accounts";
 import { approve, decided, digest, get, page, post, row } from "./support/approvals";
 import { failingKv, observeStatements } from "./support/db";
@@ -134,13 +135,29 @@ it.each(["404", "position", "500"])(
 it("stores one encrypted value after approval, with a sealed reference and the decision expiry", async () => {
   const file = { ...filePart(), body: { size: 8, attachmentId: "download-after-approval" } };
   const f = await askingAttachment(file);
-  google.attachmentAnswers.set("download-after-approval", () =>
-    Response.json({ size: 8, data: Buffer.from(CONTENT).toString("base64url") }),
-  );
-  await page(f, f.id);
+  const decisionAt = NOW + 5 * 60_000;
+  google.attachmentAnswers.set("download-after-approval", () => {
+    vi.spyOn(Date, "now").mockReturnValue(decisionAt + 2_000);
+    return Response.json({ size: 8, data: Buffer.from(CONTENT).toString("base64url") });
+  });
+  const shown = await page(f, f.id);
+  if (shown.state.kind !== "waiting" || !shown.state.digest)
+    throw new Error("Expected waiting approval");
   expect((await env.FILES_KV.list()).keys).toEqual([]);
   expect(google.attachmentRequests).toEqual([]);
-  expect((await approve(f, f.id)).state.kind).toBe("succeeded");
+  const messagesBefore = google.messageRequests.length;
+  const bytesBefore = google.attachmentRequests.length;
+  vi.spyOn(Date, "now").mockReturnValue(decisionAt);
+  expect(
+    (await decided(await post(f, f.id, "approve", { digest: shown.state.digest }))).state.kind,
+  ).toBe("succeeded");
+  expect(google.messageRequests.slice(messagesBefore)).toEqual([
+    `${MESSAGES_URL}/${MESSAGE}?format=full`,
+    `${MESSAGES_URL}/${MESSAGE}?format=full`,
+  ]);
+  expect(google.attachmentRequests.slice(bytesBefore)).toEqual([
+    `${MESSAGES_URL}/${MESSAGE}/attachments/download-after-approval`,
+  ]);
   const payload = await stored(f.id);
   expect(payload.result).toEqual({
     account: PERSONAL,
@@ -155,9 +172,10 @@ it("stores one encrypted value after approval, with a sealed reference and the d
     filename: "menu.pdf",
     type: "application/pdf",
     charset: null,
-    size: 8,
   });
   const record = (await row(f.id))!;
+  expect(record.created_at).toBe(NOW);
+  expect(record.decided_at).toBe(decisionAt);
   expect(record.result).not.toContain(payload.file!.key);
   expect(record.result).not.toContain(payload.file!.name);
   expect((await env.FILES_KV.list()).keys).toEqual([
@@ -169,7 +187,7 @@ it("stores one encrypted value after approval, with a sealed reference and the d
   expect(metadata(out)).toEqual({ status: "success", result: payload.result });
   expect(out.content[1]).toMatchObject({
     type: "resource",
-    resource: { uri: `attachment://${MESSAGE}/2`, mimeType: "application/pdf" },
+    resource: { uri: "attachment://file/menu.pdf", mimeType: "application/pdf" },
   });
   expect(resourceBytes(out)).toEqual(CONTENT);
   expect((await callRows())[0]!.outcome).toBe("success");
@@ -197,26 +215,47 @@ it.each(["image/png", "text/plain"])(
 );
 
 it.each(["application/pdf", "text/plain"])(
-  "keeps unreadable %s available for a later Claude Code collector",
+  "refuses unreadable %s, then lets Claude Code collect it on the same Claude connection",
   async (type) => {
     const f = await askingAttachment(filePart(type, "file", CONTENT));
     await approve(f, f.id);
     const before = await stored(f.id);
-    const unreadable = await collect(f, null);
-    expect(unreadable.isError).toBeUndefined();
+    const unreadable = await collect(f, "Anthropic/ClaudeAI");
+    expect(unreadable.isError).toBe(true);
     expect(unreadable.content).toHaveLength(1);
     expect(metadata(unreadable)).toEqual({
-      status: "success",
-      result: before.result,
-      error: {
-        code: "attachment_not_readable",
-        message: `This client cannot read "file" (type "${type}"). The owner can open it with Claude Code.`,
-      },
+      code: "attachment_not_readable",
+      message: `This client cannot read "file" (type "${type}"). The owner can open it with Claude Code.`,
     });
     expect(await stored(f.id)).toEqual(before);
     expect(resourceBytes(await collect(f))).toEqual(CONTENT);
+    expect(
+      (await callRows()).filter((call) => call.tool === "get_approval").map((call) => call.outcome),
+    ).toEqual(["refused", "success"]);
   },
 );
+
+it("refuses a ChatGPT connection's approved PDF before fetching its bytes or storing a file", async () => {
+  const f = await askingAttachment(
+    { ...filePart(), body: { size: 8, attachmentId: "do-not-fetch" } },
+    clients[2],
+  );
+  google.attachmentAnswers.set("do-not-fetch", () =>
+    Response.json({ size: CONTENT.length, data: Buffer.from(CONTENT).toString("base64url") }),
+  );
+  expect((await approve(f, f.id)).state.kind).toBe("failed");
+  expect(await get(f, f.id)).toEqual({
+    status: "failed",
+    error: {
+      code: "attachment_not_readable",
+      message:
+        'This client cannot read "menu.pdf" (type "application/pdf"). The owner can open it with Claude Code.',
+    },
+  });
+  expect(google.attachmentRequests).toEqual([]);
+  expect((await env.FILES_KV.list()).keys).toEqual([]);
+  expect((await callRows())[0]?.outcome).toBe("refused");
+});
 
 it.each(["large", "gone"])(
   "finishes an approved %s attachment with an error and no KV value",
@@ -278,7 +317,7 @@ it.each(["tool", "connection", "account"])(
 );
 
 it.each(["miss", "damaged", "unavailable"])(
-  "returns running for a KV %s then returns the file without losing the reference",
+  "returns running for one failed KV read of kind %s, then returns the file on retry",
   async (failure) => {
     const f = await askingAttachment();
     await approve(f, f.id);
@@ -392,7 +431,6 @@ it("opens file references only when their persisted schema is valid and keeps or
   for (const file of [
     { ...payload.file, key: "short" },
     { ...payload.file, v: 2 },
-    { ...payload.file, size: -1 },
     { ...payload.file, charset: 2 },
     { ...payload.file, name: "token:unrelated" },
   ]) {

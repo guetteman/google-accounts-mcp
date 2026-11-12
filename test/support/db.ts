@@ -24,6 +24,7 @@ export async function dump(
     out[name] = rows.results;
   }
   out.OAUTH_KV = await kvDump(kv);
+  out.FILES_KV = await kvDump(env.FILES_KV);
   return out;
 }
 

@@ -244,7 +244,7 @@ export class McpClient {
     );
   }
 
-  /** The request envelope Claude Code sends in protocol revision 2026-07-28. */
+  /** A tools/call request in revision 2026-07-28, with a stated client name or none. */
   namedCall(
     name: string,
     args: Record<string, unknown>,

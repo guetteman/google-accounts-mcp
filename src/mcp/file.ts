@@ -29,29 +29,26 @@ export const takes =
   (type) =>
     formOf(reader, type) !== null;
 const textOf = (file: FileData): string => {
+  let utf8: string | undefined;
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(file.bytes);
+    utf8 = new TextDecoder("utf-8", { fatal: true }).decode(file.bytes);
   } catch {
-    if (file.charset !== null) {
-      try {
-        return new TextDecoder(file.charset, { fatal: true }).decode(file.bytes);
-      } catch {
-        // A missing, unknown or unsuccessful fallback is an unreadable text file.
-      }
+    // Invalid UTF-8 may still decode in the declared charset.
+  }
+  // ISO-2022-JP escapes and UTF-16 NULs can be valid UTF-8 without being its intended text.
+  if (
+    utf8 !== undefined &&
+    (file.charset === null || (!utf8.includes("\u0000") && !utf8.includes("\u001b")))
+  )
+    return utf8;
+  if (file.charset !== null) {
+    try {
+      return new TextDecoder(file.charset, { fatal: true }).decode(file.bytes);
+    } catch {
+      // An unknown charset or invalid text in it leaves the file unreadable.
     }
-    throw notReadable({ ...file, size: file.bytes.byteLength });
   }
-};
-export const readable = (reader: Reader, file: FileData): boolean => {
-  const form = formOf(reader, file.type);
-  if (form === null) return false;
-  if (form !== "text") return true;
-  try {
-    textOf(file);
-    return true;
-  } catch {
-    return false;
-  }
+  throw notReadable({ ...file, size: file.bytes.byteLength });
 };
 export const contentOf = (value: unknown, reader: Reader): CallToolResult["content"] => {
   if (!(value instanceof WithFile)) return [{ type: "text", text: JSON.stringify(value) }];
@@ -60,17 +57,19 @@ export const contentOf = (value: unknown, reader: Reader): CallToolResult["conte
   if (form === null) throw notReadable({ ...file, size: file.bytes.byteLength });
   const metadata = { type: "text" as const, text: JSON.stringify(value.value) };
   if (form === "text") return [metadata, { type: "text", text: textOf(file) }];
-  const base64 = Buffer.from(file.bytes).toString("base64");
-  if (form === "image") return [metadata, { type: "image", data: base64, mimeType: file.type }];
-  // Only get_attachment and get_approval construct WithFile; both retain this metadata.
-  const first = value.value as { result?: unknown };
-  const result = (first.result ?? first) as { message: string; attachment: string };
+  const base64 = Buffer.from(
+    file.bytes.buffer,
+    file.bytes.byteOffset,
+    file.bytes.byteLength,
+  ).toString("base64");
+  if (form === "image")
+    return [metadata, { type: "image", data: base64, mimeType: file.type.toLowerCase() }];
   return [
     metadata,
     {
       type: "resource",
       resource: {
-        uri: `attachment://${result.message}/${result.attachment}`,
+        uri: `attachment://file/${encodeURIComponent(file.filename.toWellFormed())}`,
         mimeType: file.type,
         blob: base64,
       },

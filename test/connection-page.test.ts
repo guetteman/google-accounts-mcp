@@ -6,6 +6,7 @@ import { seedConnection } from "./support/connections";
 import { fixture, permission, problemCases } from "./support/permissions";
 import { textOf } from "./support/worker";
 import type { FramePage } from "../src/pages/page";
+import { previews } from "../src/pages/previews";
 import { GROUPS } from "../src/mcp/groups";
 
 function pageProps(html: string) {
@@ -82,6 +83,37 @@ it("renders every tool in its group, in tool-list order, and no empty group", as
   );
   for (const group of GROUPS.slice(1).filter((group) => group !== "Download attachments"))
     expect(textOf(html)).not.toContain(group);
+});
+
+it("keeps every connection preview's tool groups and settings aligned with the real page", async () => {
+  const f = await fixture();
+  const real = pageProps(await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text());
+  for (const scenario of [
+    "new-connection",
+    "some-allowed",
+    "all-allowed",
+    "no-accounts",
+    "ended-connection",
+    "save-failed",
+  ]) {
+    const preview = previews[`connection-${scenario}`];
+    if (preview?._tag !== "Connection") throw new Error("Expected a connection preview");
+    expect(preview.tools).toEqual(real.tools);
+    for (const [index, account] of preview.accounts.entries())
+      for (const tool of real.tools) {
+        const expected =
+          scenario === "all-allowed"
+            ? "allow"
+            : ["some-allowed", "save-failed"].includes(scenario) && index === 0
+              ? "ask"
+              : ["some-allowed", "save-failed"].includes(scenario) &&
+                  index === 2 &&
+                  tool.name === "list_labels"
+                ? "allow"
+                : undefined;
+        expect(preview.settings[`${account.id}:${tool.name}`]).toBe(expected);
+      }
+  }
 });
 
 it.each(["revoked", "expired"])(

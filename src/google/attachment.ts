@@ -22,6 +22,36 @@ export interface Found extends Attachment {
   subject: string;
   date: number;
 }
+/** MIME parameters end at semicolons outside quoted strings; names cannot supply a charset. */
+const charsetOf = (value: string): string | null => {
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let i = 0; i <= value.length; i++) {
+    const char = value[i];
+    if (i < value.length) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quoted && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') quoted = !quoted;
+    }
+    if (i !== value.length && (char !== ";" || quoted)) continue;
+    const parameter = value.slice(start, i);
+    start = i + 1;
+    const equal = parameter.indexOf("=");
+    if (equal < 0 || parameter.slice(0, equal).trim().toLowerCase() !== "charset") continue;
+    let label = parameter.slice(equal + 1).trim();
+    if (label.startsWith('"') && label.endsWith('"'))
+      label = label.slice(1, -1).replace(/\\(.)/g, "$1");
+    return shorten(label, 40);
+  }
+  return null;
+};
 export const findAttachment = (
   send: Send,
   input: { message: string; attachment: string },
@@ -36,13 +66,10 @@ export const findAttachment = (
     );
     const part = attachmentPart(raw, input.attachment);
     if (part === null) return yield* Effect.fail(notFound("attachment", input.attachment));
-    const charset = /;\s*charset\s*=\s*(?:"([^"]*)"|'([^']*)'|([^;\s]*))/i.exec(
-      header(part.headers, "Content-Type"),
-    );
     return {
       part,
       ...attachmentFields(part),
-      charset: charset === null ? null : shorten(charset[1] ?? charset[2] ?? charset[3]!, 40),
+      charset: charsetOf(header(part.headers, "Content-Type")),
       from: header(raw.payload.headers, "From"),
       subject: header(raw.payload.headers, "Subject"),
       date: Number(raw.internalDate),
@@ -67,9 +94,16 @@ export const partBytes = (send: Send, message: string, part: RawPart) =>
       return yield* Effect.fail(unavailable());
     }
     return yield* Effect.try({
-      // atob validates base64; Buffer handles a large binary string without spreading its bytes.
-      try: () =>
-        new Uint8Array(Buffer.from(atob(data.replace(/-/g, "+").replace(/_/g, "/")), "binary")),
+      try: () => {
+        if (
+          !/^[A-Za-z0-9_+/-]*={0,2}$/.test(data) ||
+          data.length % 4 === 1 ||
+          (data.endsWith("=") && data.length % 4 !== 0)
+        )
+          throw unavailable();
+        const bytes = Buffer.from(data, "base64url");
+        return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      },
       catch: unavailable,
     });
   });

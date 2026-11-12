@@ -3,7 +3,7 @@ import { expect } from "vite-plus/test";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import type { RawMessage, RawPart } from "../../src/google/message";
 import { google } from "./google";
-import { rpcResult } from "./oauth";
+import { rpcResult, clients, type Client } from "./oauth";
 import { fixture, permission, PERSONAL } from "./permissions";
 import { answer } from "./approvals";
 import { message, part, tree } from "./thread";
@@ -30,8 +30,8 @@ export const serveAttachment = (file: RawPart = filePart()): RawMessage => {
   google.messageAnswers.set(MESSAGE, () => Response.json(full));
   return full;
 };
-export const allowedAttachment = async () => {
-  const f = await fixture();
+export const allowedAttachment = async (client: Client = clients[1]) => {
+  const f = await fixture({}, client);
   await permission(f, f.personal, true, "get_attachment");
   return f;
 };
@@ -68,8 +68,8 @@ export const fileError = async (response: Response, code: string, message: strin
     message: typeof message === "string" ? message : expect.stringMatching(message),
   });
 };
-export const askingAttachment = async (file = filePart()) => {
-  const f = await fixture();
+export const askingAttachment = async (file = filePart(), client: Client = clients[1]) => {
+  const f = await fixture({}, client);
   serveAttachment(file);
   expect(
     await (

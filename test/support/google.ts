@@ -97,6 +97,10 @@ export const THREAD_LINES = [
   },
 ];
 export const issuedTokens = new Set<string>();
+const authorized = (request: { headers: { get(name: string): string | null } }): boolean => {
+  const bearer = /^Bearer (.+)$/.exec(request.headers.get("Authorization") ?? "")?.[1];
+  return bearer !== undefined && issuedTokens.has(bearer);
+};
 export const token = () => {
   const value = `${MARKER}${crypto.randomUUID()}`;
   issuedTokens.add(value);
@@ -359,6 +363,7 @@ export const google = {
         this.methods.push(request.method);
         this.messageRequests.push(request.url);
         if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+        if (!authorized(request)) return new HttpResponse(null, { status: 401 });
         return (
           (await this.messageAnswers.get(String(params.message))?.(request)) ??
           new HttpResponse(null, { status: 404 })
@@ -370,6 +375,7 @@ export const google = {
           this.methods.push(request.method);
           this.attachmentRequests.push(request.url);
           if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+          if (!authorized(request)) return new HttpResponse(null, { status: 401 });
           return (
             (await this.attachmentAnswers.get(String(params.attachment))?.(request)) ??
             new HttpResponse(null, { status: 404 })

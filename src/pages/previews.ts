@@ -1,4 +1,5 @@
 import type { ApprovalPageProps } from "../approvals/model";
+import { TOOLS } from "../mcp/tools";
 import { GMAIL_SCOPES } from "../google/client";
 import { acceptAuthorize } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
@@ -82,6 +83,12 @@ const permissionAccounts: ReadonlyArray<import("../accounts/model").AccountView>
     status: { kind: "ready" },
   },
 ];
+const permissionTools = TOOLS.filter((tool) => tool.kind === "account").map((tool) => ({
+  name: tool.name,
+  group: tool.group,
+  label: tool.label,
+  description: tool.permissionDescription,
+}));
 const connectionPreview = (scenario: string): Page => {
   const accounts = ["no-accounts", "ended-connection"].includes(scenario) ? [] : permissionAccounts;
   const allowed = accounts.filter(
@@ -103,7 +110,7 @@ const connectionPreview = (scenario: string): Page => {
     settings: Object.fromEntries(
       allowed.flatMap((a, i) =>
         (scenario === "all-allowed" || i === 0
-          ? ["list_labels", "search_threads"]
+          ? permissionTools.map((tool) => tool.name)
           : ["list_labels"]
         ).map((tool) => [
           `${a.id}:${tool}`,
@@ -111,21 +118,7 @@ const connectionPreview = (scenario: string): Page => {
         ]),
       ),
     ),
-    tools: [
-      {
-        name: "list_labels",
-        group: "Find and read",
-        label: "List labels",
-        description: "See the names of this account's Gmail labels.",
-      },
-      {
-        name: "search_threads",
-        group: "Find and read",
-        label: "Search mail",
-        description:
-          "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",
-      },
-    ],
+    tools: permissionTools,
     requiredGmailScopes: GMAIL_SCOPES.length,
   };
 };

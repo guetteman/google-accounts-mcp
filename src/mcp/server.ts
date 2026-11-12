@@ -34,14 +34,17 @@ export function createMcpServer(ctx: CallContext): Server {
     };
   });
   server.setRequestHandler("tools/call", (request, extra) => {
-    // SDK 2.3.0 types the validated envelope as {}; retain its client-info field here.
-    const envelope: { [CLIENT_INFO_META_KEY]?: { name: string } } | undefined =
+    // SDK 2.3.0 types the envelope as {}; older requests can carry unvalidated metadata.
+    const envelope: { [CLIENT_INFO_META_KEY]?: { name?: unknown } } | undefined =
       extra.mcpReq.envelope;
-    return runCall(
-      { ...ctx, reader: { client: envelope?.[CLIENT_INFO_META_KEY]?.name ?? null } },
-      request.params.name,
-      request.params.arguments,
-    );
+    const stated = envelope?.[CLIENT_INFO_META_KEY]?.name;
+    const client =
+      ctx.connection.app === "claude-code"
+        ? "claude-code"
+        : typeof stated === "string"
+          ? stated
+          : null;
+    return runCall({ ...ctx, reader: { client } }, request.params.name, request.params.arguments);
   });
   return server;
 }

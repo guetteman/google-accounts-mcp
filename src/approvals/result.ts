@@ -1,8 +1,8 @@
 import { Effect } from "effect";
 import { type CallContext } from "../mcp/call";
 import { getFile } from "../files/store";
-import { readable, WithFile } from "../mcp/file";
-import { classify, notReadable, ToolFailure } from "../mcp/failures";
+import { WithFile } from "../mcp/file";
+import { ToolFailure } from "../mcp/failures";
 import { parseApprovalId, isoSeconds } from "./model";
 import { readApproval } from "./store";
 import { openResult } from "./text";
@@ -56,20 +56,6 @@ export const getApproval = (ctx: CallContext, args: Record<string, unknown> | un
                 "The owner approved the call and the file is not ready yet. Call get_approval again in one minute.",
             };
           const value = { status: row.outcome, result: payload.result };
-          if (!readable(ctx.reader, file)) {
-            const failure = classify(
-              notReadable({ ...file, size: file.bytes.byteLength }),
-              { approved: false, aborted: false },
-              {
-                input: "",
-                email: "",
-                origin: ctx.origin,
-                tool: row.tool,
-                connection: ctx.connection.connectionId,
-              },
-            );
-            return { ...value, error: failure.error };
-          }
           return new WithFile(value, file);
         }
         return { status: row.outcome, ...payload };

@@ -3,12 +3,11 @@ import { Effect, Schema } from "effect";
 import { Unavailable } from "../db";
 
 export interface FileData {
-  bytes: Uint8Array;
+  bytes: Uint8Array<ArrayBuffer>;
   filename: string;
   type: string;
   charset: string | null;
 }
-export const MAX_FILE_BYTES = 25_000_000;
 export const FileRef = Schema.Struct({
   v: Schema.Literal(1),
   name: Schema.String.check(
@@ -18,16 +17,14 @@ export const FileRef = Schema.Struct({
   filename: Schema.String,
   type: Schema.String,
   charset: Schema.NullOr(Schema.String),
-  size: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: MAX_FILE_BYTES })),
 });
 export type FileRef = typeof FileRef.Type;
 const encoder = new TextEncoder();
 
-/** Each value has its own key. Only a sealed approval result retains that key. */
+/** Each file has its own key, so deleting its sealed reference makes the bytes impossible to decrypt. */
 export const putFile = (kv: KVNamespace, file: FileData, expires: number) =>
   Effect.tryPromise({
     try: async (): Promise<FileRef> => {
-      if (file.bytes.byteLength > MAX_FILE_BYTES) throw new Unavailable();
       const name = `file:${crypto.randomUUID()}`;
       const key = crypto.getRandomValues(new Uint8Array(32));
       const imported = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
@@ -35,7 +32,7 @@ export const putFile = (kv: KVNamespace, file: FileData, expires: number) =>
       const encrypted = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv, additionalData: encoder.encode(name) },
         imported,
-        new Uint8Array(file.bytes),
+        file.bytes,
       );
       const value = new Uint8Array(iv.length + encrypted.byteLength);
       value.set(iv);
@@ -48,7 +45,6 @@ export const putFile = (kv: KVNamespace, file: FileData, expires: number) =>
         filename: file.filename,
         type: file.type,
         charset: file.charset,
-        size: file.bytes.byteLength,
       };
     },
     catch: () => new Unavailable(),

@@ -166,7 +166,7 @@ export const decide = (
           ...deps,
           connection: { connectionId: approval.connection.id, app: approval.connection.app },
           now: Date.now,
-          reader: "later",
+          reader: approval.connection.app === "chatgpt" ? { client: null } : "later",
         };
         let outcome: "success" | "failed" | "unknown" = "success";
         let audit: Outcome | null = "success";
@@ -183,9 +183,7 @@ export const decide = (
           );
           if (out instanceof WithFile) {
             const ref = await Effect.runPromise(
-              putFile(deps.files, out.file, decision.won.at + RESULT_LIFETIME).pipe(
-                Effect.mapError(() => new ToolFailure({ code: "server_unavailable" })),
-              ),
+              putFile(deps.files, out.file, decision.won.at + RESULT_LIFETIME),
             );
             payload = { result: out.value, file: ref };
           } else payload = { result: out };

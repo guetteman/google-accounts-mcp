@@ -1,10 +1,11 @@
 import { Buffer } from "node:buffer";
 import { expect, it } from "vite-plus/test";
 import "./support/account-checks";
+import type { FramePage } from "../src/pages/page";
 import type { ThreadResult } from "../src/google/thread";
 import { answer } from "./support/approvals";
 import { google, MESSAGES_URL } from "./support/google";
-import { rpcResult } from "./support/oauth";
+import { rpcResult, codeClient } from "./support/oauth";
 import {
   callRows,
   googleTraffic,
@@ -13,7 +14,7 @@ import {
   toolCall,
   unavailableMessage,
 } from "./support/permissions";
-import { message, read, serveThread, tree } from "./support/thread";
+import { message, part, read, serveThread, tree } from "./support/thread";
 import {
   allowedAttachment,
   blocks,
@@ -31,6 +32,7 @@ it("returns bounded metadata in order and exact PDF, PNG, text and binary resour
   const f = await allowedAttachment();
   for (const [type, filename] of [
     ["application/pdf", "menu.pdf"],
+    ["application/pdf", "a b/#%ñ.pdf"],
     ["image/png", ""],
     ["text/plain", "n".repeat(300)],
     ["application/octet-stream", "binary.dat"],
@@ -58,12 +60,35 @@ it("returns bounded metadata in order and exact PDF, PNG, text and binary resour
     ]);
     expect(out.content[1]).toMatchObject({
       type: "resource",
-      resource: { uri: `attachment://${MESSAGE}/2`, mimeType: metadata(out).type },
+      resource: {
+        uri: `attachment://file/${encodeURIComponent(filename!.length > 200 ? filename!.slice(0, 199) + "…" : filename!)}`,
+        mimeType: metadata(out).type,
+      },
     });
     expect(resourceBytes(out)).toEqual(CONTENT);
   }
-  expect(google.messageRequests).toEqual(Array(5).fill(`${MESSAGES_URL}/${MESSAGE}?format=full`));
+  expect(google.messageRequests).toEqual(Array(6).fill(`${MESSAGES_URL}/${MESSAGE}?format=full`));
   expect(google.attachmentRequests).toEqual([]);
+});
+
+it("returns exact bytes when filename shortening splits a Unicode character", async () => {
+  const f = await allowedAttachment();
+  serveAttachment(filePart("application/pdf", "a".repeat(198) + "🙂.pdf"));
+  const out = await blocks(await download(f));
+  expect(out.isError).toBeUndefined();
+  const filename = metadata(out).filename as string;
+  expect(filename.split("").map((char) => char.charCodeAt(0))).toEqual([
+    ...Array<number>(198).fill(97),
+    0xd83d,
+    0x2026,
+  ]);
+  expect(out.content[1]).toMatchObject({
+    type: "resource",
+    resource: {
+      uri: "attachment://file/" + "a".repeat(198) + "%EF%BF%BD%E2%80%A6",
+    },
+  });
+  expect(resourceBytes(out)).toEqual(CONTENT);
 });
 
 it("downloads every listed position, omitted attachments, and child 0 of a named multipart root", async () => {
@@ -93,6 +118,17 @@ it("downloads every listed position, omitted attachments, and child 0 of a named
     expect(resourceBytes(out)).toEqual(CONTENT);
   }
   await fileError(await download(f, { attachment: "1" }), "not_found", /No attachment "1" exists/);
+  const bytesBefore = google.attachmentRequests.length;
+  google.attachmentAnswers.set("body-only", () => Response.json({ size: 4, data: "Ym9keQ" }));
+  for (const body of [
+    { ...part("text/plain", "", "2"), body: { size: 4, attachmentId: "body-only" } },
+    { ...part("text/html", "", "2"), body: { size: 4, attachmentId: "body-only" } },
+    filePart("image/png", ""),
+  ]) {
+    serveAttachment(body);
+    await fileError(await download(f), "not_found", /No attachment "2" exists/);
+  }
+  expect(google.attachmentRequests).toHaveLength(bytesBefore);
   const many = Array.from({ length: 100 }, (_, i) => ({
     ...filePart("application/pdf", "f".repeat(200)),
     partId: String(i),
@@ -181,21 +217,51 @@ it("returns exactly 12,000,000 bytes by digest and refuses larger stated or actu
   );
 });
 
-it.each(["Anthropic/ClaudeAI", null, "legacy", "claude-code-x", "Claude-Code"])(
-  "refuses PDF before fetching bytes for client %s",
-  async (client) => {
+const otherReaders = [
+  { label: "Claude's stated name", client: "Anthropic/ClaudeAI", older: false },
+  { label: "no stated name", client: null, older: false },
+  { label: "the older protocol form", client: null, older: true },
+  { label: "the near name claude-code-x", client: "claude-code-x", older: false },
+  { label: "the near name Claude-Code", client: "Claude-Code", older: false },
+] as const;
+const fromReader = (
+  f: Awaited<ReturnType<typeof allowedAttachment>>,
+  reader: { client: string | null; older: boolean },
+) =>
+  reader.older
+    ? toolCall(f.mcp, "get_attachment", { account: PERSONAL, message: MESSAGE, attachment: "2" })
+    : download(f, {}, reader.client);
+
+it("recognizes an OAuth-verified Claude Code connection without relying on a stated name", async () => {
+  const f = await allowedAttachment(codeClient);
+  serveAttachment();
+  for (const reader of otherReaders) {
+    expect(resourceBytes(await blocks(await fromReader(f, reader)))).toEqual(CONTENT);
+  }
+  expect(google.messageRequests).toHaveLength(otherReaders.length);
+});
+
+it("treats a non-string client name in an older request as unnamed on a Claude connection", async () => {
+  const f = await allowedAttachment();
+  serveAttachment();
+  await fileError(
+    await f.mcp.call("tools/call", undefined, {
+      name: "get_attachment",
+      arguments: { account: PERSONAL, message: MESSAGE, attachment: "2" },
+      _meta: { "io.modelcontextprotocol/clientInfo": { name: 27, version: "1" } },
+    }),
+    "attachment_not_readable",
+    /This client cannot read "menu.pdf"/,
+  );
+});
+
+it.each(otherReaders)(
+  "refuses PDF before fetching bytes for $label on a Claude connection",
+  async (reader) => {
     const f = await allowedAttachment();
     serveAttachment({ ...filePart(), body: { size: 8, attachmentId: "do-not-fetch" } });
-    const response =
-      client === "legacy"
-        ? await toolCall(f.mcp, "get_attachment", {
-            account: PERSONAL,
-            message: MESSAGE,
-            attachment: "2",
-          })
-        : await download(f, {}, client);
     await fileError(
-      response,
+      await fromReader(f, reader),
       "attachment_not_readable",
       'This client cannot read "menu.pdf" (type "application/pdf"). The owner can open it with Claude Code.',
     );
@@ -204,44 +270,56 @@ it.each(["Anthropic/ClaudeAI", null, "legacy", "claude-code-x", "Claude-Code"])(
   },
 );
 
-it("renders the four image types and text for named, unnamed and legacy clients", async () => {
+it("refuses an oversized unreadable type for its size before checking the caller's formats", async () => {
+  const f = await allowedAttachment();
+  serveAttachment({ ...filePart(), body: { size: 12_000_001, attachmentId: "do-not-fetch" } });
+  await fileError(
+    await download(f, {}, "Anthropic/ClaudeAI"),
+    "attachment_too_large",
+    'The attachment "menu.pdf" has 12,000,001 bytes. The limit is 12,000,000 bytes.',
+  );
+  expect(google.attachmentRequests).toEqual([]);
+});
+
+it.each(["image/svg+xml", "image/heic", "application/x-text"])(
+  "refuses unsupported type %s before fetching bytes",
+  async (type) => {
+    const f = await allowedAttachment();
+    serveAttachment({ ...filePart(type), body: { size: 8, attachmentId: "do-not-fetch" } });
+    google.attachmentAnswers.set("do-not-fetch", () =>
+      Response.json({ size: CONTENT.length, data: Buffer.from(CONTENT).toString("base64url") }),
+    );
+    await fileError(
+      await download(f, {}, "Anthropic/ClaudeAI"),
+      "attachment_not_readable",
+      `This client cannot read "menu.pdf" (type "${type}"). The owner can open it with Claude Code.`,
+    );
+    expect(google.attachmentRequests).toEqual([]);
+  },
+);
+
+it("renders the four image types with lower-case media types and text for named, unnamed and older requests", async () => {
   const f = await allowedAttachment();
   const cases = [
-    ["image/png", "Anthropic/ClaudeAI"],
-    ["IMAGE/JPEG", null],
-    ["image/gif", "legacy"],
-    ["image/webp", "other"],
+    ["image/png", otherReaders[0]],
+    ["IMAGE/JPEG", otherReaders[1]],
+    ["image/gif", otherReaders[2]],
+    ["image/webp", otherReaders[3]],
   ] as const;
-  for (const [type, client] of cases) {
+  for (const [type, reader] of cases) {
     serveAttachment(filePart(type, "image"));
-    const out = await blocks(
-      client === "legacy"
-        ? await toolCall(f.mcp, "get_attachment", {
-            account: PERSONAL,
-            message: MESSAGE,
-            attachment: "2",
-          })
-        : await download(f, {}, client),
-    );
+    const out = await blocks(await fromReader(f, reader));
     expect(out.isError).toBeUndefined();
     expect(out.content).toHaveLength(2);
     expect(out.content[1]).toEqual({
       type: "image",
-      mimeType: type,
+      mimeType: type.toLowerCase(),
       data: Buffer.from(CONTENT).toString("base64"),
     });
   }
-  for (const client of ["Anthropic/ClaudeAI", null, "legacy"]) {
+  for (const reader of otherReaders.slice(0, 3)) {
     serveAttachment(filePart("TEXT/PLAIN", "notes", new TextEncoder().encode("Hola ñ 🙂\n")));
-    const out = await blocks(
-      client === "legacy"
-        ? await toolCall(f.mcp, "get_attachment", {
-            account: PERSONAL,
-            message: MESSAGE,
-            attachment: "2",
-          })
-        : await download(f, {}, client),
-    );
+    const out = await blocks(await fromReader(f, reader));
     expect(out.isError).toBeUndefined();
     expect(out.content).toHaveLength(2);
     expect(out.content[1]).toEqual({ type: "text", text: "Hola ñ 🙂\n" });
@@ -250,29 +328,40 @@ it("renders the four image types and text for named, unnamed and legacy clients"
   expect(google.attachmentRequests).toEqual([]);
 });
 
-it("decodes UTF-8 first then a declared charset and refuses invalid text and unknown or long labels", async () => {
+it("decodes UTF-8 or the declared charset, respecting control bytes, quotes and the charset bound", async () => {
   const f = await allowedAttachment();
-  for (const [bytes, charset, expected] of [
-    [new Uint8Array([0x6f, 0x6c, 0xe9]), '"iso-8859-1"', "olé"],
-    [new TextEncoder().encode("ñ 🙂"), "iso-8859-1", "ñ 🙂"],
-    [new TextEncoder().encode("UTF-8"), "unknown", "UTF-8"],
+  const cases = [
+    [new Uint8Array([0x6f, 0x6c, 0xe9]), 'text/plain; charset="iso-8859-1"', "olé"],
+    [new Uint8Array([0xe9]), "text/plain; charset=iso-8859-1", "é"],
+    [new TextEncoder().encode("ñ 🙂"), "text/plain; charset=iso-8859-1", "ñ 🙂"],
+    [new TextEncoder().encode("UTF-8"), "text/plain; charset=unknown", "UTF-8"],
+    [
+      new Uint8Array([0x1b, 0x24, 0x42, 0x46, 0x7c, 0x4b, 0x5c, 0x1b, 0x28, 0x42]),
+      "text/plain; charset=iso-2022-jp",
+      "日本",
+    ],
+    [new Uint8Array([0x48, 0, 0x69, 0]), "text/plain; charset=utf-16le", "Hi"],
+    [new Uint8Array([0x48, 0, 0x69]), "text/plain; charset=utf-16le", null],
+    [new Uint8Array([0x1b, 0x24, 0x58]), "text/plain; charset=iso-2022-jp", null],
+    [new Uint8Array([0, 0x41]), "text/plain; charset=unknown", null],
     [new Uint8Array([255]), null, null],
-    [new Uint8Array([255]), "unknown", null],
-    [new Uint8Array([255]), "iso-8859-1" + " ".repeat(40), null],
-    [new Uint8Array([255]), "utf-8", null],
-  ] as const) {
+    [new Uint8Array([255]), "text/plain; charset=unknown", null],
+    [new Uint8Array([255]), 'text/plain; charset="iso-8859-1' + " ".repeat(40) + '"', null],
+    [new Uint8Array([255]), "text/plain; charset=utf-8", null],
+    [new Uint8Array([0xe9]), 'text/plain; name="a; charset=iso-8859-1; b.txt"', null],
+    [new Uint8Array([0xe9]), 'text/plain; name="a; charset=utf-16le.txt"; CHARSET=iso-8859-1', "é"],
+    [
+      new Uint8Array([0xe9]),
+      'text/plain; name="a\\\"; charset=utf-16le; b.txt"; charset="iso-8859-1"',
+      "é",
+    ],
+    [new Uint8Array([0xe9]), "text/plain; name=owner's-notes.txt; charset=iso-8859-1", "é"],
+  ] as const;
+  for (const [bytes, contentType, expected] of cases) {
     const file = filePart("text/plain", "notes.txt", bytes);
     serveAttachment({
       ...file,
-      headers:
-        charset === null
-          ? []
-          : [
-              {
-                name: "cOnTeNt-TyPe",
-                value: `text/plain; CHARSET=${charset.startsWith('"') ? charset : '"' + charset + '"'}`,
-              },
-            ],
+      headers: contentType === null ? [] : [{ name: "cOnTeNt-TyPe", value: contentType }],
     });
     if (expected === null)
       await fileError(
@@ -286,7 +375,7 @@ it("decodes UTF-8 first then a declared charset and refuses invalid text and unk
         text: expected,
       });
   }
-  expect(google.messageRequests).toHaveLength(7);
+  expect(google.messageRequests).toHaveLength(cases.length);
   expect(google.attachmentRequests).toEqual([]);
 });
 
@@ -341,7 +430,11 @@ it("rejects invalid input without Gmail and maps other Gmail failures to google_
       await fileError(
         await download(f, { [field]: value }),
         "invalid_arguments",
-        new RegExp(`The ${field} field must be`),
+        {
+          account: "The account field must be a string.",
+          message: "The message field must be a message ID that read_thread returned.",
+          attachment: "The attachment field must be an attachment ID that read_thread returned.",
+        }[field],
       );
   }
   expect(googleTraffic()).toEqual([]);
@@ -393,6 +486,8 @@ it("lists the attachment tool with its public schema at ask or allow and removes
     if (setting === "deny") expect(tools.map((t) => t.name)).not.toContain("get_attachment");
     else
       expect(tools.find((t) => t.name === "get_attachment")).toMatchObject({
+        description:
+          "Returns one attachment of a message of one Google account. `account` is the address of an account that list_accounts returns. `message` is a message ID and `attachment` an attachment ID that read_thread returned for that account; both work only in that account. The result has two parts. The first is JSON with the account, the message, the attachment, and the file's name, media type, and size in bytes. The second is the file. In Claude Code the file comes as an embedded resource of any type: Claude Code saves it to disk and gives its path. In other clients an image (PNG, JPEG, GIF, or WebP) comes as an image and a text file as text, and any other file, such as a PDF, returns attachment_not_readable: tell the owner that Claude Code can open it. An attachment larger than 12 MB returns attachment_too_large with its size. Downloading changes nothing in Gmail. When the owner sets this tool to ask, it returns a pending approval with a link instead of the file; get_approval returns the file after the owner approves, for one hour.",
         annotations: { readOnlyHint: true },
         inputSchema: {
           type: "object",
@@ -405,4 +500,11 @@ it("lists the attachment tool with its public schema at ask or allow and removes
         },
       });
   }
+  const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
+  const page = JSON.parse(
+    /<script id="page-props" type="application\/json">([\s\S]*?)<\/script>/.exec(html)![1]!,
+  ) as Extract<FramePage, { _tag: "Connection" }>;
+  expect(page.tools.find((tool) => tool.name === "get_attachment")?.description).toBe(
+    "Download a file attached to a message of this account.",
+  );
 });

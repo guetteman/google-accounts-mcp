@@ -75,30 +75,35 @@ export const failures = {
 export type Missing = "thread" | "message" | "draft" | "attachment" | "label";
 export const notFound = (kind: Missing, id: string): ToolFailure =>
   new ToolFailure({ code: "not_found", missing: { kind, id } });
-export const tooLarge = (
-  file: { filename: string; type: string; size: number },
-  limit: number,
-): ToolFailure =>
+type FileInfo = { filename: string; type: string; size: number };
+export const tooLarge = (file: FileInfo, limit: number): ToolFailure =>
   new ToolFailure({
     code: "attachment_too_large",
     file: { filename: file.filename, type: file.type, size: file.size },
     limit,
   });
-export const notReadable = (file: { filename: string; type: string; size: number }): ToolFailure =>
+export const notReadable = (file: FileInfo): ToolFailure =>
   new ToolFailure({
     code: "attachment_not_readable",
     file: { filename: file.filename, type: file.type, size: file.size },
   });
-export class ToolFailure extends Data.TaggedError("ToolFailure")<{
-  code: keyof typeof failures;
+type FailureData = {
   unknown?: boolean;
-  file?: { filename: string; type: string; size: number };
-  limit?: number;
   missing?: { kind: Missing; id: string };
   reason?: "arguments_too_large";
   /** The field that is wrong, with what it must be. */
   field?: { name: string; expects: string };
-}> {}
+} & (
+  | { code: "attachment_too_large"; file: FileInfo; limit: number }
+  | { code: "attachment_not_readable"; file: FileInfo; limit?: never }
+  | {
+      code: Exclude<keyof typeof failures, "attachment_too_large" | "attachment_not_readable">;
+      file?: never;
+      limit?: never;
+    }
+);
+export const ToolFailure = Data.TaggedError("ToolFailure")<FailureData>;
+export type ToolFailure = InstanceType<typeof ToolFailure>;
 
 export function classify(
   error: unknown,
@@ -114,7 +119,7 @@ export function classify(
   const fileMessage =
     failure.file &&
     (failure.code === "attachment_too_large"
-      ? `The attachment ${filename} has ${failure.file.size.toLocaleString("en-US")} bytes. The limit is ${failure.limit!.toLocaleString("en-US")} bytes.`
+      ? `The attachment ${filename} has ${failure.file.size.toLocaleString("en-US")} bytes. The limit is ${failure.limit.toLocaleString("en-US")} bytes.`
       : failure.code === "attachment_not_readable"
         ? `This client cannot read ${filename} (type ${JSON.stringify(failure.file.type)}). The owner can open it with Claude Code.`
         : null);
