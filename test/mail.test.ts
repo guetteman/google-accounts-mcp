@@ -195,6 +195,11 @@ it("F4: multipart file names round trip while unsafe media types cannot add head
       bytes: new TextEncoder().encode("file content"),
     },
     { filename: "empty", type: "x/" + "a".repeat(99), bytes: new Uint8Array() },
+    {
+      filename: "blocks.bin",
+      type: "application/octet-stream",
+      bytes: Uint8Array.from({ length: 60_001 }, (_, i) => i % 256),
+    },
   ];
   const blob = mixedMessage(outgoing({ subject: "Files", body: "Plain text\nunchanged" }), files);
   expect(blob).toBeInstanceOf(Blob);

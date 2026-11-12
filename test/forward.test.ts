@@ -167,6 +167,10 @@ it.each(["size", "count", "actual", "413"])(
       Response.json({ data: kind === "actual" ? "A".repeat(33_333_336) : "AA" }),
     );
     if (kind === "413") google.uploadAnswers.push(() => new Response(null, { status: 413 }));
+    const quoted =
+      "---------- Forwarded message ---------\nFrom: Sam <sam@example.com>\nDate: 2026-11-11T09:41:36Z\nSubject: Lunch\nTo: Alex <alex.personal@example.com>, Kim <kim@example.com>\nCc: Jo <jo@example.com>, sam@EXAMPLE.com, ALEX.PERSONAL@EXAMPLE.COM\n\nMessage";
+    const total =
+      new TextEncoder().encode(quoted).byteLength + (kind === "size" ? 25_000_001 : 25_000_002);
     await expectError(
       await sendCall(f, "forward_message"),
       "message_too_large",
@@ -174,7 +178,7 @@ it.each(["size", "count", "actual", "413"])(
         ? "This forward would have 31 attachments. The limit is 30."
         : kind === "413"
           ? "Gmail refused this message as too large."
-          : /^This forward would have [\d,]+ bytes of attachments and text. The limit is 25,000,000 bytes\.$/,
+          : `This forward would have ${total.toLocaleString("en-US")} bytes of attachments and text. The limit is 25,000,000 bytes.`,
     );
     expect(google.sends).toEqual([]);
     expect(await onceRows()).toEqual([]);
