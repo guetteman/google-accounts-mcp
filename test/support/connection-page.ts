@@ -113,8 +113,8 @@ export const groupedConnectionPage = {
 } satisfies ConnectionPage;
 
 /**
- * Tools that no branch has yet: two whose effect cannot be undone and one, the trash, whose effect
- * can. `delete` stands before `send` in the list, and the page shows Send first.
+ * Fixture tools: three whose effect cannot be undone and one, the trash, whose effect can.
+ * `delete` stands before the Send tools in the list, and the page shows Send first.
  */
 export const irreversibleConnectionPage = {
   ...groupedConnectionPage,
@@ -127,6 +127,13 @@ export const irreversibleConnectionPage = {
       irreversible: true,
     },
     ...groupedConnectionPage.tools.map((tool) => ({ ...tool, irreversible: tool.name === "send" })),
+    {
+      name: "forward",
+      label: "Forward message",
+      description: "Forward a message.",
+      group: "Send",
+      irreversible: true,
+    },
     {
       name: "trash",
       label: "Move to trash",
@@ -141,8 +148,12 @@ export const irreversibleConnectionPage = {
     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:send": "ask",
     // Northwind: Send mail is already Allowed, so only Delete permanently is left to name.
     "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:send": "allow",
-    // Projects: both irreversible tools are already Allowed.
+    // Projects: only Forward message is left to name.
     "cccccccc-cccc-4ccc-8ccc-cccccccccccc:send": "allow",
     "cccccccc-cccc-4ccc-8ccc-cccccccccccc:delete": "allow",
+    // Fabrikam: every irreversible tool is already Allowed.
+    "dddddddd-dddd-4ddd-8ddd-dddddddddddd:send": "allow",
+    "dddddddd-dddd-4ddd-8ddd-dddddddddddd:forward": "allow",
+    "dddddddd-dddd-4ddd-8ddd-dddddddddddd:delete": "allow",
   },
 } satisfies ConnectionPage;

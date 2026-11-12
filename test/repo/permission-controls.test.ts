@@ -643,7 +643,10 @@ it.each([
           const sent = page.waitForRequest((request) => request.method() === "POST");
           await dialog.getByRole("button", { name: `Set to ${wanted}`, exact: true }).click();
           const form = new URLSearchParams((await sent).postData()!);
-          expect(form.getAll("tool")).toEqual(["list_labels", "search_threads"]);
+          // List labels is already Allowed on Personal: Allowed goes only to the tools that change.
+          expect(form.getAll("tool")).toEqual(
+            setting === "allow" ? ["search_threads"] : ["list_labels", "search_threads"],
+          );
           expect(form.get("setting")).toBe(setting);
           expect(routes).toHaveLength(1);
         }
@@ -911,34 +914,46 @@ it("shows ordered group values or counts only for a closed mixed account, and re
   }
 });
 
+const everyTool = ["delete", "send", "list_labels", "draft", "search_threads", "forward", "trash"];
 it.each([
   {
-    // Send mail is Ask first and Delete permanently is Not allowed: both change. The page shows
-    // Send before Trash and delete, though the tool list has Delete permanently first.
+    // Send mail is Ask first, the other two are Not allowed: all three change. The page shows Send
+    // before Trash and delete, though the tool list has Delete permanently first.
     account: "Personal",
     wanted: "Allowed" as const,
-    text: "Claude will be able to use every tool on Personal without asking you, including these, which cannot be undone: Send mail and Delete permanently. This changes 5 tools.",
+    text: "Claude will be able to use every tool on Personal without asking you, including these, which cannot be undone: Send mail, Forward message, and Delete permanently. This changes 6 tools.",
+    // List labels is already Allowed, so the click does not send it.
+    sent: ["search_threads", "draft", "send", "forward", "delete", "trash"],
   },
   {
-    // Send mail is already Allowed here, so the click does not change it.
+    // Send mail is already Allowed here: the click does not change it, name it, or send it.
     account: "Northwind",
     wanted: "Allowed" as const,
-    text: "Claude will be able to use every tool on Northwind without asking you, including Delete permanently, which cannot be undone. This changes 5 tools.",
+    text: "Claude will be able to use every tool on Northwind without asking you, including these, which cannot be undone: Forward message and Delete permanently. This changes 6 tools.",
+    sent: ["list_labels", "search_threads", "draft", "forward", "delete", "trash"],
   },
   {
-    // Both irreversible tools are already Allowed.
     account: "Projects",
     wanted: "Allowed" as const,
-    text: "Claude will be able to use every tool on Projects without asking you. This changes 4 tools.",
+    text: "Claude will be able to use every tool on Projects without asking you, including Forward message, which cannot be undone. This changes 5 tools.",
+    sent: ["list_labels", "search_threads", "draft", "forward", "trash"],
+  },
+  {
+    // Every irreversible tool is already Allowed.
+    account: "Fabrikam Holdings International, Finance and Legal Operations",
+    wanted: "Allowed" as const,
+    text: "Claude will be able to use every tool on Fabrikam Holdings International, Finance and Legal Operations without asking you. This changes 4 tools.",
+    sent: ["list_labels", "search_threads", "draft", "trash"],
   },
   {
     account: "Personal",
     wanted: "Ask first" as const,
-    text: "Claude will be able to call every tool on Personal, and each call will wait for your approval. This changes 5 tools.",
+    text: "Claude will be able to call every tool on Personal, and each call will wait for your approval. This changes 6 tools.",
+    sent: everyTool,
   },
 ])(
   "names only the irreversible tools that change when all tools on $account go to $wanted",
-  async ({ account, wanted, text }) => {
+  async ({ account, wanted, text, sent: tools }) => {
     const page = await open(390, "irreversible");
     try {
       const routes = await pending(page);
@@ -951,14 +966,9 @@ it.each([
       expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(text);
       const sent = page.waitForRequest((request) => request.method() === "POST");
       await dialog.getByRole("button", { name: `Set to ${wanted}`, exact: true }).click();
-      expect(new URLSearchParams((await sent).postData()!).getAll("tool")).toEqual([
-        "delete",
-        "send",
-        "list_labels",
-        "draft",
-        "search_threads",
-        "trash",
-      ]);
+      const form = new URLSearchParams((await sent).postData()!);
+      expect(form.getAll("tool")).toEqual(tools);
+      expect(form.get("setting")).toBe(wanted === "Allowed" ? "allow" : "ask");
       expect(routes).toHaveLength(1);
     } finally {
       await page.close();
@@ -984,7 +994,7 @@ it("confirms Allowed on one irreversible tool before it sends anything, with foc
       } else await opener.click();
       await dialog.waitFor();
       expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
-        "Claude will be able to use Delete permanently on Personal without asking you. What it does cannot be undone.",
+        "Claude will be able to use Delete permanently on Personal without asking you. What this tool does cannot be undone.",
       );
       const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
       await expect.poll(() => cancel.evaluate((el) => el === document.activeElement)).toBe(true);

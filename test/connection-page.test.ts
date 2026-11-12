@@ -183,12 +183,12 @@ it("tells the page which tools cannot be undone, from each tool's own declaratio
   tool.irreversible = true;
   try {
     const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
-    expect(pageProps(html).tools.map(({ name, irreversible }) => ({ name, irreversible }))).toEqual(
-      [
-        { name: "list_labels", irreversible: false },
-        { name: "search_threads", irreversible: true },
-        { name: "read_thread", irreversible: false },
-      ],
+    const shown = pageProps(html).tools.map(({ name, irreversible }) => ({ name, irreversible }));
+    expect(shown).toContainEqual({ name: "search_threads", irreversible: true });
+    expect(shown).toEqual(
+      TOOLS.flatMap((tool) =>
+        tool.kind === "account" ? [{ name: tool.name, irreversible: tool.irreversible }] : [],
+      ),
     );
   } finally {
     tool.irreversible = original;

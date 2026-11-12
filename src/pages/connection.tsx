@@ -80,8 +80,10 @@ type Account = Props["accounts"][number];
 type Tool = Props["tools"][number];
 type Action = "name" | "revoke";
 type ControlState = { value: Setting; phase: "confirmed" | "saving" } | { phase: "unconfirmed" };
-/** A change that waits for the owner's confirmation: one tool, or every tool when `tool` is null. */
-type Pending = { account: Account; tool: Tool | null; wanted: "ask" | "allow" };
+/** A change that waits for the owner's confirmation: one tool to Allowed, or every tool. */
+type Pending =
+  | { account: Account; tool: Tool; wanted: "allow" }
+  | { account: Account; tool: null; wanted: "ask" | "allow" };
 const values = [
   { value: "deny", label: "Not allowed", icon: BanIcon },
   { value: "ask", label: "Ask first", icon: CircleQuestionMarkIcon },
@@ -210,21 +212,19 @@ export function ConnectionPage(props: Props) {
     const uncertainNotice = permissionMessage("unknown", connection.name);
     if (notice) setMessage((current) => (current && notice !== uncertainNotice ? current : notice));
   };
-  const confirm = (change: Pending) => {
+  const askToConfirm = (change: Pending) => {
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setPending(change);
   };
   const chooseAll = (account: Account, wanted: Setting) => {
     const states = props.tools.map((tool) => controls[keyOf(account, tool)]!);
     if (states.some((state) => state.phase !== "confirmed")) return;
-    const count = states.filter(
-      (state) => state.phase !== "unconfirmed" && state.value !== wanted,
-    ).length;
-    if (count === 0) return;
+    if (commonValue(states) === wanted) return;
     if (wanted === "deny") return void save(account, props.tools, wanted);
-    confirm({ account, tool: null, wanted });
+    askToConfirm({ account, tool: null, wanted });
   };
-  // What the dialog says comes from the same settings that the save will change.
+  // The tools that the page shows at another value, in the order it shows them. The dialog counts
+  // them and names the irreversible ones.
   const changing = pending
     ? groups
         .flatMap((group) => group.tools)
@@ -233,10 +233,7 @@ export function ConnectionPage(props: Props) {
           return state.phase !== "unconfirmed" && state.value !== pending.wanted;
         })
     : [];
-  const irreversible =
-    pending?.wanted === "allow"
-      ? changing.filter((tool) => tool.irreversible).map((tool) => tool.label)
-      : [];
+  const irreversible = changing.filter((tool) => tool.irreversible).map((tool) => tool.label);
   return (
     <OwnerFrame frame={props.frame}>
       <div className="flex flex-col gap-10">
@@ -502,7 +499,7 @@ export function ConnectionPage(props: Props) {
                                             phase={state.phase}
                                             choose={(wanted) =>
                                               wanted === "allow" && tool.irreversible
-                                                ? confirm({ account, tool, wanted })
+                                                ? askToConfirm({ account, tool, wanted })
                                                 : void save(account, [tool], wanted)
                                             }
                                           />
@@ -560,7 +557,7 @@ export function ConnectionPage(props: Props) {
                     {connection.name} will be able to use {pending.tool.label} on{" "}
                     {pending.account.name} without asking you.{" "}
                     <span className="font-medium text-foreground">
-                      What it does cannot be undone.
+                      What this tool does cannot be undone.
                     </span>
                   </>
                 ) : (
@@ -585,10 +582,16 @@ export function ConnectionPage(props: Props) {
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
+                // Allowed goes only to the tools that the dialog counted. In a page that is out of
+                // date, a tool that it shows as Allowed is then not granted without being named.
                 onClick={() =>
                   void save(
                     pending.account,
-                    pending.tool ? [pending.tool] : props.tools,
+                    pending.tool
+                      ? [pending.tool]
+                      : pending.wanted === "allow"
+                        ? changing
+                        : props.tools,
                     pending.wanted,
                   )
                 }
