@@ -1,12 +1,21 @@
 import type { Tool as McpTool } from "@modelcontextprotocol/server";
-import type { ViewValue } from "../approvals/model";
+import { viewDate, type ViewNote, type ViewValue } from "../approvals/model";
 import { getApproval } from "../approvals/result";
 import { Data, Effect, Result, Schema, SchemaIssue } from "effect";
 import type { Unavailable } from "../db";
 import { accountMessage } from "../accounts/model";
 import { listVisibleAccounts } from "../accounts/store";
 import { LIMIT, placeOf, readThread } from "../google/thread";
-import { listLabels, searchThreads, threadSummary } from "../google/gmail";
+import { listLabels, MAX_ITEMS, searchThreads, threadSummary } from "../google/gmail";
+import {
+  changeLabels,
+  labelChangeNotes,
+  labelChangeValues,
+  LABELS_EXPECT,
+  MAX_LABELS,
+  REFUSED,
+  REFUSED_ADD,
+} from "../google/organize";
 import { readListedTools } from "../permissions/store";
 import type { CallContext } from "./call";
 import { creating, type ToolFailure } from "./failures";
@@ -82,6 +91,8 @@ export type Tool =
         action: string;
         joiner: string;
         empty: string;
+        /** Sentences that the page says about this call, from its arguments alone. */
+        notes?: (args: DecodedArgs) => ReadonlyArray<ViewNote>;
         values: (
           args: DecodedArgs,
           send: Send,
@@ -101,6 +112,8 @@ type AccountDefinition<A extends DecodedArgs> = {
     action: string;
     joiner: string;
     empty: string;
+    /** Sentences that the page says about this call, from its arguments alone. */
+    notes?: (args: A) => ReadonlyArray<ViewNote>;
     values: (
       args: A,
       send: Send,
@@ -145,6 +158,22 @@ export const DEFAULT_LIMIT = 10;
 export const MAX_LIMIT = 25;
 const MAX_QUERY = 2000;
 const MAX_PAGE = 500;
+const ThreadId = Schema.String.check(
+  Schema.isBetweenLength(1, 64),
+  Schema.isPattern(/^[A-Za-z0-9_-]+$/),
+);
+const LabelIds = Schema.Array(
+  Schema.String.check(
+    Schema.isBetweenLength(1, 100),
+    Schema.isPattern(/^[A-Za-z0-9_-]+$/),
+    Schema.makeFilter((id) => !REFUSED.has(id)),
+  ),
+).check(Schema.isMaxLength(MAX_LABELS));
+const labelChange = (args: {
+  threads: readonly string[];
+  add?: readonly string[];
+  remove?: readonly string[];
+}) => ({ threads: args.threads, add: args.add ?? [], remove: args.remove ?? [] });
 const Mailboxes = Schema.Array(
   Schema.String.check(Schema.makeFilter((value) => parseMailbox(value) !== null)),
 );
@@ -297,10 +326,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     description: `Returns the messages of one thread of one Google account, oldest first, as plain text. \`account\` is the address of an account that list_accounts returns. \`thread\` is a thread ID that search_threads returned for that account; an ID works only in the account that returned it. \`message_count\` is the number of messages in the thread. Each message has its ID, its position in the thread, \`from\`, \`to\`, \`cc\`, its date, its label IDs, its text, and its attachments. \`bcc\` is present when the message has that header, which is normally mail that the account wrote. A message that is a draft has \`draft\`, its draft ID. HTML mail is converted to plain text, and a link keeps its address in parentheses. An attachment has an ID, a file name, a media type, and a size in bytes; the result holds no file. \`inline: true\` marks an image that stands inside the body; converted HTML says \`[image: name]\` where it stood. A very long field is shortened: a list of recipients ends with \`… and N more\`, and \`attachments_left_out\` counts the attachments that are not listed. A result has at most ${LIMIT.toLocaleString("en-US")} characters. When it has \`next_page\`, it stops before the end of the thread: send the same call with \`page\` set to that value to get the rest. A message with \`text_cut\` does not hold its whole text: \`end\` means that the next page continues it, \`start\` that it continues the page before, and \`both\` means both. Reading changes nothing in Gmail: unread mail stays unread. When the owner sets this tool to ask, it returns a pending approval with a link instead of messages; get_approval returns the messages after the owner approves.`,
     input: Schema.Struct({
       account: Schema.String,
-      thread: Schema.String.check(
-        Schema.isBetweenLength(1, 64),
-        Schema.isPattern(/^[A-Za-z0-9_-]+$/),
-      ),
+      thread: ThreadId,
       page: Schema.optionalKey(
         Schema.String.check(
           Schema.isBetweenLength(1, 100),
@@ -320,22 +346,11 @@ export const TOOLS: ReadonlyArray<Tool> = [
       values: (args, send) =>
         Effect.gen(function* () {
           const summary = yield* threadSummary(send, args.thread);
-          const date = new Intl.DateTimeFormat("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-            timeZone: "UTC",
-          }).format(summary.date);
-          const time = new Intl.DateTimeFormat("en-GB", {
-            hour: "2-digit",
-            minute: "2-digit",
-            timeZone: "UTC",
-          }).format(summary.date);
           const values: ViewValue[] = [
             { name: "Subject", text: summary.subject, from: "gmail" },
             { name: "Messages", text: String(summary.messages.length), from: "gmail" },
             { name: "Last message from", text: summary.from, from: "gmail" },
-            { name: "Last message date", text: `${date} at ${time} UTC`, from: "gmail" },
+            { name: "Last message date", text: viewDate(summary.date), from: "gmail" },
           ];
           if (args.page !== undefined) {
             const place = placeOf(args.page);
@@ -352,6 +367,53 @@ export const TOOLS: ReadonlyArray<Tool> = [
     },
     run: (send, account, args) =>
       readThread(send, { account: account.email, thread: args.thread, page: args.page }),
+  }),
+  accountTool({
+    name: "change_labels",
+    label: "Change labels",
+    group: "Organize",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    permissionDescription:
+      "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam, or take it out.",
+    description: `Adds and removes labels on threads of one Google account. \`account\` is the address of an account that list_accounts returns. \`threads\` is a list of 1 to ${MAX_ITEMS} thread IDs that search_threads returned for that account. \`add\` and \`remove\` are lists of label IDs that list_labels returned for that account, at most ${MAX_LABELS} each; the call needs at least one label, and no label in both lists. The change applies to every message of each thread. To archive a thread, remove \`INBOX\`. The tool cannot add \`INBOX\`, because that would also take mail out of the trash or spam. To mark it as read, remove \`UNREAD\`; to mark it as unread, add \`UNREAD\`. To star it, add \`STARRED\`. Of the system labels, the tool accepts only \`UNREAD\`, \`STARRED\`, \`IMPORTANT\`, and the five \`CATEGORY_\` labels, and \`INBOX\` in \`remove\`: it does not move mail to the trash or to spam or take it out, and it creates no label. The result's \`threads\` has one entry for each thread that changed: its ID and \`labels\`, the IDs of the labels that at least one of its messages has after the change. \`not_found\` lists the threads that the account does not have. \`unconfirmed\` lists the threads whose change Google did not confirm: send the call again with those threads, because repeating a change is safe. Each of the two is left out when it is empty. The call fails as a whole only when no thread is confirmed changed. When it fails with a message that Google did not confirm the request, a thread may have changed, and sending the same call again is safe. When the owner sets this tool to ask, it returns a pending approval with a link instead of a result; get_approval returns the result after the owner approves.`,
+    input: Schema.Struct({
+      account: Schema.String,
+      threads: Schema.Array(ThreadId).check(
+        Schema.isBetweenLength(1, MAX_ITEMS),
+        Schema.isUnique(),
+      ),
+      add: Schema.optionalKey(
+        LabelIds.check(Schema.makeFilter((ids) => !ids.some((id) => REFUSED_ADD.has(id)))),
+      ),
+      remove: Schema.optionalKey(LabelIds),
+    }).check(
+      Schema.makeFilter((args) => {
+        const { add, remove } = labelChange(args);
+        if (add.length + remove.length === 0)
+          return { path: ["add"], issue: "At least one label is required" };
+        if (remove.some((id) => add.includes(id)))
+          return { path: ["remove"], issue: "A label cannot be added and removed" };
+        return undefined;
+      }),
+    ),
+    expects: {
+      account: "a string",
+      threads: `a list of 1 to ${MAX_ITEMS} different thread IDs that search_threads returned`,
+      add: LABELS_EXPECT,
+      remove: LABELS_EXPECT,
+    },
+    view: {
+      action: "add or remove labels on threads",
+      joiner: "in",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      notes: (args) => labelChangeNotes(labelChange(args)),
+      values: (args, send) => labelChangeValues(send, labelChange(args)),
+    },
+    run: (send, account, args) =>
+      changeLabels(send, {
+        account: account.email,
+        ...labelChange(args),
+      }),
   }),
   accountTool({
     name: "create_draft",

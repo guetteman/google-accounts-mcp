@@ -4,6 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
 import type { TestEnv } from "./env";
 import type { ApprovalPageProps, ViewValue } from "../src/approvals/model";
+import { viewDate } from "../src/approvals/model";
 import { viewDigest } from "../src/approvals/view";
 import { TOOLS } from "../src/mcp/tools";
 import { renderPage } from "../src/pages/render";
@@ -24,6 +25,10 @@ import { asking, message, read, serveThread, THREAD } from "./support/thread";
 
 const readTool = TOOLS.find((t) => t.name === "read_thread")!;
 if (readTool.kind !== "account") throw new Error("Missing read_thread");
+
+it("formats a view date with its year and UTC time", () => {
+  expect(viewDate(Date.UTC(2025, 0, 5, 7, 3))).toBe("Jan 5, 2025 at 07:03 UTC");
+});
 
 it("with ask, returns pending without contacting Google", async () => {
   serveThread([message()]);
@@ -46,6 +51,7 @@ it.each([undefined, "m4", "m4+18000"])(
       action: "read a thread",
       joiner: "in",
     });
+    expect(props.request.notes).toEqual([]);
     expect(props.request.values).toEqual([
       { name: "Subject", text: "Lunch", from: "gmail" },
       { name: "Messages", text: "7", from: "gmail" },
@@ -64,7 +70,7 @@ it.each([undefined, "m4", "m4+18000"])(
     const text = textOf(await renderPage(props).text());
     if (start) {
       expect(text).toContain(
-        "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which.",
+        "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each caption says which.",
       );
       for (const label of ["Subject", "Messages", "Last message from", "Last message date"])
         expect(text).toContain(`${label}, read from Gmail`);
@@ -91,7 +97,7 @@ it.each([
       { name: "Subject", text: "Lunch", from: "gmail" },
       { name: "Body", text: "Reply", from: "agent" },
     ],
-    "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which.",
+    "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each caption says which.",
   ],
 ] as [ViewValue[], string][])(
   "explains the source of shaded values %j",
@@ -111,8 +117,14 @@ it.each([
   },
 );
 
-it("renders thread and search previews at 390 and 1280 pixels without overflow", async () => {
-  for (const name of ["approval-waiting-thread", "approval-waiting-search"])
+it("renders thread, search, notes and label previews at 390 and 1280 pixels without overflow", async () => {
+  for (const name of [
+    "approval-waiting-thread",
+    "approval-waiting-search",
+    "approval-waiting-notes",
+    "approval-waiting-labels",
+    "approval-waiting-labels-many",
+  ])
     for (const width of [390, 1280]) {
       const response = renderPage(previews[name]!);
       const result = await (
@@ -130,8 +142,71 @@ it("renders thread and search previews at 390 and 1280 pixels without overflow",
       expect(result.errors).toEqual([]);
       expect(result.overflow).toBe(false);
     }
-  // Four Chromium pages; the other browser tests allow as much.
+  // Ten Chromium pages, within the existing browser-test budget.
 }, 60_000);
+
+it.each([200, 500])(
+  "includes notes only when Gmail's %s response allows a view",
+  async (status) => {
+    serveThread([message()]);
+    const f = await asking();
+    if (status === 500) google.threadAnswers.set(THREAD, () => new Response(null, { status }));
+    const original = readTool.view;
+    const notes = [{ text: "This call reads this thread.", warning: false }];
+    let readsWhenNoted: number | undefined;
+    const makeNotes = vi.fn(() => {
+      readsWhenNoted = google.threadRequests.length;
+      return notes;
+    });
+    readTool.view = { ...original, notes: makeNotes };
+    try {
+      const props = await page(f, f.id);
+      expect(props.state).toMatchObject({ kind: "waiting", shown: status === 200 });
+      expect(props.request.notes).toEqual(status === 200 ? notes : []);
+      expect(makeNotes).toHaveBeenCalledExactlyOnceWith({ account: PERSONAL, thread: THREAD });
+      expect(readsWhenNoted).toBe(0);
+      expect(google.threadRequests).toHaveLength(1);
+    } finally {
+      readTool.view = original;
+    }
+  },
+);
+
+it("covers a note's text, warning and order in the view digest", async () => {
+  const source = previews["approval-waiting-notes"] as ApprovalPageProps;
+  const request = source.request;
+  const first = request.notes[0]!;
+  const last = request.notes[1]!;
+  const variants = [
+    request,
+    { ...request, notes: [{ ...first, text: "Changed note" }, last] },
+    { ...request, notes: [{ ...first, warning: !first.warning }, last] },
+    { ...request, notes: [last, first] },
+  ];
+  const digests = await Promise.all(variants.map(viewDigest));
+  expect(new Set(digests).size).toBe(4);
+});
+
+it("runs nothing when a note changes after the page showed it", async () => {
+  serveThread([message()]);
+  const f = await asking();
+  const original = readTool.view;
+  let text = "This call reads this thread.";
+  readTool.view = { ...original, notes: () => [{ text, warning: false }] };
+  const run = vi.spyOn(readTool, "run");
+  try {
+    const shown = await page(f, f.id);
+    if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
+    text = "This call reads all messages of this thread.";
+    const props = await decided(await post(f, f.id, "approve", { digest: shown.state.digest! }));
+    expect(props.state).toMatchObject({ kind: "waiting", shown: true, changed: true });
+    expect(props.request.notes).toEqual([{ text, warning: false }]);
+    expect(run).not.toHaveBeenCalled();
+    expect((await callRows()).map((r) => r.outcome)).toEqual(["pending"]);
+  } finally {
+    readTool.view = original;
+  }
+});
 
 it.each(["404", "500", "page", "account"])(
   "hides Approve for %s while Reject still works",

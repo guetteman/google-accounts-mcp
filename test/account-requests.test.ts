@@ -1,12 +1,16 @@
 import { env } from "cloudflare:workers";
-import { Effect, Result } from "effect";
-import { expect, it } from "vite-plus/test";
+import { Effect, Result, Schema } from "effect";
+import { http } from "msw";
+import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
 import { accountRequests } from "../src/mcp/call";
+import { change, changeEach } from "../src/google/gmail";
+import { notFound } from "../src/mcp/failures";
 import { readConfig } from "../src/config";
 import { readOwner } from "../src/owner/owner";
 import { credential, NOW, seedAccount } from "./support/accounts";
 import { google, LABELS_URL, token } from "./support/google";
+import { network } from "./support/network";
 import { testEnv } from "./support/worker";
 
 const DEADLINE = NOW + 20_000;
@@ -65,9 +69,12 @@ it.each([
   let now = NOW;
   const controller = new AbortController();
   const requests = await requestsAt(() => now, controller.signal);
+  const fetches = vi.spyOn(globalThis, "fetch");
+  let beforeStop = 0;
   const stop = () => {
     if (cut === "deadline") now = DEADLINE;
     else controller.abort();
+    beforeStop = fetches.mock.calls.length;
   };
   if (retry) {
     google.labelAnswers.push(() => new Response(null, { status: 401 }));
@@ -84,6 +91,42 @@ it.each([
     });
     expect(google.labelRequests).toHaveLength(retry ? 1 : 0);
     expect(google.events).toEqual(retry ? ["refresh"] : []);
+    expect(fetches).toHaveBeenCalledTimes(beforeStop);
+  } finally {
+    fetches.mockRestore();
+    requests.close();
+  }
+});
+
+it("keeps earlier changes and marks later requests unconfirmed when the call's deadline passes", async () => {
+  let now = NOW;
+  const requests = await requestsAt(() => now);
+  const changed: string[] = [];
+  network.use(
+    http.post(
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/:id/modify",
+      ({ params }) => {
+        changed.push(String(params.id));
+        now = DEADLINE;
+        return Response.json({ id: params.id });
+      },
+    ),
+  );
+  try {
+    const result = await Effect.runPromise(
+      changeEach("message", ["a", "b", "c"], (id) =>
+        change(
+          requests.send,
+          "POST",
+          `messages/${id}/modify`,
+          Schema.Struct({ id: Schema.String }),
+          () => notFound("message", id),
+          { addLabelIds: ["STARRED"] },
+        ),
+      ),
+    );
+    expect(result).toEqual({ changed: [{ id: "a" }], not_found: [], unconfirmed: ["b", "c"] });
+    expect(changed).toEqual(["a"]);
   } finally {
     requests.close();
   }

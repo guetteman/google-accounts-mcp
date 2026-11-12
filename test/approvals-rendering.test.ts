@@ -6,13 +6,50 @@ import { TOOLS } from "../src/mcp/tools";
 import { decideApproval, readApproval } from "../src/approvals/store";
 import { readOwner } from "../src/owner/owner";
 import { parseApprovalId } from "../src/approvals/model";
+import type { ApprovalPageProps, ApprovalState } from "../src/approvals/model";
 import { renderPage } from "../src/pages/render";
+import { previews } from "../src/pages/previews";
 import { fixture } from "./support/permissions";
 import { ask, approve, page, post, setting } from "./support/approvals";
 import { NOW } from "./support/accounts";
 import { google } from "./support/google";
 import { ORIGIN, textOf } from "./support/worker";
 import type { TestEnv } from "./env";
+
+it("renders plain notes before values and warnings after the whole call and before Approve", async () => {
+  const props = previews["approval-waiting-notes"] as ApprovalPageProps;
+  const html = (await renderPage(props).text()).replace(/<script[\s\S]*?<\/script>/g, "");
+  const plain = props.request.notes[0]!.text;
+  const warning = props.request.notes[1]!.text;
+  const text = textOf(html);
+  expect(html).toContain(`<p class="text-base/7">${plain}</p>`);
+  expect(text.indexOf(plain)).toBeGreaterThan(
+    text.indexOf("This page's own words are never shaded."),
+  );
+  expect(html.indexOf(plain)).toBeLessThan(html.indexOf("<figure"));
+  for (const quoted of html.matchAll(/<(blockquote|bdi)\b[^>]*>[\s\S]*?<\/\1>/g))
+    expect(quoted[0]).not.toContain(plain);
+  const alert = /<div\b[^>]*role="alert"[\s\S]*?<\/div><\/div>/.exec(html)?.[0];
+  expect(alert).toBeDefined();
+  expect(alert).toContain("bg-warning");
+  expect(alert).toContain("lucide-triangle-alert");
+  expect(alert).toMatch(new RegExp(`<div[^>]*data-slot="alert-title"[^>]*>${warning}</div>`));
+  expect(html.indexOf(warning)).toBeGreaterThan(html.lastIndexOf("</blockquote>"));
+  expect(html.indexOf(warning)).toBeGreaterThan(html.indexOf("That is the whole call."));
+  expect(html.indexOf(warning)).toBeLessThan(html.indexOf(">Approve</button>"));
+});
+
+it.each([
+  { kind: "waiting", shown: false, changed: false, digest: null },
+  { kind: "succeeded" },
+] satisfies ApprovalState[])(
+  "hides view notes for a $kind page without a shown view",
+  async (state) => {
+    const source = previews["approval-waiting-notes"] as ApprovalPageProps;
+    const text = textOf(await renderPage({ ...source, state }).text());
+    for (const note of source.request.notes) expect(text).not.toContain(note.text);
+  },
+);
 
 it("renders who asks, the account, the full request and UTC times before Approve", async () => {
   const f = await fixture();

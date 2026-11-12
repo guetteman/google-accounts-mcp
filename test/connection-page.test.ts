@@ -55,7 +55,7 @@ it("links each connection to its own permissions page and shows only the account
     expect(props.settings[`${f.northwind.id}:${tool.name}`]).toBeUndefined();
 });
 
-it("renders tools under Find and read and Draft, in tool-list order, and no empty group", async () => {
+it("renders tools under their groups in tool-list order, with no empty group", async () => {
   const f = await fixture();
   const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
   const props = pageProps(html);
@@ -63,20 +63,35 @@ it("renders tools under Find and read and Draft, in tool-list order, and no empt
     { name: "list_labels", group: "Find and read" },
     { name: "search_threads", group: "Find and read" },
     { name: "read_thread", group: "Find and read" },
+    { name: "change_labels", group: "Organize" },
     { name: "create_draft", group: "Draft" },
   ]);
+  expect(props.tools.find((tool) => tool.name === "change_labels")).toEqual({
+    name: "change_labels",
+    label: "Change labels",
+    group: "Organize",
+    description:
+      "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam, or take it out.",
+  });
   const first = html.slice(
     html.indexOf("Tool permissions"),
     html.indexOf('aria-label="All tools on Northwind'),
   );
   expect(textOf(first)).toContain("Find and read");
+  expect(textOf(first)).toContain("Organize");
   expect(first.indexOf('aria-label="List labels on Personal')).toBeLessThan(
     first.indexOf('aria-label="Search mail on Personal'),
   );
   expect(first.indexOf('aria-label="Search mail on Personal')).toBeLessThan(
     first.indexOf('aria-label="Read thread on Personal'),
   );
-  for (const group of GROUPS.slice(2)) expect(textOf(html)).not.toContain(group);
+  expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Change labels on Personal'),
+  );
+  for (const group of GROUPS.filter(
+    (group) => group !== "Find and read" && group !== "Draft" && group !== "Organize",
+  ))
+    expect(textOf(html)).not.toContain(group);
 });
 
 it.each(["revoked", "expired"])(

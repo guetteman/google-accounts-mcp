@@ -25,6 +25,7 @@ export const viewDigest = async (request: ApprovalRequest) => {
       joiner: request.tool.joiner,
       empty: request.tool.empty,
     },
+    notes: request.notes.map(({ text, warning }) => ({ text, warning })),
     values: request.values.map(({ name, text, from }) => ({ name, text, from })),
   });
   return Array.from(
@@ -61,6 +62,7 @@ export async function approvalView(
       joiner: tool.view.joiner,
       empty: tool.view.empty,
     },
+    notes: [],
     values: [],
   };
   let decoded: DecodedArgs | null = null;
@@ -71,14 +73,16 @@ export async function approvalView(
       if (opened !== null) {
         const parsed = decodeArgs(tool, opened);
         if (parsed.ok) {
+          const notes = tool.view.notes?.(parsed.value) ?? [];
           const values = await Effect.runPromise(
             tool.view.values(
               parsed.value,
               send ?? (() => Effect.fail(new ToolFailure({ code: "google_unavailable" }))),
             ),
           );
+          digest = await viewDigest({ ...request, notes, values });
+          request.notes = notes;
           request.values = values;
-          digest = await viewDigest(request);
           decoded = parsed.value;
         }
       }

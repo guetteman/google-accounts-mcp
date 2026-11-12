@@ -12,6 +12,9 @@ it("renders every approval preview with the shared hydration entry", async () =>
   for (const name of [
     "waiting",
     "waiting-long-names",
+    "waiting-notes",
+    "waiting-labels",
+    "waiting-labels-many",
     "cannot-show",
     "changed",
     "running",
