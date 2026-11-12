@@ -130,7 +130,8 @@ it("renders thread and search previews at 390 and 1280 pixels without overflow",
       expect(result.errors).toEqual([]);
       expect(result.overflow).toBe(false);
     }
-});
+  // Four Chromium pages; the other browser tests allow as much.
+}, 60_000);
 
 it.each(["404", "500", "page", "account"])(
   "hides Approve for %s while Reject still works",
