@@ -70,6 +70,9 @@ it("renders tools under their groups in tool-list order, with no empty group", a
     { name: "send_reply", group: "Send" },
     { name: "forward_message", group: "Send" },
     { name: "send_draft", group: "Send" },
+    { name: "trash_messages", group: "Trash and delete" },
+    { name: "restore_messages", group: "Trash and delete" },
+    { name: "delete_messages", group: "Trash and delete" },
   ]);
   expect(props.tools.find((tool) => tool.name === "change_labels")).toEqual({
     name: "change_labels",
@@ -98,12 +101,18 @@ it("renders tools under their groups in tool-list order, with no empty group", a
   expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
     first.indexOf('aria-label="Change labels on Personal'),
   );
-  expect(first.indexOf('aria-label="Change labels on Personal')).toBeLessThan(
-    first.indexOf('aria-label="Create draft on Personal'),
+  expect(first.indexOf('aria-label="Send draft on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Change labels on Personal'),
   );
-  for (const group of GROUPS.filter(
-    (group) => !["Find and read", "Organize", "Draft", "Send"].includes(group),
-  ))
+  expect(textOf(first).indexOf("Organize")).toBeLessThan(textOf(first).indexOf("Trash and delete"));
+  expect(first.indexOf('aria-label="Move to trash on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Restore from trash on Personal'),
+  );
+  expect(first.indexOf('aria-label="Restore from trash on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Delete permanently on Personal'),
+  );
+  const usedGroups = new Set(props.tools.map((tool) => tool.group));
+  for (const group of GROUPS.filter((group) => !usedGroups.has(group)))
     expect(textOf(html)).not.toContain(group);
 });
 
@@ -203,7 +212,7 @@ it.each(["00000000-0000-4000-8000-000000000000", "not-an-id"])(
   },
 );
 
-it("names the four irreversible send tools in page order", async () => {
+it("names all five irreversible tools in page order", async () => {
   const f = await fixture();
   const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
   const tools = pageProps(html).tools;
@@ -214,6 +223,7 @@ it("names the four irreversible send tools in page order", async () => {
     { name: "send_reply", label: "Send reply" },
     { name: "forward_message", label: "Forward message" },
     { name: "send_draft", label: "Send draft" },
+    { name: "delete_messages", label: "Delete permanently" },
   ]);
   expect(tools.find((tool) => tool.name === "create_draft")!.irreversible).toBe(false);
 });

@@ -1,8 +1,8 @@
 export const GROUPS = [
   "Find and read",
-  "Organize",
   "Draft",
   "Send",
+  "Organize",
   "Trash and delete",
   "Download attachments",
 ] as const;

@@ -5,6 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { chromium, type Browser, type Locator, type Page, type Route } from "playwright-core";
 import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
+import { TOOLS } from "../../src/mcp/tools";
 
 let browser: Browser;
 let origin: string;
@@ -76,7 +77,7 @@ async function selected(group: Locator, value: "Allowed" | "Not allowed" | "Ask 
   for (const name of ["Not allowed", "Ask first", "Allowed"] as const)
     expect(await segment(group, name).getAttribute("aria-checked")).toBe(String(value === name));
 }
-async function open(width = 1280, fixture?: "groups" | "irreversible" | "send") {
+async function open(width = 1280, fixture?: "groups" | "irreversible" | `tools=${string}`) {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(1500);
   await page.goto(fixture ? `${origin}/?${fixture}` : origin);
@@ -919,7 +920,6 @@ it("shows ordered group values or counts only for a closed mixed account, and re
 const everyTool = ["delete", "send", "list_labels", "draft", "search_threads", "forward", "trash"];
 it.each([
   {
-    fixture: "irreversible" as const,
     // Send mail is Ask first, the other two are Not allowed: all three change. The page shows Send
     // before Trash and delete, though the tool list has Delete permanently first.
     account: "Personal",
@@ -930,14 +930,12 @@ it.each([
   },
   {
     // Send mail is already Allowed here: the click does not change it, name it, or send it.
-    fixture: "irreversible" as const,
     account: "Northwind",
     wanted: "Allowed" as const,
     text: "Claude will be able to use every tool on Northwind without asking you, including these, which cannot be undone: Forward message and Delete permanently. This changes 6 tools.",
     sent: ["delete", "list_labels", "draft", "search_threads", "forward", "trash"],
   },
   {
-    fixture: "irreversible" as const,
     account: "Projects",
     wanted: "Allowed" as const,
     text: "Claude will be able to use every tool on Projects without asking you, including Forward message, which cannot be undone. This changes 5 tools.",
@@ -945,39 +943,23 @@ it.each([
   },
   {
     // Every irreversible tool is already Allowed.
-    fixture: "irreversible" as const,
     account: "Fabrikam Holdings International, Finance and Legal Operations",
     wanted: "Allowed" as const,
     text: "Claude will be able to use every tool on Fabrikam Holdings International, Finance and Legal Operations without asking you. This changes 4 tools.",
     sent: ["list_labels", "draft", "search_threads", "trash"],
   },
   {
-    fixture: "irreversible" as const,
     account: "Personal",
     wanted: "Ask first" as const,
     text: "Claude will be able to call every tool on Personal, and each call will wait for your approval. This changes 6 tools.",
     sent: everyTool,
   },
-  {
-    fixture: "send" as const,
-    account: "Personal",
-    wanted: "Allowed" as const,
-    text: "Claude will be able to use every tool on Personal without asking you, including these, which cannot be undone: Send message, Send reply, Forward message, and Send draft. This changes 5 tools.",
-    sent: ["search_threads", "send_message", "send_reply", "forward_message", "send_draft"],
-  },
 ])(
-  "names only the irreversible tools that change when all tools on $account go to $wanted with $fixture tools",
-  async ({ fixture, account, wanted, text, sent: tools }) => {
-    const page = await open(390, fixture);
+  "names only the irreversible tools that change when all tools on $account go to $wanted",
+  async ({ account, wanted, text, sent: tools }) => {
+    const page = await open(390, "irreversible");
     try {
       const routes = await pending(page);
-      if (fixture === "send")
-        expect(
-          await panel(page, account)
-            .getByRole("group", { name: "Send", exact: true })
-            .locator('[data-slot="item-title"]')
-            .allTextContents(),
-        ).toEqual(["Send message", "Send reply", "Forward message", "Send draft"]);
       await segment(accountControl(page, account), wanted).click();
       const dialog = page.getByRole("alertdialog", {
         name: `Set all tools on ${account} to ${wanted}?`,
@@ -999,71 +981,60 @@ it.each([
   },
 );
 
-it.each([
-  {
-    fixture: "irreversible" as const,
-    name: "delete",
-    label: "Delete permanently",
-    next: "Send mail",
-  },
-  { fixture: "send" as const, name: "send_message", label: "Send message", next: "Send reply" },
-])(
-  "confirms Allowed on $name before it sends anything, with focus on Cancel",
-  async ({ fixture, name, label, next }) => {
-    const page = await open(390, fixture);
-    try {
-      const routes = await pending(page);
-      const group = toolControl(page, label);
-      const opener = segment(group, "Allowed");
-      const dialog = page.getByRole("alertdialog", {
-        name: `Set ${label} on Personal to Allowed?`,
-        exact: true,
-      });
-      for (const close of ["Cancel", "Escape", "Enter", "confirm"]) {
-        if (close === "Enter") {
-          // A second Enter lands on Cancel, so a repeated key does not confirm.
-          await opener.focus();
-          await page.keyboard.press("Enter");
-        } else await opener.click();
-        await dialog.waitFor();
-        expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
-          `Claude will be able to use ${label} on Personal without asking you. What this tool does cannot be undone.`,
-        );
-        const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
-        await expect.poll(() => cancel.evaluate((el) => el === document.activeElement)).toBe(true);
+it("confirms Allowed on one irreversible tool before it sends anything, with focus on Cancel", async () => {
+  const page = await open(390, "irreversible");
+  try {
+    const routes = await pending(page);
+    const group = toolControl(page, "Delete permanently");
+    const opener = segment(group, "Allowed");
+    const dialog = page.getByRole("alertdialog", {
+      name: "Set Delete permanently on Personal to Allowed?",
+      exact: true,
+    });
+    for (const close of ["Cancel", "Escape", "Enter", "confirm"]) {
+      if (close === "Enter") {
+        // A second Enter lands on Cancel, so a repeated key does not confirm.
+        await opener.focus();
+        await page.keyboard.press("Enter");
+      } else await opener.click();
+      await dialog.waitFor();
+      expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
+        "Claude will be able to use Delete permanently on Personal without asking you. What this tool does cannot be undone.",
+      );
+      const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+      await expect.poll(() => cancel.evaluate((el) => el === document.activeElement)).toBe(true);
+      expect(routes).toEqual([]);
+      if (close === "Cancel") await cancel.click();
+      else if (close === "confirm") {
+        const sent = page.waitForRequest((request) => request.method() === "POST");
+        await dialog.getByRole("button", { name: "Set to Allowed", exact: true }).click();
+        const form = new URLSearchParams((await sent).postData()!);
+        expect(form.getAll("tool")).toEqual(["delete"]);
+        expect(form.get("setting")).toBe("allow");
+        expect(form.get("account")).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      } else await page.keyboard.press(close);
+      await expect.poll(() => page.getByRole("alertdialog").count()).toBe(0);
+      await expect.poll(() => opener.evaluate((el) => el === document.activeElement)).toBe(true);
+      if (close !== "confirm") {
+        await frames(page);
         expect(routes).toEqual([]);
-        if (close === "Cancel") await cancel.click();
-        else if (close === "confirm") {
-          const sent = page.waitForRequest((request) => request.method() === "POST");
-          await dialog.getByRole("button", { name: "Set to Allowed", exact: true }).click();
-          const form = new URLSearchParams((await sent).postData()!);
-          expect(form.getAll("tool")).toEqual([name]);
-          expect(form.get("setting")).toBe("allow");
-          expect(form.get("account")).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
-        } else await page.keyboard.press(close);
-        await expect.poll(() => page.getByRole("alertdialog").count()).toBe(0);
-        await expect.poll(() => opener.evaluate((el) => el === document.activeElement)).toBe(true);
-        if (close !== "confirm") {
-          await frames(page);
-          expect(routes).toEqual([]);
-          await selected(group, "Not allowed");
-        }
+        await selected(group, "Not allowed");
       }
-      expect(routes).toHaveLength(1);
-      await answer(routes[0]!, "ok");
-      await expect.poll(() => opener.getAttribute("aria-checked")).toBe("true");
-      // Ask first to Allowed is the same grant.
-      await segment(toolControl(page, next), "Allowed").click();
-      await page
-        .getByRole("alertdialog", { name: `Set ${next} on Personal to Allowed?`, exact: true })
-        .waitFor();
-      await frames(page);
-      expect(routes).toHaveLength(1);
-    } finally {
-      await page.close();
     }
-  },
-);
+    expect(routes).toHaveLength(1);
+    await answer(routes[0]!, "ok");
+    await expect.poll(() => opener.getAttribute("aria-checked")).toBe("true");
+    // Ask first to Allowed is the same grant: Send mail starts at Ask first.
+    await segment(toolControl(page, "Send mail"), "Allowed").click();
+    await page
+      .getByRole("alertdialog", { name: "Set Send mail on Personal to Allowed?", exact: true })
+      .waitFor();
+    await frames(page);
+    expect(routes).toHaveLength(1);
+  } finally {
+    await page.close();
+  }
+});
 
 it.each([
   { tool: "Delete permanently", name: "delete", wanted: "Ask first" as const, setting: "ask" },
@@ -1087,3 +1058,89 @@ it.each([
     }
   },
 );
+
+// The fixtures above name tools that do not exist. This is the server's own list, as the
+// connection's route gives it to the page, so the guarantee holds for the tools an owner sees.
+const realTools = TOOLS.flatMap((tool) =>
+  tool.kind === "account"
+    ? [
+        {
+          name: tool.name,
+          label: tool.label,
+          description: tool.permissionDescription,
+          group: tool.group,
+          irreversible: tool.irreversible,
+        },
+      ]
+    : [],
+);
+const withRealTools = `tools=${encodeURIComponent(JSON.stringify(realTools))}` as const;
+
+it("names all five irreversible tools, of the server's real tools, when all tools go to Allowed", async () => {
+  expect(realTools.filter((tool) => tool.irreversible).map((tool) => tool.label)).toEqual([
+    "Send message",
+    "Send reply",
+    "Forward message",
+    "Send draft",
+    "Delete permanently",
+  ]);
+  const page = await open(390, withRealTools);
+  try {
+    const routes = await pending(page);
+    await segment(accountControl(page, "Personal"), "Allowed").click();
+    const dialog = page.getByRole("alertdialog", {
+      name: "Set all tools on Personal to Allowed?",
+      exact: true,
+    });
+    await dialog.waitFor();
+    // List labels is already Allowed on Personal, so every other tool changes.
+    expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
+      `Claude will be able to use every tool on Personal without asking you, including these, which cannot be undone: Send message, Send reply, Forward message, Send draft, and Delete permanently. This changes ${realTools.length - 1} tools.`,
+    );
+    expect(routes).toEqual([]);
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await dialog.getByRole("button", { name: "Set to Allowed", exact: true }).click();
+    const form = new URLSearchParams((await sent).postData()!);
+    expect(form.getAll("tool")).toEqual(
+      realTools.map((tool) => tool.name).filter((name) => name !== "list_labels"),
+    );
+    expect(form.getAll("tool")).toContain("delete_messages");
+    expect(form.get("setting")).toBe("allow");
+  } finally {
+    await page.close();
+  }
+});
+
+it.each([
+  { name: "delete_messages", label: "Delete permanently" },
+  { name: "send_message", label: "Send message" },
+])("asks before $name alone goes to Allowed, and not before trash_messages", async ({ label }) => {
+  const page = await open(390, withRealTools);
+  try {
+    const routes = await pending(page);
+    await segment(toolControl(page, label), "Allowed").click();
+    const dialog = page.getByRole("alertdialog", {
+      name: `Set ${label} on Personal to Allowed?`,
+      exact: true,
+    });
+    await dialog.waitFor();
+    expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
+      `Claude will be able to use ${label} on Personal without asking you. What this tool does cannot be undone.`,
+    );
+    expect(routes).toEqual([]);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect.poll(() => page.getByRole("alertdialog").count()).toBe(0);
+    await frames(page);
+    expect(routes).toEqual([]);
+    // The trash can be undone for 30 days, so it is saved at once.
+    const sent = page.waitForRequest((request) => request.method() === "POST");
+    await segment(toolControl(page, "Move to trash"), "Allowed").click();
+    const form = new URLSearchParams((await sent).postData()!);
+    expect(form.getAll("tool")).toEqual(["trash_messages"]);
+    expect(form.get("setting")).toBe("allow");
+    expect(await page.getByRole("alertdialog").count()).toBe(0);
+    expect(routes).toHaveLength(1);
+  } finally {
+    await page.close();
+  }
+});

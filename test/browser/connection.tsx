@@ -4,7 +4,6 @@ import {
   connectionPage,
   groupedConnectionPage,
   irreversibleConnectionPage,
-  sendConnectionPage,
 } from "../support/connection-page";
 import type { FramePage } from "../../src/pages/page";
 import "../../src/styles.css";
@@ -16,8 +15,10 @@ const load = modules["../../src/pages/connection.tsx"];
 if (load) {
   const { ConnectionPage } = await load();
   const query = new URLSearchParams(location.search);
-  const props = query.has("send")
-    ? sendConnectionPage
+  // "tools" carries the server's real tool list, as the connection's route gives it to the page.
+  const tools = query.get("tools");
+  const props = tools
+    ? { ...connectionPage, tools: JSON.parse(tools) as (typeof groupedConnectionPage)["tools"] }
     : query.has("irreversible")
       ? irreversibleConnectionPage
       : query.has("groups")
