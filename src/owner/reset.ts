@@ -14,6 +14,7 @@ export const RESET_CLEANUP: ReadonlyArray<(c: { guard: string; now: number }) =>
   ({ guard }) => `DELETE FROM permissions WHERE ${guard}`,
   ({ guard }) => `DELETE FROM calls WHERE ${guard}`,
   ({ guard }) => `DELETE FROM approvals WHERE ${guard}`,
+  ({ guard }) => `DELETE FROM once WHERE ${guard}`,
 ];
 
 /**

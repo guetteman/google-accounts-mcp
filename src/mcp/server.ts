@@ -32,8 +32,15 @@ export function createMcpServer(ctx: CallContext): Server {
       })),
     };
   });
-  server.setRequestHandler("tools/call", (request) =>
-    runCall(ctx, request.params.name, request.params.arguments),
-  );
+  server.setRequestHandler("tools/call", (request) => {
+    const work = runCall(ctx, request.params.name, request.params.arguments);
+    ctx.waitUntil(
+      work.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return work;
+  });
   return server;
 }

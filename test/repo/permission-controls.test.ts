@@ -92,7 +92,9 @@ async function open(width = 1280, fixture?: "groups" | "irreversible") {
     await page.close();
     throw error;
   }
-
+  // The web font can arrive after the first render and change the size of the text, which
+  // resizes or moves the controls. A position measured before it would differ from later ones.
+  await page.evaluate(() => document.fonts.ready);
   return page;
 }
 async function frames(page: Page) {

@@ -65,6 +65,7 @@ it("renders tools under their groups in tool-list order, with no empty group", a
     { name: "search_threads", group: "Find and read" },
     { name: "read_thread", group: "Find and read" },
     { name: "change_labels", group: "Organize" },
+    { name: "create_draft", group: "Draft" },
   ]);
   expect(props.tools.find((tool) => tool.name === "change_labels")).toEqual({
     name: "change_labels",
@@ -89,7 +90,9 @@ it("renders tools under their groups in tool-list order, with no empty group", a
   expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
     first.indexOf('aria-label="Change labels on Personal'),
   );
-  for (const group of GROUPS.filter((group) => group !== "Find and read" && group !== "Organize"))
+  for (const group of GROUPS.filter(
+    (group) => group !== "Find and read" && group !== "Draft" && group !== "Organize",
+  ))
     expect(textOf(html)).not.toContain(group);
 });
 

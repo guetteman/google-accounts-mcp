@@ -1,7 +1,7 @@
 import type { Tool as McpTool } from "@modelcontextprotocol/server";
 import { viewDate, type ViewNote, type ViewValue } from "../approvals/model";
 import { getApproval } from "../approvals/result";
-import { Data, Effect, Result, Schema } from "effect";
+import { Data, Effect, Result, Schema, SchemaIssue } from "effect";
 import type { Unavailable } from "../db";
 import { accountMessage } from "../accounts/model";
 import { listVisibleAccounts } from "../accounts/store";
@@ -18,8 +18,39 @@ import {
 } from "../google/organize";
 import { readListedTools } from "../permissions/store";
 import type { CallContext } from "./call";
-import type { ToolFailure } from "./failures";
+import { creating, type ToolFailure } from "./failures";
 import type { Group } from "./groups";
+import type { Created } from "../once/store";
+import { createDraft } from "../google/draft";
+import {
+  MAX_SUBJECT,
+  mailboxText,
+  messageText,
+  parseMailbox,
+  rawMessage,
+  type Mailbox,
+  type Outgoing,
+} from "../google/mail";
+import { replyPlan, type ReplyPlan } from "../google/reply";
+import { normalizeEmail } from "../owner/owner";
+import { shorten } from "../google/bounds";
+import { isoSeconds } from "../approvals/model";
+type AccountExecution<A> =
+  | {
+      run: (send: Send, account: { email: string }, args: A) => Effect.Effect<unknown, ToolFailure>;
+      create?: never;
+      unknown?: never;
+    }
+  | {
+      create: (
+        send: Send,
+        account: { email: string },
+        args: A,
+      ) => Effect.Effect<Created, ToolFailure>;
+      defaults: Readonly<Partial<A>>;
+      unknown: (email: string, until: number, args: A) => string;
+      run?: never;
+    };
 export class ViewUnavailable extends Data.TaggedError("ViewUnavailable") {}
 /** What every tool with a setting takes. A tool reads its own fields through its typed definition. */
 export type DecodedArgs = { readonly account: string };
@@ -45,7 +76,7 @@ export type Tool =
         args: Record<string, unknown> | undefined,
       ) => Effect.Effect<unknown, Unavailable | ToolFailure>;
     }
-  | {
+  | ({
       kind: "account";
       name: AccountTool;
       label: string;
@@ -74,12 +105,7 @@ export type Tool =
           send: Send,
         ) => Effect.Effect<ReadonlyArray<ViewValue>, ViewUnavailable | ToolFailure>;
       };
-      run: (
-        send: Send,
-        account: { email: string },
-        args: DecodedArgs,
-      ) => Effect.Effect<unknown, ToolFailure>;
-    };
+    } & AccountExecution<DecodedArgs>);
 type AccountDefinition<A extends DecodedArgs> = {
   name: string;
   label: string;
@@ -101,8 +127,7 @@ type AccountDefinition<A extends DecodedArgs> = {
       send: Send,
     ) => Effect.Effect<ReadonlyArray<ViewValue>, ViewUnavailable | ToolFailure>;
   };
-  run: (send: Send, account: { email: string }, args: A) => Effect.Effect<unknown, ToolFailure>;
-};
+} & AccountExecution<A>;
 // The runner passes a tool only the arguments that the tool's own input decoded.
 const accountTool = <A extends DecodedArgs>(definition: AccountDefinition<A>) =>
   ({ kind: "account", ...definition }) as unknown as Extract<Tool, { kind: "account" }>;
@@ -110,13 +135,24 @@ const accountTool = <A extends DecodedArgs>(definition: AccountDefinition<A>) =>
 export const decodeArgs = (
   tool: Extract<Tool, { kind: "account" }>,
   args: unknown,
-): { ok: true; value: DecodedArgs } | { ok: false; field: string | null } => {
-  const result = Schema.decodeUnknownResult(tool.input)(args);
+): { ok: true; value: DecodedArgs } | { ok: false; field: string | null; expects?: string } => {
+  const result = Schema.decodeUnknownResult(tool.input, {
+    onExcessProperty: tool.create ? "error" : "ignore",
+  })(args);
   if (Result.isSuccess(result)) return { ok: true, value: result.success };
   let issue: unknown = result.failure.issue;
   while (typeof issue === "object" && issue !== null) {
-    if ("path" in issue && Array.isArray(issue.path) && typeof issue.path[0] === "string")
-      return { ok: false, field: issue.path[0] };
+    if ("path" in issue && Array.isArray(issue.path) && typeof issue.path[0] === "string") {
+      const extra =
+        "issue" in issue &&
+        SchemaIssue.isIssue(issue.issue) &&
+        issue.issue._tag === "UnexpectedKey";
+      return {
+        ok: false,
+        field: issue.path[0],
+        ...(extra ? { expects: "left out: this tool has no such field" } : {}),
+      };
+    }
     issue =
       "issues" in issue && Array.isArray(issue.issues)
         ? issue.issues[0]
@@ -146,6 +182,59 @@ const labelChange = (args: {
   add?: readonly string[];
   remove?: readonly string[];
 }) => ({ threads: args.threads, add: args.add ?? [], remove: args.remove ?? [] });
+const Mailboxes = Schema.Array(
+  Schema.String.check(Schema.makeFilter((value) => parseMailbox(value) !== null)),
+);
+const DraftInput = Schema.Struct({
+  account: Schema.String,
+  to: Schema.optionalKey(Mailboxes),
+  cc: Schema.optionalKey(Mailboxes),
+  bcc: Schema.optionalKey(Mailboxes),
+  subject: Schema.optionalKey(
+    Schema.String.check(
+      Schema.isMaxLength(MAX_SUBJECT),
+      // oxlint-disable-next-line no-control-regex -- Input subjects cannot contain header controls.
+      Schema.isPattern(/^[^\u0000-\u001f\u007f]*$/),
+    ),
+  ),
+  body: Schema.String,
+  reply_to: Schema.optionalKey(
+    Schema.String.check(Schema.isBetweenLength(1, 64), Schema.isPattern(/^[A-Za-z0-9_-]+$/)),
+  ),
+  reply_all: Schema.optionalKey(Schema.Boolean),
+  duplicate: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 2, maximum: 100 }))),
+}).check(
+  Schema.makeFilter((args) => {
+    if (
+      args.reply_all &&
+      (!args.reply_to || [args.to, args.cc, args.bcc].some((list) => list?.length))
+    )
+      return { path: ["reply_all"], issue: "requires reply_to and no given recipients" };
+    if (args.reply_to && args.subject)
+      return { path: ["subject"], issue: "cannot be given for a reply" };
+    return true;
+  }),
+);
+type DraftArgs = typeof DraftInput.Type;
+const draftRecipients = (args: DraftArgs) => ({
+  to: (args.to ?? []).map((text) => parseMailbox(text)!),
+  cc: (args.cc ?? []).map((text) => parseMailbox(text)!),
+  bcc: (args.bcc ?? []).map((text) => parseMailbox(text)!),
+});
+const givenRecipients = (boxes: { to: Mailbox[]; cc: Mailbox[]; bcc: Mailbox[] }) =>
+  boxes.to.length || boxes.cc.length || boxes.bcc.length ? boxes : null;
+const draftMail = (
+  args: DraftArgs,
+  boxes: ReturnType<typeof draftRecipients>,
+  plan?: ReplyPlan,
+): Outgoing => ({
+  ...boxes,
+  ...(plan
+    ? { to: plan.to, cc: plan.cc, inReplyTo: plan.inReplyTo, references: plan.references }
+    : {}),
+  subject: plan?.subject ?? args.subject ?? "",
+  body: args.body,
+});
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -337,6 +426,115 @@ export const TOOLS: ReadonlyArray<Tool> = [
       changeLabels(send, {
         account: account.email,
         ...labelChange(args),
+      }),
+  }),
+  accountTool({
+    name: "create_draft",
+    label: "Create draft",
+    group: "Draft",
+    // The owner can delete a draft, and writing one sends nothing.
+    irreversible: false,
+    permissionDescription: "Write a draft, new or as a reply. Nothing is sent.",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    description:
+      "Creates a draft, new or as a reply, in one Google account. Nothing is sent. `account` is the address of an account that list_accounts returns. `to`, `cc`, and `bcc` are optional lists of mailboxes, each an address or Name <address>. A draft needs no recipients or subject. `subject` is optional for a new draft, at most 998 characters, with no control characters. `body` is required plain text and may be empty. A reply includes no quote of the answered message unless you write one in body. `reply_to` is a message ID from read_thread for this account. A reply takes its recipients from the message's Reply-To when it has one, else from its From, and its subject from the message with Re: added when needed. A reply to the account's own message goes to that message's To. `reply_all: true` also includes the other To and Cc addresses, without the account's own address or repeated addresses. When you give a non-empty to, cc, or bcc, the reply has exactly the recipients you give. Give to when you must be sure where a reply goes. `reply_all: true` requires reply_to and cannot be combined with given recipients; a non-empty subject cannot be combined with reply_to. The result has account, draft, message, and thread. draft is the ID that stays while the draft exists; message and thread are the IDs at creation and can change when it is edited. `duplicate` is an optional whole number from 2 to 100 for a deliberate copy.\n\nRepeating: a call with the same arguments as a call of the last 7 days is the same call. It never creates a second draft. It returns the first call's result with `repeat_of`, or its pending approval. So when you get no answer or an error that says to try again, call again with exactly the same arguments. Copy them; do not reword the text, because changed text is a new draft. When the answer says that the outcome is unknown, do not try another wording: ask the owner to look in Gmail. To create one more draft with the same content on purpose, add `duplicate: 2` (then 3).\n\nWith ask, a reply that cannot be built appears on the owner's page, not in the agent's answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of a draft; get_approval returns the draft after the owner approves.",
+    input: DraftInput,
+    defaults: { to: [], cc: [], bcc: [], subject: "", reply_all: false },
+    unknown: (email, until, args) => {
+      const next = (args.duplicate ?? 1) + 1;
+      return `The server does not know whether the draft was created in ${email}. Ask the owner to look in Drafts. Until ${isoSeconds(until)}, repeating this call does not create it again.${next <= 100 ? ` If the owner says that the draft is missing, call again with duplicate: ${next}.` : ""}`;
+    },
+    expects: {
+      account: "a string",
+      to: "a list of mailboxes, empty or absent when reply_all is true",
+      cc: "a list of mailboxes, empty or absent when reply_all is true",
+      bcc: "a list of mailboxes, empty or absent when reply_all is true",
+      subject: `a string of at most ${MAX_SUBJECT} characters without control characters, empty or absent for a reply`,
+      body: "a string",
+      reply_to:
+        "a message ID of 1 to 64 letters, digits, hyphens, or underscores from this account; a reply requires an empty or absent subject",
+      reply_all: "a boolean, true only with reply_to and no given recipients",
+      duplicate: "a whole number from 2 to 100",
+    },
+    view: {
+      action: "create a draft",
+      joiner: "in",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      values: (args, send) =>
+        Effect.gen(function* () {
+          const boxes = draftRecipients(args);
+          const plan = args.reply_to
+            ? yield* replyPlan(send, {
+                account: normalizeEmail(args.account)!,
+                message: args.reply_to,
+                all: args.reply_all ?? false,
+                given: givenRecipients(boxes),
+              })
+            : undefined;
+          const mail = draftMail(args, boxes, plan);
+          const values: ViewValue[] = [];
+          if (plan) {
+            const date = new Intl.DateTimeFormat("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+              timeZone: "UTC",
+            }).format(plan.answered.date);
+            const time = new Intl.DateTimeFormat("en-GB", {
+              hour: "2-digit",
+              minute: "2-digit",
+              timeZone: "UTC",
+            }).format(plan.answered.date);
+            values.push(
+              {
+                name: "Answers a message from",
+                text: shorten(plan.answered.from, 1000),
+                from: "gmail",
+              },
+              { name: "Its subject", text: shorten(plan.answered.subject, 1000), from: "gmail" },
+              { name: "Its date", text: `${date} at ${time} UTC`, from: "gmail" },
+            );
+          }
+          for (const [name, recipients] of [
+            ["To", mail.to],
+            ["Cc", mail.cc],
+            ["Bcc", mail.bcc],
+          ] as const)
+            if (recipients.length)
+              values.push({
+                name,
+                text: recipients.map(mailboxText).join(", "),
+                from: plan && !givenRecipients(boxes) ? "gmail" : "agent",
+              });
+          if (mail.subject)
+            values.push({ name: "Subject", text: mail.subject, from: plan ? "gmail" : "agent" });
+          if (args.duplicate !== undefined)
+            values.push({
+              name: "Duplicate",
+              text: `${args.duplicate} (a deliberate copy of an earlier call)`,
+              from: "agent",
+            });
+          values.push({ name: "Body", text: args.body, from: "agent" });
+          return values;
+        }),
+    },
+    create: (send, account, args) =>
+      Effect.gen(function* () {
+        const boxes = draftRecipients(args);
+        const plan = args.reply_to
+          ? yield* replyPlan(send, {
+              account: account.email,
+              message: args.reply_to,
+              all: args.reply_all ?? false,
+              given: givenRecipients(boxes),
+            })
+          : undefined;
+        return yield* creating(
+          createDraft(send, {
+            raw: rawMessage(messageText(draftMail(args, boxes, plan))),
+            ...(plan ? { thread: plan.thread } : {}),
+          }),
+        );
       }),
   }),
   {
