@@ -3,13 +3,14 @@ import type { Send } from "../mcp/tools";
 import { notFound, ToolFailure } from "../mcp/failures";
 import { viewDate, type ViewNote, type ViewValue } from "../approvals/model";
 import { change, changeEach, listLabels, REQUESTS_AT_ONCE, threadSummary } from "./gmail";
-import { shorten } from "./bounds";
 
 export const MAX_LABELS = 100;
-/** Labels that the arguments alone refuse: the trash tools own two, and Gmail sets two itself. */
+/** Moving mail to the trash or spam is not this tool's job; Gmail sets SENT and DRAFT itself. */
 export const REFUSED: ReadonlySet<string> = new Set(["TRASH", "SPAM", "SENT", "DRAFT"]);
+/** Adding INBOX also takes mail out of the trash or spam. */
+export const REFUSED_ADD: ReadonlySet<string> = new Set(["INBOX"]);
 /** What `add` and `remove` must be, for invalid_arguments from the schema and from the run. */
-export const LABELS_EXPECT = `a list of at most ${MAX_LABELS} label IDs that list_labels returned. Of the system labels, only INBOX, UNREAD, STARRED, IMPORTANT, and the five CATEGORY_ labels are accepted. A label cannot be in both add and remove, and the two lists together need at least one label`;
+export const LABELS_EXPECT = `a list of at most ${MAX_LABELS} label IDs that list_labels returned. Of the system labels, only UNREAD, STARRED, IMPORTANT, and the five CATEGORY_ labels are accepted, and INBOX in remove alone. A label cannot be in both add and remove, and the two lists together need at least one label`;
 
 interface LabelChange {
   threads: readonly string[];
@@ -38,12 +39,12 @@ const ACCEPTED: ReadonlySet<string> = new Set([
   "CATEGORY_FORUMS",
 ]);
 
-const named = (send: Send, change: LabelChange) =>
+const named = (send: Send, input: LabelChange) =>
   Effect.gen(function* () {
     const labels = yield* listLabels(send);
     const byId = new Map(labels.map((label) => [label.id, label] as const));
     for (const field of ["add", "remove"] as const) {
-      if (change[field].some((id) => byId.get(id)?.type === "system" && !ACCEPTED.has(id)))
+      if (input[field].some((id) => byId.get(id)?.type === "system" && !ACCEPTED.has(id)))
         return yield* Effect.fail(
           new ToolFailure({
             code: "invalid_arguments",
@@ -53,7 +54,7 @@ const named = (send: Send, change: LabelChange) =>
     }
     const names = (ids: readonly string[]): Named[] =>
       ids.map((id) => ({ id, name: byId.get(id)?.name ?? null }));
-    return { add: names(change.add), remove: names(change.remove) };
+    return { add: names(input.add), remove: names(input.remove) };
   });
 
 const Modified = Schema.Struct({
@@ -103,30 +104,28 @@ export const changeLabels = (
     };
   });
 
-export const labelChangeNotes = (change: LabelChange): ReadonlyArray<ViewNote> => {
-  const singular = change.threads.length === 1;
+export const labelChangeNotes = (input: LabelChange): ReadonlyArray<ViewNote> => {
+  const singular = input.threads.length === 1;
   const threads = singular ? "this thread" : "these threads";
   const notes: ViewNote[] = [];
-  if (change.remove.includes("INBOX"))
+  if (input.remove.includes("INBOX"))
     notes.push({
       text: `This call archives ${threads}: ${singular ? "it leaves" : "they leave"} the inbox.`,
       warning: false,
     });
-  if (change.add.includes("INBOX"))
-    notes.push({ text: `This call moves ${threads} to the inbox.`, warning: false });
-  if (change.remove.includes("UNREAD"))
+  if (input.remove.includes("UNREAD"))
     notes.push({ text: `This call marks ${threads} as read.`, warning: false });
-  if (change.add.includes("UNREAD"))
+  if (input.add.includes("UNREAD"))
     notes.push({ text: `This call marks ${threads} as unread.`, warning: false });
   return notes;
 };
 
 export const labelChangeValues = (
   send: Send,
-  change: LabelChange,
+  input: LabelChange,
 ): Effect.Effect<ReadonlyArray<ViewValue>, ToolFailure> =>
   Effect.gen(function* () {
-    const labels = yield* named(send, change);
+    const labels = yield* named(send, input);
     const values: ViewValue[] = [];
     for (const field of ["add", "remove"] as const) {
       const found = labels[field].flatMap((label) => (label.name === null ? [] : [label.name]));
@@ -141,10 +140,10 @@ export const labelChangeValues = (
         });
     }
     const threads = yield* Effect.forEach(
-      change.threads,
+      input.threads,
       (thread, index) =>
         Effect.gen(function* () {
-          const prefix = change.threads.length === 1 ? "Thread" : `Thread ${index + 1}`;
+          const prefix = input.threads.length === 1 ? "Thread" : `Thread ${index + 1}`;
           const result = yield* Effect.result(threadSummary(send, thread));
           if (Result.isFailure(result)) {
             if (result.failure.code === "not_found")
@@ -161,7 +160,7 @@ export const labelChangeValues = (
           return [
             {
               name: `${prefix} subject`,
-              text: shorten(summary.subject, 500),
+              text: summary.subject,
               from: "gmail" as const,
             },
             {
@@ -171,7 +170,7 @@ export const labelChangeValues = (
             },
             {
               name: `${prefix} last from`,
-              text: shorten(summary.from, 500),
+              text: summary.from,
               from: "gmail" as const,
             },
             { name: `${prefix} last date`, text: viewDate(summary.date), from: "gmail" as const },

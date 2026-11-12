@@ -1,8 +1,9 @@
-import { Data } from "effect";
+import { Data, Effect } from "effect";
 import { accountMessage } from "../accounts/model";
 import type { Outcome } from "../calls/store";
 import { WAITING_LIMIT } from "../approvals/model";
 import type { ConnectionId } from "../connections/model";
+import type { ToolAnnotations } from "./tools";
 export const failures = {
   approval_not_available: {
     outcome: "refused",
@@ -45,6 +46,10 @@ export const failures = {
     message: (_: string, email: string) =>
       `Google could not complete the request for ${email}. Try again later.`,
   },
+  outcome_unknown: {
+    outcome: "repeat",
+    message: () => "The server does not know whether the call completed.",
+  },
   server_unavailable: {
     outcome: "failed",
     message: () => "The server could not complete the call. Try again later.",
@@ -73,6 +78,7 @@ export const notFound = (kind: Missing, id: string | readonly string[]): ToolFai
 export class ToolFailure extends Data.TaggedError("ToolFailure")<{
   code: keyof typeof failures;
   unknown?: boolean;
+  said?: string;
   missing?: { kind: Missing; id: string | readonly string[] };
   reason?: "arguments_too_large";
   /** The field that is wrong, with what it must be. */
@@ -87,17 +93,39 @@ const missingMessage = ({ kind, id }: NonNullable<ToolFailure["missing"]>, email
       : `None of the ${kind}s ${ids.map((id) => `"${id}"`).join(", ")}`;
   return `${subject} exists in ${email}. A ${kind} ID works only in the account that returned it.`;
 };
+/** Mark only the request that creates or sends, never a preparing read or write. */
+export const creating = <A>(
+  request: Effect.Effect<A, ToolFailure>,
+): Effect.Effect<A, ToolFailure> =>
+  request.pipe(
+    Effect.mapError((failure) =>
+      failure.unknown ? new ToolFailure({ code: "outcome_unknown", unknown: true }) : failure,
+    ),
+  );
 
 export function classify(
   error: unknown,
   when: { approved: boolean; aborted: boolean },
-  text: { input: string; email: string; origin: string; tool: string; connection: ConnectionId },
+  text: {
+    input: string;
+    email: string;
+    origin: string;
+    tool: string;
+    connection: ConnectionId;
+    annotations?: ToolAnnotations;
+  },
 ): { audit: Outcome | null; error: { code: keyof typeof failures; message: string } | null } {
   const failure =
     error instanceof ToolFailure ? error : new ToolFailure({ code: "server_unavailable" });
   const entry = failures[failure.code];
   const unknown =
     failure.unknown || when.aborted || (when.approved && failure.code === "server_unavailable");
+  const message =
+    failure.code === "google_unavailable" &&
+    failure.unknown &&
+    text.annotations?.readOnlyHint === false
+      ? `Google did not confirm the request for ${text.email}. It may have taken effect.${text.annotations.idempotentHint ? " Sending the same call again is safe." : ""}`
+      : entry.message(text.input, text.email, text.origin, text.tool, text.connection);
   return {
     audit: unknown ? null : entry.outcome,
     error:
@@ -106,19 +134,14 @@ export function classify(
         : {
             code: failure.code,
             message:
-              failure.reason === "arguments_too_large"
+              failure.said ??
+              (failure.reason === "arguments_too_large"
                 ? "The arguments are too large. The limit is 256 KB."
                 : failure.field
                   ? `The ${failure.field.name} field must be ${failure.field.expects}.`
                   : failure.missing
                     ? missingMessage(failure.missing, text.email)
-                    : entry.message(
-                        text.input,
-                        text.email,
-                        text.origin,
-                        text.tool,
-                        text.connection,
-                      ),
+                    : message),
           },
   };
 }

@@ -47,7 +47,7 @@ export const changed = (
 ) => (tool === "delete_messages" ? [...ids] : ids.map((message) => ({ message, labels })));
 export const serveMessages = (ids: readonly string[]) => {
   for (const id of ids)
-    google.messageAnswers.set(id, (request) =>
+    google.trashAnswers.set(id, (request) =>
       request.method === "GET"
         ? Response.json(message(id))
         : request.method === "DELETE"

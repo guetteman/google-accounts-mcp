@@ -494,7 +494,22 @@ export async function htmlToText(html: string): Promise<string> {
         if (chunk.lastInTextNode) flush();
       },
     });
-  await rewriter.transform(new Response(html)).text();
+  const bytes = new TextEncoder().encode(html);
+  let at = 0;
+  // Close our input at the bound instead of throwing through a native handler. The parser
+  // finishes its current small chunk and reaches EOF; await that completion before returning.
+  const input = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (cut || at === bytes.length) {
+        controller.close();
+        return;
+      }
+      const end = Math.min(at + 4096, bytes.length);
+      controller.enqueue(bytes.subarray(at, end));
+      at = end;
+    },
+  });
+  await rewriter.transform(new Response(input)).text();
   flush();
   // An unclosed link may never get an end-tag callback. Its text has already been emitted.
   for (const link of Array.from(links).reverse()) finishLink(link);

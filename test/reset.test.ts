@@ -219,7 +219,7 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
     const cleanup = RESET_CLEANUP.map((statement) => statement({ guard, now: NOW }));
-    expect(cleanup).toHaveLength(5);
+    expect(cleanup).toHaveLength(6);
     expect(cleanup).toEqual(
       expect.arrayContaining([
         `DELETE FROM connections WHERE ${guard}`,
@@ -227,6 +227,7 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
         `DELETE FROM permissions WHERE ${guard}`,
         `DELETE FROM calls WHERE ${guard}`,
         `DELETE FROM approvals WHERE ${guard}`,
+        `DELETE FROM once WHERE ${guard}`,
       ]),
     );
   });
@@ -301,4 +302,20 @@ it("deletes live and removed accounts only under the confirmed reset guard", asy
   expect(await dump()).toEqual(before);
   await runAll(resetPlan(row, NOW).statements);
   expect(await accounts()).toEqual([]);
+});
+
+it("deletes same-call rows only under the confirmed reset guard", async () => {
+  await pinnedOwner(1);
+  await env.DB.prepare(
+    "INSERT INTO once (identity,state,claim,taken_at,expires_at) VALUES ('test-identity','unknown','test-claim',?1,?2)",
+  )
+    .bind(NOW, NOW + 1000)
+    .run();
+  const row = await readForPlan();
+  await runAll(
+    resetPlan({ ...row, instance: row.instance === 1 ? 2 : row.instance - 1 }, NOW).statements,
+  );
+  expect((await env.DB.prepare("SELECT * FROM once").all()).results).toHaveLength(1);
+  await runAll(resetPlan(row, NOW).statements);
+  expect((await env.DB.prepare("SELECT * FROM once").all()).results).toEqual([]);
 });

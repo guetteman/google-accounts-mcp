@@ -144,6 +144,21 @@ export const google = {
   >(),
   draftRequests: [] as string[],
   draftAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
+  draftCreates: [] as Array<{
+    url: string;
+    method: string;
+    redirect: RequestRedirect;
+    contentType: string | null;
+    body: unknown;
+  }>,
+  draftCreateAnswers: [] as Array<
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >,
+  messageRequests: [] as string[],
+  messageAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
   labelRequests: [] as Array<{
     url: string;
     method: string;
@@ -178,13 +193,14 @@ export const google = {
     (request: Pick<Request, "signal">) => Response | Promise<Response>
   >(),
   modifiedLabels: new Map<string, string[][]>(),
-  messageRequests: [] as Array<{
+  /** Requests of the tools that trash, restore, and delete: every method, by message ID. */
+  trashRequests: [] as Array<{
     url: string;
     method: string;
     authorization: string | null;
     redirect: RequestRedirect;
   }>,
-  messageAnswers: new Map<
+  trashAnswers: new Map<
     string,
     (request: Pick<Request, "signal" | "method" | "url">) => Response | Promise<Response>
   >(),
@@ -210,6 +226,10 @@ export const google = {
     this.attachmentAnswers.clear();
     this.draftRequests = [];
     this.draftAnswers = [];
+    this.draftCreates = [];
+    this.draftCreateAnswers = [];
+    this.messageRequests = [];
+    this.messageAnswers.clear();
     this.labelRequests = [];
     this.labelAnswers = [];
     this.threadRequests = [];
@@ -218,8 +238,8 @@ export const google = {
     this.modifyRequests = [];
     this.modifyAnswers.clear();
     this.modifiedLabels.clear();
-    this.messageRequests = [];
-    this.messageAnswers.clear();
+    this.trashRequests = [];
+    this.trashAnswers.clear();
     unhandledMessages.length = 0;
     this.exchangeAnswer = "ok";
     this.revokeAnswer = "ok";
@@ -269,18 +289,18 @@ export const google = {
       ? null
       : HttpResponse.json({ error: answer }, { status: answer === "invalid_client" ? 401 : 400 });
   },
-  async messageAnswer(
+  async trashAnswer(
     request: Pick<Request, "signal" | "method" | "url" | "headers" | "redirect">,
     id: string,
   ) {
     this.methods.push(request.method);
-    this.messageRequests.push({
+    this.trashRequests.push({
       url: request.url,
       method: request.method,
       authorization: request.headers.get("Authorization"),
       redirect: request.redirect,
     });
-    const answer = this.messageAnswers.get(id);
+    const answer = this.trashAnswers.get(id);
     if (answer) return answer(request);
     unhandledMessages.push(`${request.method} ${request.url}`);
     return HttpResponse.error();
@@ -437,14 +457,11 @@ export const google = {
         );
         return HttpResponse.json({ id, messages });
       }),
-      http.all(`${MESSAGES_URL}/:id`, ({ request, params }) =>
-        this.messageAnswer(request, String(params.id)),
-      ),
       http.all(`${MESSAGES_URL}/:id/trash`, ({ request, params }) =>
-        this.messageAnswer(request, String(params.id)),
+        this.trashAnswer(request, String(params.id)),
       ),
       http.all(`${MESSAGES_URL}/:id/untrash`, ({ request, params }) =>
-        this.messageAnswer(request, String(params.id)),
+        this.trashAnswer(request, String(params.id)),
       ),
       http.all(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/:message/attachments/:attachment",
@@ -460,10 +477,43 @@ export const google = {
       ),
       http.all("https://gmail.googleapis.com/gmail/v1/users/me/drafts", async ({ request }) => {
         this.methods.push(request.method);
+        if (request.method === "POST") {
+          this.draftCreates.push({
+            url: request.url,
+            method: request.method,
+            redirect: request.redirect,
+            contentType: request.headers.get("Content-Type"),
+            body: await request.json(),
+          });
+          const id = this.draftCreates.length;
+          return (
+            (await this.draftCreateAnswers.shift()?.(request)) ??
+            HttpResponse.json({
+              id: `draft-${id}`,
+              message: { id: `message-${id}`, threadId: `thread-${id}` },
+            })
+          );
+        }
         this.draftRequests.push(request.url);
         if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
         return (await this.draftAnswers.shift()?.(request)) ?? HttpResponse.json({});
       }),
+      http.all(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/:id",
+        async ({ request, params }) => {
+          // A test of the trash tools sets trashAnswers; then every message request is theirs,
+          // and one without an answer fails the test instead of looking like a missing message.
+          if (this.trashAnswers.size > 0 || request.method === "DELETE")
+            return this.trashAnswer(request, String(params.id));
+          this.methods.push(request.method);
+          this.messageRequests.push(request.url);
+          if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+          return (
+            (await this.messageAnswers.get(String(params.id))?.(request)) ??
+            new HttpResponse(null, { status: 404 })
+          );
+        },
+      ),
       http.get(GMAIL, ({ request }) => {
         this.methods.push(request.method);
         this.events.push("gmail");

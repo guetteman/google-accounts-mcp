@@ -72,12 +72,15 @@ export const change = <A>(
 /**
  * The most threads or messages that one call which changes mail may name. Approving a call of
  * 15 makes about 34 requests to Google and Cloudflare Access (rebuilding the view, running,
- * one token refresh, Access's keys on a cold Worker) plus about 6 D1 queries: about 40, inside
+ * one token refresh, Access's keys on a cold Worker) plus about 8 D1 queries: about 42, inside
  * the 50 subrequests of the Workers Free plan however D1 is counted.
  */
 export const MAX_ITEMS = 15;
 
-/** Keep each item's outcome, sending the first alone to acquire the session's token once. */
+/**
+ * Send the first item alone so a session without a token acquires it once, and a failure other
+ * than not_found stops the call after one request. Keep every item's outcome.
+ */
 export const changeEach = <A>(
   kind: Missing,
   ids: readonly string[],
@@ -165,8 +168,8 @@ export const threadSummary = (
           Effect.mapError(unavailable),
         );
         return {
-          subject: header(first.payload?.headers, "Subject"),
-          from: header(last.payload?.headers, "From"),
+          subject: shorten(header(first.payload?.headers, "Subject"), 500),
+          from: shorten(header(last.payload?.headers, "From"), 500),
           date: Number(date),
           unread: value.messages.some((m) => m.labelIds?.includes("UNREAD") === true),
           messages: [first.id, ...value.messages.slice(1).map((m) => m.id)],

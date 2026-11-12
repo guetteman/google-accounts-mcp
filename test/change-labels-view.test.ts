@@ -3,8 +3,6 @@ import { HttpResponse } from "msw";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
 import { renderPage } from "../src/pages/render";
-import { previews } from "../src/pages/previews";
-import type { ApprovalPageProps } from "../src/approvals/model";
 import { answer, decided, get, page, post } from "./support/approvals";
 import { deferred, google, LABELS_RESPONSE, THREADS_URL } from "./support/google";
 import { callRows, fixture, googleTraffic, PERSONAL } from "./support/permissions";
@@ -21,14 +19,14 @@ import {
   setting,
 } from "./support/labels";
 
-it("A1 returns pending before any Gmail request", async () => {
+it("returns pending before any Gmail request", async () => {
   const f = await asking();
   expect(f.id).toMatch(/^[0-9a-f-]{36}$/);
   expect(googleTraffic()).toEqual([]);
   expect((await callRows()).at(-1)).toMatchObject({ tool: "change_labels", outcome: "pending" });
 });
 
-it("A2 names the full action in the approval sentence", async () => {
+it("names the full action in the approval sentence", async () => {
   const f = await asking();
   const props = await page(f, f.id);
   expect(props.state).toMatchObject({ kind: "waiting", shown: true });
@@ -48,12 +46,6 @@ it.each([
     plural: "This call archives these threads: they leave the inbox.",
   },
   {
-    add: ["INBOX"],
-    remove: [],
-    single: "This call moves this thread to the inbox.",
-    plural: "This call moves these threads to the inbox.",
-  },
-  {
     add: [],
     remove: ["UNREAD"],
     single: "This call marks this thread as read.",
@@ -66,7 +58,7 @@ it.each([
     plural: "This call marks these threads as unread.",
   },
 ])(
-  "A3 computes the singular and plural notes for add=$add remove=$remove",
+  "computes the singular and plural notes for add=$add remove=$remove",
   async ({ add, remove, single, plural }) => {
     const f = await fixture();
     await setting(f, "ask");
@@ -82,7 +74,7 @@ it.each([
     }
   },
 );
-it("A3 keeps notes in order and leaves calls without INBOX or UNREAD without notes", async () => {
+it("keeps notes in order and leaves calls without INBOX or UNREAD without notes", async () => {
   const f = await asking({ threads: [FIRST, SECOND], add: ["UNREAD"], remove: ["INBOX"] });
   labels(LABELS, 2);
   expect((await page(f, f.id)).request.notes).toEqual([
@@ -93,7 +85,7 @@ it("A3 keeps notes in order and leaves calls without INBOX or UNREAD without not
   expect((await page(f, pending.approval as string)).request.notes).toEqual([]);
 });
 
-it("A4 separates names from missing IDs, preserving order and repeated labels", async () => {
+it("separates names from missing IDs, preserving order and repeated labels", async () => {
   const f = await asking({
     threads: [FIRST],
     add: ["Label_12", "missing_add_1", "STARRED", "missing_add_2", "Label_12", "STARRED"],
@@ -118,27 +110,24 @@ it("A4 separates names from missing IDs, preserving order and repeated labels", 
   ]);
 });
 
-it.each([400, 404])(
-  "A5 shows three threads in order with status %s on the second",
-  async (status) => {
-    const f = await asking({ ...CHANGE, threads: [FIRST, MISSING, SECOND] });
-    google.threadAnswers.set(MISSING, () => new HttpResponse(null, { status }));
-    const props = await page(f, f.id);
-    expect(props.state).toMatchObject({ kind: "waiting", shown: true });
-    expect(props.request.values.filter((value) => value.name.startsWith("Thread"))).toEqual([
-      { name: "Thread 1 subject", text: "Lunch", from: "gmail" },
-      { name: "Thread 1 messages", text: "2", from: "gmail" },
-      { name: "Thread 1 last from", text: "Kim Lee <kim@example.com>", from: "gmail" },
-      { name: "Thread 1 last date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
-      { name: "Thread 2 ID, not found in this account", text: MISSING, from: "agent" },
-      { name: "Thread 3 subject", text: "Receipt", from: "gmail" },
-      { name: "Thread 3 messages", text: "1", from: "gmail" },
-      { name: "Thread 3 last from", text: "billing@example.com", from: "gmail" },
-      { name: "Thread 3 last date", text: "Nov 9, 2026 at 04:53 UTC", from: "gmail" },
-    ]);
-  },
-);
-it("A5 omits a thread number for a single thread", async () => {
+it.each([400, 404])("shows three threads in order with status %s on the second", async (status) => {
+  const f = await asking({ ...CHANGE, threads: [FIRST, MISSING, SECOND] });
+  google.threadAnswers.set(MISSING, () => new HttpResponse(null, { status }));
+  const props = await page(f, f.id);
+  expect(props.state).toMatchObject({ kind: "waiting", shown: true });
+  expect(props.request.values.filter((value) => value.name.startsWith("Thread"))).toEqual([
+    { name: "Thread 1 subject", text: "Lunch", from: "gmail" },
+    { name: "Thread 1 messages", text: "2", from: "gmail" },
+    { name: "Thread 1 last from", text: "Kim Lee <kim@example.com>", from: "gmail" },
+    { name: "Thread 1 last date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+    { name: "Thread 2 ID, not found in this account", text: MISSING, from: "agent" },
+    { name: "Thread 3 subject", text: "Receipt", from: "gmail" },
+    { name: "Thread 3 messages", text: "1", from: "gmail" },
+    { name: "Thread 3 last from", text: "billing@example.com", from: "gmail" },
+    { name: "Thread 3 last date", text: "Nov 9, 2026 at 04:53 UTC", from: "gmail" },
+  ]);
+});
+it("omits a thread number for a single thread", async () => {
   const f = await asking();
   expect((await page(f, f.id)).request.values.slice(-4)).toEqual([
     { name: "Thread subject", text: "Lunch", from: "gmail" },
@@ -148,7 +137,7 @@ it("A5 omits a thread number for a single thread", async () => {
   ]);
 });
 
-it("A6 bounds the whole subject and sender to 499 characters and an ellipsis", async () => {
+it("bounds the whole subject and sender to 499 characters and an ellipsis", async () => {
   const f = await asking();
   const mail = message();
   google.threadAnswers.set(FIRST, () =>
@@ -180,7 +169,7 @@ it("A6 bounds the whole subject and sender to 499 characters and an ellipsis", a
   });
 });
 
-it("A7 reads labels alone, then metadata with at most five GETs at once", async () => {
+it("reads labels alone, then metadata with at most five GETs at once", async () => {
   const ids = Array.from({ length: 10 }, (_, i) => `thread_${i}`);
   const f = await asking({ ...CHANGE, threads: ids });
   const labelEntered = deferred(),
@@ -234,7 +223,7 @@ it("A7 reads labels alone, then metadata with at most five GETs at once", async 
 });
 
 it.each(["label list 500", "thread 500", "CHAT", "account unavailable"])(
-  "A8 hides Approve and keeps Reject for %s",
+  "hides Approve and keeps Reject for %s",
   async (failure) => {
     const f = await asking(failure === "CHAT" ? { threads: [FIRST], add: ["CHAT"] } : CHANGE);
     if (failure === "label list 500")
@@ -259,7 +248,7 @@ it.each(["label list 500", "thread 500", "CHAT", "account unavailable"])(
 );
 
 it.each(["a new message", "a renamed label"])(
-  "A9 runs nothing after %s changes the view",
+  "runs nothing after %s changes the view",
   async (change) => {
     const f = await asking();
     let messages = [message()];
@@ -281,7 +270,7 @@ it.each(["a new message", "a renamed label"])(
   },
 );
 
-it("A10 returns the exact partial result through get_approval and the direct call", async () => {
+it("returns the exact partial result through get_approval and the direct call", async () => {
   const args = { ...CHANGE, threads: [FIRST, MISSING] };
   const f = await asking(args);
   const shown = await page(f, f.id);
@@ -299,7 +288,7 @@ it("A10 returns the exact partial result through get_approval and the direct cal
   expect(await answer(await labelCall(f, args))).toEqual(expected);
 });
 it.each(["missing label", "all threads missing"])(
-  "A10 retains not_found for an approved call with %s",
+  "retains not_found for an approved call with %s",
   async (missing) => {
     const args =
       missing === "missing label"
@@ -331,7 +320,7 @@ it.each(["missing label", "all threads missing"])(
   },
 );
 
-it("A11 pages and Reject send no writes, and Reject sends no Google request", async () => {
+it("pages and Reject send no writes, and Reject sends no Google request", async () => {
   const f = await asking();
   expect((await page(f, f.id)).state).toMatchObject({ kind: "waiting", shown: true });
   expect(google.modifyRequests).toEqual([]);
@@ -345,27 +334,4 @@ it("A11 pages and Reject send no writes, and Reject sends no Google request", as
   });
   expect(google.modifyRequests).toEqual([]);
   expect(google.methods.every((method) => method === "GET")).toBe(true);
-});
-
-it("A12 supplies the three-thread and fifteen-thread approval previews", () => {
-  const few = previews["approval-waiting-labels"] as ApprovalPageProps;
-  const many = previews["approval-waiting-labels-many"] as ApprovalPageProps;
-  for (const preview of [few, many]) {
-    expect(preview.request.tool).toMatchObject({
-      label: "Change labels",
-      action: "add or remove labels on threads",
-      joiner: "in",
-    });
-    expect(preview.request.notes).toEqual([
-      { text: "This call archives these threads: they leave the inbox.", warning: false },
-      { text: "This call marks these threads as read.", warning: false },
-    ]);
-  }
-  expect(few.request.values.filter((value) => value.name.startsWith("Thread"))).toHaveLength(9);
-  expect(few.request.values).toContainEqual({
-    name: "Thread 2 ID, not found in this account",
-    text: MISSING,
-    from: "agent",
-  });
-  expect(many.request.values.filter((value) => value.name.startsWith("Thread"))).toHaveLength(60);
 });

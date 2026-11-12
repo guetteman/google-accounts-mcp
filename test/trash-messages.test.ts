@@ -13,6 +13,7 @@ import {
   permission,
   PERSONAL,
   unavailableMessage,
+  unconfirmedMessage,
 } from "./support/permissions";
 import { allowed, call, changed, ids15, operations, serveMessages } from "./support/trash";
 import { textOf } from "./support/worker";
@@ -53,7 +54,7 @@ it.each(operations)(
       account: PERSONAL,
       messages: changed(op.name, ids),
     });
-    expect(google.messageRequests).toHaveLength(15);
+    expect(google.trashRequests).toHaveLength(15);
   },
 );
 
@@ -70,7 +71,7 @@ it.each(operations)(
     });
     const urls = ids.map((id) => `${MESSAGES_URL}/${id}${op.suffix}`);
     expect(requests.slice(before)).toEqual(urls);
-    expect(google.messageRequests.map(({ method, url }) => ({ method, url }))).toEqual(
+    expect(google.trashRequests.map(({ method, url }) => ({ method, url }))).toEqual(
       urls.map((url) => ({ method: op.method, url })),
     );
     expect(google.methods).toEqual([op.method, op.method, op.method]);
@@ -87,7 +88,7 @@ it.each(operations)(
     let open = 0;
     let most = 0;
     ids15.forEach((id, index) =>
-      google.messageAnswers.set(id, async () => {
+      google.trashAnswers.set(id, async () => {
         most = Math.max(most, ++open);
         entered[index]!.resolve();
         await gates[index]!.promise;
@@ -103,7 +104,7 @@ it.each(operations)(
     const pending = call(f, op.name, ids15);
     try {
       await entered[0]!.promise;
-      expect(google.messageRequests).toHaveLength(1);
+      expect(google.trashRequests).toHaveLength(1);
       expect(open).toBe(1);
       gates[0]!.resolve();
       await Promise.all(entered.slice(1, 6).map((e) => e.promise));
@@ -126,23 +127,23 @@ it.each(operations)(
 it.each(operations)("$name stops after the first 500 but continues after 404", async (op) => {
   const f = await allowed(op.name);
   serveMessages(ids15);
-  google.messageAnswers.set("m1", () => new Response(null, { status: 500 }));
+  google.trashAnswers.set("m1", () => new Response(null, { status: 500 }));
   await expectError(
     await call(f, op.name, ids15),
     "google_unavailable",
-    unavailableMessage(PERSONAL),
+    unconfirmedMessage(PERSONAL),
   );
-  expect(google.messageRequests.map((r) => r.url)).toEqual([`${MESSAGES_URL}/m1${op.suffix}`]);
+  expect(google.trashRequests.map((r) => r.url)).toEqual([`${MESSAGES_URL}/m1${op.suffix}`]);
   expect((await callRows()).map((r) => r.outcome)).toEqual([null]);
 
-  google.messageAnswers.set("m1", () => new Response(null, { status: 404 }));
-  const before = google.messageRequests.length;
+  google.trashAnswers.set("m1", () => new Response(null, { status: 404 }));
+  const before = google.trashRequests.length;
   expect(await answer(await call(f, op.name, ids15))).toEqual({
     account: PERSONAL,
     messages: changed(op.name, ids15.slice(1)),
     not_found: ["m1"],
   });
-  expect(google.messageRequests.slice(before)).toHaveLength(15);
+  expect(google.trashRequests.slice(before)).toHaveLength(15);
 });
 
 it.each(operations)(
@@ -156,7 +157,7 @@ it.each(operations)(
       /Ask the owner to reconnect/,
     );
     expect(google.refreshTokens).toHaveLength(1);
-    expect(google.messageRequests).toEqual([]);
+    expect(google.trashRequests).toEqual([]);
   },
 );
 
@@ -170,9 +171,9 @@ it.each(operations)("$name keeps mixed outcomes in input order and records succe
     ["rate", 429],
     ["server", 500],
   ] as const)
-    google.messageAnswers.set(id, () => new Response(null, { status }));
-  google.messageAnswers.set("lost", () => HttpResponse.error());
-  google.messageAnswers.set("last", () =>
+    google.trashAnswers.set(id, () => new Response(null, { status }));
+  google.trashAnswers.set("lost", () => HttpResponse.error());
+  google.trashAnswers.set("last", () =>
     op.method === "DELETE"
       ? new Response(null, { status: 204 })
       : Response.json({ id: "not-the-named-id" }),
@@ -190,12 +191,10 @@ it.each(operations)("$name keeps mixed outcomes in input order and records succe
 it.each(operations.slice(0, 2))("$name leaves malformed 2xx answers unconfirmed", async (op) => {
   const ids = ["changed", "no-id", "bad-labels", "not-json", "redirect"];
   serveMessages(ids);
-  google.messageAnswers.set("no-id", () => Response.json({ labelIds: ["UNREAD"] }));
-  google.messageAnswers.set("bad-labels", () =>
-    Response.json({ id: "bad-labels", labelIds: null }),
-  );
-  google.messageAnswers.set("not-json", () => new Response("not JSON"));
-  google.messageAnswers.set("redirect", () => new Response(null, { status: 302 }));
+  google.trashAnswers.set("no-id", () => Response.json({ labelIds: ["UNREAD"] }));
+  google.trashAnswers.set("bad-labels", () => Response.json({ id: "bad-labels", labelIds: null }));
+  google.trashAnswers.set("not-json", () => new Response("not JSON"));
+  google.trashAnswers.set("redirect", () => new Response(null, { status: 302 }));
   const f = await allowed(op.name);
   expect(await answer(await call(f, op.name, ids))).toEqual({
     account: PERSONAL,
@@ -207,7 +206,7 @@ it.each(operations.slice(0, 2))("$name leaves malformed 2xx answers unconfirmed"
 it.each(operations)("$name refuses one or several missing messages with their IDs", async (op) => {
   const f = await allowed(op.name);
   for (const ids of [["a"], ["a", "b", "c"]]) {
-    for (const id of ids) google.messageAnswers.set(id, () => new Response(null, { status: 404 }));
+    for (const id of ids) google.trashAnswers.set(id, () => new Response(null, { status: 404 }));
     const subject = ids.length === 1 ? 'No message "a"' : 'None of the messages "a", "b", "c"';
     await expectError(
       await call(f, op.name, ids),
@@ -229,12 +228,13 @@ it.each(operations)(
     ]) {
       const ids = statuses.map((status) => `m${status}`);
       ids.forEach((id, index) =>
-        google.messageAnswers.set(id, () => new Response(null, { status: statuses[index] })),
+        google.trashAnswers.set(id, () => new Response(null, { status: statuses[index] })),
       );
+      // A confirmed refusal keeps today's text; an unknown outcome says that a repeat is safe.
       await expectError(
         await call(f, op.name, ids),
         "google_unavailable",
-        unavailableMessage(PERSONAL),
+        statuses.includes(500) ? unconfirmedMessage(PERSONAL) : unavailableMessage(PERSONAL),
       );
     }
     expect((await callRows()).map((r) => r.outcome)).toEqual(["failed", null, null]);
@@ -247,7 +247,7 @@ it.each(operations)("$name keeps the first change when the direct deadline passe
   const f = await allowed(op.name);
   const entered = deferred();
   const release = deferred();
-  google.messageAnswers.set("m1", async () => {
+  google.trashAnswers.set("m1", async () => {
     entered.resolve();
     await release.promise;
     return op.method === "DELETE"
@@ -270,7 +270,7 @@ it.each(operations)("$name keeps the first change when the direct deadline passe
       messages: changed(op.name, ["m1"]),
       unconfirmed: ["m2", "m3"],
     });
-    expect(google.messageRequests).toHaveLength(1);
+    expect(google.trashRequests).toHaveLength(1);
     expect((await callRows()).map((r) => r.outcome)).toEqual(["success"]);
     expect(vi.getTimerCount()).toBe(0);
   } finally {
@@ -287,15 +287,14 @@ it.each(operations)(
     const f = await allowed(op.name);
     const first = await answer(await call(f, op.name, ids));
     if (op.name === "delete_messages") {
-      for (const id of ids)
-        google.messageAnswers.set(id, () => new Response(null, { status: 404 }));
+      for (const id of ids) google.trashAnswers.set(id, () => new Response(null, { status: 404 }));
       await expectError(
         await call(f, op.name, ids),
         "not_found",
         /None of the messages "m1", "m2"/,
       );
     } else expect(await answer(await call(f, op.name, ids))).toEqual(first);
-    expect(google.messageRequests.map((r) => r.url)).toEqual(
+    expect(google.trashRequests.map((r) => r.url)).toEqual(
       [...ids, ...ids].map((id) => `${MESSAGES_URL}/${id}${op.suffix}`),
     );
   },

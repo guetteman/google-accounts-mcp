@@ -21,7 +21,7 @@ it.each(operations)(
   "$name shows ordered Gmail values for two messages and only sends GETs",
   async (op) => {
     serveMessages(["m1", "m2"]);
-    google.messageAnswers.set("m2", () =>
+    google.trashAnswers.set("m2", () =>
       Response.json({
         ...message("m2"),
         internalDate: "1794392100000",
@@ -60,7 +60,7 @@ it.each(operations)(
 it.each(operations)(
   "$name uses singular names and bounds each header to 500 characters",
   async (op) => {
-    google.messageAnswers.set("m1", () =>
+    google.trashAnswers.set("m1", () =>
       Response.json({
         ...message(),
         payload: {
@@ -94,7 +94,7 @@ it("the view reads its first message alone, refreshes once and opens at most fiv
   let open = 0;
   let most = 0;
   ids15.forEach((id, i) =>
-    google.messageAnswers.set(id, async () => {
+    google.trashAnswers.set(id, async () => {
       most = Math.max(most, ++open);
       entered[i]!.resolve();
       await gates[i]!.promise;
@@ -105,7 +105,7 @@ it("the view reads its first message alone, refreshes once and opens at most fiv
   const pending = page(f, f.id);
   try {
     await entered[0]!.promise;
-    expect(google.messageRequests).toHaveLength(1);
+    expect(google.trashRequests).toHaveLength(1);
     expect(open).toBe(1);
     gates[0]!.resolve();
     await Promise.all(entered.slice(1, 6).map((e) => e.promise));
@@ -126,7 +126,7 @@ it.each([400, 404])(
   "a %s read shows the missing ID from the agent and keeps Approve",
   async (status) => {
     serveMessages(["m1", "m2"]);
-    google.messageAnswers.set("m2", () => new Response(null, { status }));
+    google.trashAnswers.set("m2", () => new Response(null, { status }));
     const f = await asking("delete_messages");
     const props = await page(f, f.id);
     expect(props.state).toMatchObject({ kind: "waiting", shown: true });
@@ -147,7 +147,7 @@ it.each([400, 404])(
 it.each([400, 404])(
   "one missing message with a %s read uses the singular ID label",
   async (status) => {
-    google.messageAnswers.set("m2", () => new Response(null, { status }));
+    google.trashAnswers.set("m2", () => new Response(null, { status }));
     const f = await asking("trash_messages", ["m2"]);
     expect((await page(f, f.id)).request.values).toEqual([
       { name: "Message ID, not found in this account", text: "m2", from: "agent" },
@@ -157,7 +157,7 @@ it.each([400, 404])(
 
 it.each([403, 429, 500])("a %s read fails the view and hides Approve", async (status) => {
   serveMessages(["m1", "m2"]);
-  google.messageAnswers.set("m2", () => new Response(null, { status }));
+  google.trashAnswers.set("m2", () => new Response(null, { status }));
   const f = await asking("delete_messages");
   const props = await page(f, f.id);
   expect(props.state).toMatchObject({ kind: "waiting", shown: false, digest: null });
@@ -171,7 +171,7 @@ it.each([403, 429, 500])("a %s read fails the view and hides Approve", async (st
 it.each(["", "NaN", "1.2", "8640000000000001"])(
   "a malformed internalDate %s hides Approve",
   async (internalDate) => {
-    google.messageAnswers.set("m1", () => Response.json({ ...message(), internalDate }));
+    google.trashAnswers.set("m1", () => Response.json({ ...message(), internalDate }));
     const f = await asking("trash_messages", ["m1"]);
     expect((await page(f, f.id)).state).toMatchObject({ kind: "waiting", shown: false });
   },
@@ -217,7 +217,7 @@ it.each(operations)(
       status: "success",
       result: { account: PERSONAL, messages: changed(op.name, ["m1", "m2"]) },
     });
-    expect(google.messageRequests.map(({ method, url }) => ({ method, url }))).toEqual([
+    expect(google.trashRequests.map(({ method, url }) => ({ method, url }))).toEqual([
       ...["m1", "m2", "m1", "m2"].map((id) => ({ method: "GET", url: metadataUrl(id) })),
       ...["m1", "m2"].map((id) => ({
         method: op.method,
@@ -235,11 +235,11 @@ it.each(operations)(
     const f = await asking(op.name);
     const shown = await page(f, f.id);
     if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
-    google.messageAnswers.set("m2", () => new Response(null, { status: 404 }));
+    google.trashAnswers.set("m2", () => new Response(null, { status: 404 }));
     const props = await decided(await post(f, f.id, "approve", { digest: shown.state.digest! }));
     expect(props.state).toMatchObject({ kind: "waiting", shown: true, changed: true });
     expect(textOf(await renderPage(props).text())).toContain("Nothing ran. The request changed.");
-    expect(google.messageRequests.every((r) => r.method === "GET")).toBe(true);
+    expect(google.trashRequests.every((r) => r.method === "GET")).toBe(true);
     expect((await callRows()).map((r) => r.outcome)).toEqual(["pending"]);
   },
 );
@@ -248,7 +248,7 @@ it.each(operations)(
   "Approve on all-missing messages runs $name and returns failed not_found",
   async (op) => {
     for (const id of ["m1", "m2"])
-      google.messageAnswers.set(id, () => new Response(null, { status: 404 }));
+      google.trashAnswers.set(id, () => new Response(null, { status: 404 }));
     const f = await asking(op.name);
     const shown = await page(f, f.id);
     if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
@@ -262,7 +262,7 @@ it.each(operations)(
         message: `None of the messages "m1", "m2" exists in ${PERSONAL}. A message ID works only in the account that returned it.`,
       },
     });
-    expect(google.messageRequests.filter((r) => r.method !== "GET").map((r) => r.url)).toEqual(
+    expect(google.trashRequests.filter((r) => r.method !== "GET").map((r) => r.url)).toEqual(
       ["m1", "m2"].map((id) => `${MESSAGES_URL}/${id}${op.suffix}`),
     );
     expect((await callRows()).map((r) => r.outcome)).toEqual(["refused", "success"]);
@@ -276,7 +276,7 @@ it.each(operations)(
     const f = await asking(op.name);
     const shown = await page(f, f.id);
     if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
-    google.messageAnswers.set("m2", (request) =>
+    google.trashAnswers.set("m2", (request) =>
       request.method === "GET" ? Response.json(message("m2")) : new Response(null, { status: 404 }),
     );
     expect(
@@ -298,7 +298,7 @@ it.each(operations)(
   async (op) => {
     const ids = ["m1", "m2", "m3"];
     serveMessages(ids);
-    google.messageAnswers.set("m2", () => new Response(null, { status: 404 }));
+    google.trashAnswers.set("m2", () => new Response(null, { status: 404 }));
     const f = await asking(op.name, ids);
     const shown = await page(f, f.id);
     expect(shown.state).toMatchObject({ kind: "waiting", shown: true });
@@ -324,7 +324,7 @@ it.each(operations)(
     const changes = ids.map((id) => `${MESSAGES_URL}/${id}${op.suffix}`);
     expect(requests.slice(start)).toEqual([...ids.map(metadataUrl), ...changes]);
     expect(
-      google.messageRequests
+      google.trashRequests
         .filter((r) => r.method !== "GET")
         .map(({ method, url }) => ({
           method,
@@ -357,7 +357,7 @@ it.each(operations)(
       expect(html.indexOf(WARNING)).toBeGreaterThan(html.indexOf("Message 15 date"));
       expect(html.indexOf(WARNING)).toBeLessThan(html.indexOf(">Approve</button>"));
     }
-    expect(google.messageRequests.map((r) => r.url)).toEqual(ids15.map(metadataUrl));
+    expect(google.trashRequests.map((r) => r.url)).toEqual(ids15.map(metadataUrl));
     expect(google.methods).toEqual(ids15.map(() => "GET"));
   },
 );
@@ -370,7 +370,7 @@ it("keeps view values in input order when later metadata answers finish in rever
   const finished: string[] = [];
   gates.get("m1")!.resolve();
   for (const id of ids) {
-    google.messageAnswers.set(id, async () => {
+    google.trashAnswers.set(id, async () => {
       entered.get(id)!.resolve();
       await gates.get(id)!.promise;
       finished.push(id);
@@ -418,7 +418,7 @@ it.each(operations)(
     const f = await asking(op.name, ids15);
     const shown = await page(f, f.id);
     if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
-    expect(google.messageRequests.map((r) => r.url)).toEqual(ids15.map(metadataUrl));
+    expect(google.trashRequests.map((r) => r.url)).toEqual(ids15.map(metadataUrl));
     expect(google.refreshTokens).toHaveLength(0);
     await env.DB.prepare("UPDATE accounts SET access_expires_at = ? WHERE id = ?")
       .bind(NOW, f.personal.id)
@@ -427,7 +427,7 @@ it.each(operations)(
     expect(
       (await decided(await post(f, f.id, "approve", { digest: shown.state.digest! }))).state.kind,
     ).toBe("succeeded");
-    expect(google.messageRequests.map(({ method, url }) => ({ method, url }))).toEqual([
+    expect(google.trashRequests.map(({ method, url }) => ({ method, url }))).toEqual([
       ...[...ids15, ...ids15].map((id) => ({ method: "GET", url: metadataUrl(id) })),
       ...ids15.map((id) => ({ method: op.method, url: `${MESSAGES_URL}/${id}${op.suffix}` })),
     ]);
@@ -448,7 +448,7 @@ it("the approved run cut at 25 seconds ends unknown and starts no late change", 
   const shown = await page(f, f.id);
   if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
   // The rebuilt view uses its existing token. The winner then receives an expired credential.
-  google.messageAnswers.set("m2", async () => {
+  google.trashAnswers.set("m2", async () => {
     await env.DB.prepare("UPDATE accounts SET access_expires_at = ? WHERE id = ?")
       .bind(NOW, f.personal.id)
       .run();
@@ -498,7 +498,7 @@ it("the approved run cut at 25 seconds ends unknown and starts no late change", 
     await vi.advanceTimersByTimeAsync(1);
     await running;
   }
-  expect(google.messageRequests.filter((r) => r.method !== "GET")).toEqual([]);
+  expect(google.trashRequests.filter((r) => r.method !== "GET")).toEqual([]);
 });
 
 it("keeps an approved delete unknown when its deadline cuts a later change in flight", async () => {
@@ -515,7 +515,7 @@ it("keeps an approved delete unknown when its deadline cuts a later change in fl
   let changeStarted = false;
   let aborted = false;
   ids.forEach((id, index) =>
-    google.messageAnswers.set(id, async (request) => {
+    google.trashAnswers.set(id, async (request) => {
       if (request.method === "GET") {
         readsEntered[index]!.resolve();
         await readGates[index]!.promise;
@@ -552,7 +552,7 @@ it("keeps an approved delete unknown when its deadline cuts a later change in fl
     }
     await changing.promise;
     // changeEach starts m2 only after Gmail has confirmed m1's successful delete.
-    expect(google.messageRequests.filter((r) => r.method === "DELETE").map((r) => r.url)).toEqual(
+    expect(google.trashRequests.filter((r) => r.method === "DELETE").map((r) => r.url)).toEqual(
       ids.map((id) => `${MESSAGES_URL}/${id}`),
     );
     vi.spyOn(Date, "now").mockReturnValue(NOW + 24_999);
