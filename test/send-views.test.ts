@@ -11,6 +11,29 @@ import { fullMessage, mime, sendCall, sendFixture, serveFull } from "./support/s
 import { part, tree } from "./support/thread";
 import { ORIGIN, textOf } from "./support/worker";
 
+const originalForApproval = () => {
+  const raw = fullMessage({
+    From: "Original\r\n Sender <author@source.example>",
+    To: "Alex <alex.personal@example.com>, Original To <to@source.example>",
+    Cc: "Original Cc <cc@source.example>",
+    Bcc: "Original Bcc <bcc@source.example>",
+    "Reply-To": "Reply Destination <reply@source.example>",
+    Subject: "Original subject for forwarding",
+  });
+  raw.payload = {
+    ...tree("multipart/mixed", [
+      part("text/plain", "Distinct original body.\nSecond original line.", "0"),
+      part("application/pdf", "PDF", "1", "source-menu.pdf"),
+      {
+        ...part("image/png", "", "2", "source-photo.png"),
+        body: { size: 5, attachmentId: "image" },
+      },
+    ]),
+    headers: raw.payload.headers,
+  };
+  return raw;
+};
+
 it("a new send shows normalized recipients, subject, duplicate and its whole body without reading Gmail", async () => {
   const f = await sendFixture("send_message", "ask");
   const id = (
@@ -25,6 +48,10 @@ it("a new send shows normalized recipients, subject, duplicate and its whole bod
     )
   ).approval as string;
   const props = await page(f, id);
+  expect(props.request.tool).toMatchObject({ action: "send a message", joiner: "from" });
+  expect(props.request.notes).toEqual([
+    { text: "A sent message cannot be taken back.", warning: true },
+  ]);
   expect(props.request.values).toEqual([
     { name: "To", text: "Sam Lee <sam@example.com>", from: "agent" },
     { name: "Cc", text: "kim@example.com", from: "agent" },
@@ -65,18 +92,38 @@ it("a new send shows normalized recipients, subject, duplicate and its whole bod
 
 it("the reply view and run use the same plan with Gmail recipients before the agent's body", async () => {
   const f = await sendFixture("send_reply", "ask");
-  const id = (await answer(await sendCall(f, "send_reply", { reply_all: true, duplicate: 2 })))
-    .approval as string;
+  serveFull(originalForApproval());
+  const id = (
+    await answer(
+      await sendCall(f, "send_reply", {
+        reply_all: true,
+        duplicate: 2,
+        body: "Reply body for destination.\nNext reply line.",
+      }),
+    )
+  ).approval as string;
   const props = await page(f, id);
+  expect(props.request.tool).toMatchObject({ action: "send a reply", joiner: "from" });
+  expect(props.request.notes).toEqual([
+    { text: "A sent message cannot be taken back.", warning: true },
+  ]);
   expect(props.request.values).toEqual([
-    { name: "Answers a message from", text: "Sam <sam@example.com>", from: "gmail" },
-    { name: "Its subject", text: "Lunch", from: "gmail" },
+    {
+      name: "Answers a message from",
+      text: "Original Sender <author@source.example>",
+      from: "gmail",
+    },
+    { name: "Its subject", text: "Original subject for forwarding", from: "gmail" },
     { name: "Its date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
-    { name: "To", text: "Sam <sam@example.com>", from: "gmail" },
-    { name: "Cc", text: "Kim <kim@example.com>, Jo <jo@example.com>", from: "gmail" },
-    { name: "Subject", text: "Re: Lunch", from: "gmail" },
+    { name: "To", text: "Reply Destination <reply@source.example>", from: "gmail" },
+    {
+      name: "Cc",
+      text: "Original To <to@source.example>, Original Cc <cc@source.example>",
+      from: "gmail",
+    },
+    { name: "Subject", text: "Re: Original subject for forwarding", from: "gmail" },
     { name: "Duplicate", text: "2 (a deliberate copy of an earlier call)", from: "agent" },
-    { name: "Body", text: "Hello", from: "agent" },
+    { name: "Body", text: "Reply body for destination.\nNext reply line.", from: "agent" },
   ]);
   expect(textOf(await renderPage(props).text())).toContain("To, read from Gmail");
   expect((await approve(f, id)).state.kind).toBe("succeeded");
@@ -97,9 +144,9 @@ it("the reply view and run use the same plan with Gmail recipients before the ag
     ].sort(),
   );
   expect(mail.headers).toEqual({
-    To: "Sam <sam@example.com>",
-    Cc: "Kim <kim@example.com>, Jo <jo@example.com>",
-    Subject: "Re: Lunch",
+    To: "Reply Destination <reply@source.example>",
+    Cc: "Original To <to@source.example>, Original Cc <cc@source.example>",
+    Subject: "Re: Original subject for forwarding",
     "In-Reply-To": "<source@example.com>",
     References: "<earlier@example.com> <source@example.com>",
     "MIME-Version": "1.0",
@@ -109,22 +156,13 @@ it("the reply view and run use the same plan with Gmail recipients before the ag
   expect(mail.headers.Subject).toBe(
     props.request.values.find((value) => value.name === "Subject")!.text,
   );
-  expect(mail.body).toBe("Hello");
+  expect(mail.body).toBe("Reply body for destination.\nNext reply line.");
 });
 
 it("the forward lists every file before its exact quoted block without downloading files for the view", async () => {
   const f = await sendFixture("forward_message", "ask");
-  const raw = fullMessage();
-  raw.payload = {
-    ...tree("multipart/mixed", [
-      part("text/plain", "Lunch on Friday?", "0"),
-      part("application/pdf", "PDF", "1", "menu.pdf"),
-      { ...part("image/png", "", "2", ""), body: { size: 1000, attachmentId: "image" } },
-    ]),
-    headers: raw.payload.headers,
-  };
-  serveFull(raw);
-  google.attachmentAnswers.set("image", () => Response.json({ data: "AA" }));
+  serveFull(originalForApproval());
+  google.attachmentAnswers.set("image", () => Response.json({ data: "SU1BR0U=" }));
   const id = (
     await answer(
       await sendCall(f, "forward_message", {
@@ -137,36 +175,33 @@ it("the forward lists every file before its exact quoted block without downloadi
   ).approval as string;
   const props = await page(f, id);
   const values = props.request.values;
-  expect(values.map((v) => v.name)).toEqual([
-    "Forwards a message from",
-    "Its subject",
-    "Its date",
-    "To",
-    "Cc",
-    "Bcc",
-    "Subject",
-    "Attachments",
-    "Attachment 1",
-    "Attachment 2",
-    "Duplicate",
-    "Note",
-    "Forwarded text",
+  expect(props.request.tool).toMatchObject({ action: "forward a message", joiner: "from" });
+  expect(props.request.notes).toEqual([
+    { text: "A sent message cannot be taken back.", warning: true },
   ]);
-  expect(values[7]).toEqual({
-    name: "Attachments",
-    text: "2 files, 1,003 bytes in all",
-    from: "gmail",
-  });
-  expect(values[8]).toEqual({
-    name: "Attachment 1",
-    text: "menu.pdf (application/pdf, 3 bytes)",
-    from: "gmail",
-  });
-  expect(values[9]).toEqual({
-    name: "Attachment 2",
-    text: "(no name) (image/png, 1,000 bytes)",
-    from: "gmail",
-  });
+  expect(values).toEqual([
+    {
+      name: "Forwards a message from",
+      text: "Original Sender <author@source.example>",
+      from: "gmail",
+    },
+    { name: "Its subject", text: "Original subject for forwarding", from: "gmail" },
+    { name: "Its date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+    { name: "To", text: "lee@example.com", from: "agent" },
+    { name: "Cc", text: "kim@example.com", from: "agent" },
+    { name: "Bcc", text: "sam@example.com", from: "agent" },
+    { name: "Subject", text: "Fwd: Original subject for forwarding", from: "gmail" },
+    { name: "Attachments", text: "2 files, 8 bytes in all", from: "gmail" },
+    { name: "Attachment 1", text: "source-menu.pdf (application/pdf, 3 bytes)", from: "gmail" },
+    { name: "Attachment 2", text: "source-photo.png (image/png, 5 bytes)", from: "gmail" },
+    { name: "Duplicate", text: "2 (a deliberate copy of an earlier call)", from: "agent" },
+    { name: "Note", text: "See below.", from: "agent" },
+    {
+      name: "Forwarded text",
+      text: "---------- Forwarded message ---------\nFrom: Original Sender <author@source.example>\nDate: 2026-11-11T09:41:36Z\nSubject: Original subject for forwarding\nTo: Alex <alex.personal@example.com>, Original To <to@source.example>\nCc: Original Cc <cc@source.example>\n\nDistinct original body.\nSecond original line.",
+      from: "gmail",
+    },
+  ]);
   expect(google.attachmentRequests).toEqual([]);
   expect(textOf(await renderPage(props).text())).toContain("Forwarded text, read from Gmail");
   expect((await approve(f, id)).state.kind).toBe("succeeded");
@@ -179,7 +214,21 @@ it("the forward lists every file before its exact quoted block without downloadi
   expect(mail.headers.To).toBe("lee@example.com");
   expect(mail.headers.Cc).toBe("kim@example.com");
   expect(mail.headers.Bcc).toBe("sam@example.com");
-  expect(mail.headers.Subject).toBe("Fwd: Lunch");
+  expect(mail.headers.Subject).toBe("Fwd: Original subject for forwarding");
+  const files = mail.parts.slice(1).map((file) => ({
+    filename: decodeURIComponent(
+      /filename\*=UTF-8''([^\r\n]+)/.exec(file.headers["Content-Disposition"]!)![1]!,
+    ),
+    type: file.headers["Content-Type"],
+    size: file.data.byteLength,
+  }));
+  expect(files).toEqual([
+    { filename: "source-menu.pdf", type: "application/pdf", size: 3 },
+    { filename: "source-photo.png", type: "image/png", size: 5 },
+  ]);
+  expect(
+    values.filter((value) => /^Attachment \d+$/.test(value.name)).map((value) => value.text),
+  ).toEqual(files.map((file) => `${file.filename} (${file.type}, ${file.size} bytes)`));
   for (const name of ["To", "Cc", "Bcc", "Subject"])
     expect(mail.headers[name]).toBe(values.find((value) => value.name === name)!.text);
 });
@@ -206,35 +255,37 @@ it("the draft view shows all 200 recipients and whole raw headers with its warni
   const f = await sendFixture("send_draft", "ask");
   const to = Array.from({ length: 200 }, (_, i) => `Recipient ${i} <r${i}@example.com>`).join(", ");
   const raw = fullMessage({
-    From: "Alex <alex.personal@example.com>",
+    From: "Draft Author <draft-author@example.com>",
     To: to,
-    Cc: "kim@example.com",
-    Bcc: "lee@example.com",
+    Cc: "Draft Cc <draft-cc@example.com>",
+    Bcc: "Draft Bcc <draft-bcc@example.com>",
     Subject: "s".repeat(1100),
+    "Reply-To": "Draft Reply <draft-reply@example.com>",
   });
   raw.payload = {
     ...tree("multipart/mixed", [
-      part("text/plain", "Draft body", "0"),
-      part("application/pdf", "PDF", "1", "report.pdf"),
+      part("text/plain", "Draft body written for the owner.\nDraft second line.", "0"),
+      part("application/pdf", "DRAFT-PDF", "1", "draft-report.pdf"),
+      part("text/plain", "DRAFT-TEXT", "2", "draft-note.txt"),
     ]),
     headers: raw.payload.headers,
   };
   google.storedDrafts.set("existing-draft", raw);
   const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
   const props = await page(f, id);
-  expect(props.request.values.map((v) => v.name)).toEqual([
-    "From",
-    "To",
-    "Cc",
-    "Bcc",
-    "Subject",
-    "Attachments",
-    "Attachment 1",
-    "Body",
+  expect(props.request.tool).toMatchObject({ action: "send a draft", joiner: "from" });
+  expect(props.request.values).toEqual([
+    { name: "From", text: "Draft Author <draft-author@example.com>", from: "draft" },
+    { name: "To", text: to, from: "draft" },
+    { name: "Cc", text: "Draft Cc <draft-cc@example.com>", from: "draft" },
+    { name: "Bcc", text: "Draft Bcc <draft-bcc@example.com>", from: "draft" },
+    { name: "Subject", text: "s".repeat(1100), from: "draft" },
+    { name: "Reply-To", text: "Draft Reply <draft-reply@example.com>", from: "draft" },
+    { name: "Attachments", text: "2 files, 19 bytes in all", from: "draft" },
+    { name: "Attachment 1", text: "draft-report.pdf (application/pdf, 9 bytes)", from: "draft" },
+    { name: "Attachment 2", text: "draft-note.txt (text/plain, 10 bytes)", from: "draft" },
+    { name: "Body", text: "Draft body written for the owner.\nDraft second line.", from: "draft" },
   ]);
-  expect(props.request.values.find((v) => v.name === "To")!.text).toBe(to);
-  expect(props.request.values.find((v) => v.name === "Subject")!.text).toBe("s".repeat(1100));
-  expect(props.request.values.every((v) => v.from === "draft")).toBe(true);
   const note =
     "This is the draft as it is in Gmail now. It is sent as it is at the moment you approve, also if it changed after this page loaded.";
   expect(props.request.notes).toEqual([{ text: note, warning: true }]);
