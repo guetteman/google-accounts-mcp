@@ -321,6 +321,40 @@ it("returns the same waiting approval even at the limit of twenty", async () => 
   expect(google.draftCreates).toEqual([]);
 });
 
+it("ends a waiting approval on deny and runs directly after allow", async () => {
+  const f = await draftFixture("ask");
+  // Keep the account visible after denying create_draft, so the refusal is tool_not_allowed.
+  await permission(f);
+  const pending = await answer(await draftCall(f));
+  expect(pending.status).toBe("pending");
+  const id = pending.approval as string;
+  await setDraft(f, "deny");
+  await expectError(await draftCall(f), "tool_not_allowed", /has not allowed create_draft/);
+  expect(await row(id)).toMatchObject({ state: "refused", ended_by: "tool" });
+  expect(google.draftCreates).toEqual([]);
+  expect(await onceRows()).toEqual([]);
+
+  await setDraft(f, "allow");
+  expect(await answer(await draftCall(f))).toEqual(ids);
+  expect(google.draftCreates).toHaveLength(1);
+  expect(await onceRows()).toHaveLength(1);
+  expect(await rows()).toHaveLength(1);
+  expect(await row(id)).toMatchObject({ state: "refused", ended_by: "tool" });
+});
+
+it("returns the same pending approval for concurrent repeats with allow", async () => {
+  const f = await draftFixture("ask");
+  const pending = await answer(await draftCall(f));
+  expect(pending.status).toBe("pending");
+  await setDraft(f, "allow");
+  const answers = await Promise.all([draftCall(f).then(answer), draftCall(f).then(answer)]);
+  expect(answers).toEqual([pending, pending]);
+  expect(google.draftCreates).toEqual([]);
+  expect(await onceRows()).toEqual([]);
+  expect(await rows()).toHaveLength(1);
+  expect((await row(pending.approval as string))!.state).toBe("waiting");
+});
+
 it.each(["success", "unknown"])(
   "answers from an approved %s without another approval",
   async (outcome) => {
