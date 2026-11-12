@@ -164,10 +164,13 @@ export const readMessage = (raw: RawMessage): Message => {
     attachments: parts
       .filter(
         (part) =>
-          part.filename ||
-          (part.body.attachmentId &&
-            part.mimeType !== "text/plain" &&
-            part.mimeType !== "text/html"),
+          // The root has no partId and is named 0, as its first part is. Only a root that is
+          // the whole message can be a file.
+          !(part === raw.payload && part.parts?.length) &&
+          (part.filename ||
+            (part.body.attachmentId &&
+              part.mimeType !== "text/plain" &&
+              part.mimeType !== "text/html")),
       )
       .map((part) => ({
         attachment: part.partId || "0",

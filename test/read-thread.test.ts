@@ -203,6 +203,16 @@ it("names attachments by partId, marks only referenced images and never fetches 
         part("text/plain", "Notes", "1", "notes.txt"),
       ]),
     },
+    {
+      // A root that has parts and claims a file name would share the name 0 with its first part.
+      ...message("m6"),
+      payload: {
+        ...tree("multipart/mixed", [
+          { ...part("application/pdf", "", "0", "a.pdf"), body: { size: 7, attachmentId: "v" } },
+        ]),
+        filename: "root.bin",
+      },
+    },
   ]);
   const found = await result(await read(f));
   expect(found.messages[0]!.attachments).toEqual([
@@ -217,6 +227,9 @@ it("names attachments by partId, marks only referenced images and never fetches 
   expect(found.messages[3]!.attachments).toEqual([]);
   expect(found.messages[4]!.attachments).toEqual([
     { attachment: "1", filename: "notes.txt", type: "text/plain", size: 5 },
+  ]);
+  expect(found.messages[5]!.attachments).toEqual([
+    { attachment: "0", filename: "a.pdf", type: "application/pdf", size: 7 },
   ]);
   expect(google.attachmentRequests).toEqual([]);
 });
