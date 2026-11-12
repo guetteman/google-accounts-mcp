@@ -4,6 +4,7 @@ import { notFound, ToolFailure, type Missing } from "../mcp/failures";
 import { isoSeconds } from "../approvals/model";
 import { decodeEntities } from "./html";
 import { Headers, InternalDate, header } from "./message";
+import { shorten } from "./bounds";
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const unavailable = () => new ToolFailure({ code: "google_unavailable" });
@@ -172,6 +173,31 @@ export const threadSummary = (
         } satisfies ThreadSummary;
       }),
     ),
+  );
+export interface MessageSummary {
+  from: string;
+  subject: string;
+  date: number;
+}
+/** One message as a view shows it, with bounded headers. */
+export const messageSummary = (
+  send: Send,
+  message: string,
+): Effect.Effect<MessageSummary, ToolFailure> =>
+  get(
+    send,
+    `messages/${encodeURIComponent(message)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`,
+    Schema.Struct({
+      internalDate: InternalDate,
+      payload: Schema.optionalKey(Schema.Struct({ headers: Schema.optionalKey(Headers) })),
+    }),
+    (status) => (status === 404 || status === 400 ? notFound("message", message) : unavailable()),
+  ).pipe(
+    Effect.map((value) => ({
+      from: shorten(header(value.payload?.headers, "From"), 500),
+      subject: shorten(header(value.payload?.headers, "Subject"), 500),
+      date: Number(value.internalDate),
+    })),
   );
 /** Cloudflare allows a Worker six connections at once for one request; five leave one free. */
 export const REQUESTS_AT_ONCE = 5;

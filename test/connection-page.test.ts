@@ -64,6 +64,9 @@ it("G1 renders tools under their groups in tool-list order, with no empty group"
     { name: "search_threads", group: "Find and read" },
     { name: "read_thread", group: "Find and read" },
     { name: "change_labels", group: "Organize" },
+    { name: "trash_messages", group: "Trash and delete" },
+    { name: "restore_messages", group: "Trash and delete" },
+    { name: "delete_messages", group: "Trash and delete" },
   ]);
   expect(props.tools.find((tool) => tool.name === "change_labels")).toEqual({
     name: "change_labels",
@@ -78,6 +81,7 @@ it("G1 renders tools under their groups in tool-list order, with no empty group"
   );
   expect(textOf(first)).toContain("Find and read");
   expect(textOf(first)).toContain("Organize");
+  expect(textOf(first).indexOf("Organize")).toBeLessThan(textOf(first).indexOf("Trash and delete"));
   expect(first.indexOf('aria-label="List labels on Personal')).toBeLessThan(
     first.indexOf('aria-label="Search mail on Personal'),
   );
@@ -87,7 +91,17 @@ it("G1 renders tools under their groups in tool-list order, with no empty group"
   expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
     first.indexOf('aria-label="Change labels on Personal'),
   );
-  for (const group of GROUPS.filter((group) => group !== "Find and read" && group !== "Organize"))
+  expect(first.indexOf('aria-label="Change labels on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Move to trash on Personal'),
+  );
+  expect(first.indexOf('aria-label="Move to trash on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Restore from trash on Personal'),
+  );
+  expect(first.indexOf('aria-label="Restore from trash on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Delete permanently on Personal'),
+  );
+  const usedGroups = new Set(props.tools.map((tool) => tool.group));
+  for (const group of GROUPS.filter((group) => !usedGroups.has(group)))
     expect(textOf(html)).not.toContain(group);
 });
 

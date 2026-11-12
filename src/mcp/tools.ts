@@ -15,6 +15,7 @@ import {
   MAX_LABELS,
   REFUSED,
 } from "../google/organize";
+import { deleteMessages, messageValues, restoreMessages, trashMessages } from "../google/trash";
 import { readListedTools } from "../permissions/store";
 import type { CallContext } from "./call";
 import type { ToolFailure } from "./failures";
@@ -131,6 +132,16 @@ const LabelIds = Schema.Array(
     Schema.makeFilter((id) => !REFUSED.has(id)),
   ),
 ).check(Schema.isMaxLength(MAX_LABELS));
+const MessagesInput = Schema.Struct({
+  account: Schema.String,
+  messages: Schema.Array(
+    Schema.String.check(Schema.isBetweenLength(1, 64), Schema.isPattern(/^[A-Za-z0-9_-]+$/u)),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_ITEMS), Schema.isUnique()),
+});
+const messagesExpects = {
+  account: "a string",
+  messages: `a list of 1 to ${MAX_ITEMS} different message IDs that read_thread returned`,
+};
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -325,6 +336,67 @@ export const TOOLS: ReadonlyArray<Tool> = [
         add: args.add ?? [],
         remove: args.remove ?? [],
       }),
+  }),
+  accountTool({
+    name: "trash_messages",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    label: "Move to trash",
+    group: "Trash and delete",
+    permissionDescription:
+      "Move messages to the trash. Gmail deletes a message for good after 30 days there.",
+    description: `Moves messages of one Google account to the trash. \`account\` is the address of an account that list_accounts returns. \`messages\` is a list of 1 to ${MAX_ITEMS} different message IDs that read_thread returned for that account; an ID works only in the account that returned it. Only the named messages move: the other messages of their threads stay where they are. In the trash, a message loses the label INBOX and keeps its other labels. Gmail deletes a message for good after 30 days in the trash, and restore_messages takes it out before that. In the result, \`messages\` holds each message that moved, with its label IDs after the change. \`not_found\` lists the IDs that the account does not have. \`unconfirmed\` lists the IDs for which Google did not confirm the change: call again with those IDs. Each of the two is present only when it is not empty. When no message moved, the call returns an error. Calling again with the same IDs is safe: a message that is already in the trash stays there. When the owner sets this tool to ask, it returns a pending approval with a link instead; get_approval returns the result after the owner approves.`,
+    input: MessagesInput,
+    expects: messagesExpects,
+    view: {
+      action: "move messages to the trash",
+      joiner: "in",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      values: (args, send) => messageValues(send, args.messages),
+    },
+    run: (send, account, args) =>
+      trashMessages(send, { account: account.email, messages: args.messages }),
+  }),
+  accountTool({
+    name: "restore_messages",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    label: "Restore from trash",
+    group: "Trash and delete",
+    permissionDescription: "Take messages out of the trash.",
+    description: `Takes messages of one Google account out of the trash. \`account\` is the address of an account that list_accounts returns. \`messages\` is a list of 1 to ${MAX_ITEMS} different message IDs that read_thread returned for that account; an ID works only in the account that returned it. Only the named messages are restored. In the result, \`messages\` holds each restored message with its label IDs after the change. A restored message is not back in the inbox: Gmail removes the label INBOX when a message goes to the trash and does not add it back, while the message keeps its other labels, such as UNREAD, STARRED, and the owner's own labels. It stays out of the trash and out of the inbox. \`not_found\` lists the IDs that the account does not have, which includes messages that were deleted for good. \`unconfirmed\` lists the IDs for which Google did not confirm the change: call again with those IDs. Each of the two is present only when it is not empty. When no message was restored, the call returns an error. Calling again with the same IDs is safe. When the owner sets this tool to ask, it returns a pending approval with a link instead; get_approval returns the result after the owner approves.`,
+    input: MessagesInput,
+    expects: messagesExpects,
+    view: {
+      action: "take messages out of the trash",
+      joiner: "in",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      values: (args, send) => messageValues(send, args.messages),
+    },
+    run: (send, account, args) =>
+      restoreMessages(send, { account: account.email, messages: args.messages }),
+  }),
+  accountTool({
+    name: "delete_messages",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    label: "Delete permanently",
+    group: "Trash and delete",
+    permissionDescription: "Delete messages for good, without the trash. Nobody can recover them.",
+    description: `Deletes messages of one Google account for good. Gmail cannot bring them back, and they do not go to the trash. Use trash_messages when the owner may want a message back. \`account\` is the address of an account that list_accounts returns. \`messages\` is a list of 1 to ${MAX_ITEMS} different message IDs that read_thread returned for that account; an ID works only in the account that returned it. Only the named messages are deleted: the other messages of their threads stay. In the result, \`messages\` holds the IDs that were deleted. \`not_found\` lists the IDs that the account does not have. \`unconfirmed\` lists the IDs for which Google did not confirm the delete: call again with those IDs. Each of the two is present only when it is not empty. When no message was deleted, the call returns an error. A deleted message counts as not found. So when an ID was unconfirmed, or a call failed, got no answer, or ended as unknown, and a later call reports that ID as not found, the message is gone. When the owner sets this tool to ask, it returns a pending approval with a link instead; get_approval returns the result after the owner approves.`,
+    input: MessagesInput,
+    expects: messagesExpects,
+    view: {
+      action: "delete messages permanently",
+      joiner: "from",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      notes: () => [
+        {
+          text: "These messages cannot be recovered. They do not go to the trash: Gmail deletes them at once and for good.",
+          warning: true,
+        },
+      ],
+      values: (args, send) => messageValues(send, args.messages),
+    },
+    run: (send, account, args) =>
+      deleteMessages(send, { account: account.email, messages: args.messages }),
   }),
   {
     kind: "plain",

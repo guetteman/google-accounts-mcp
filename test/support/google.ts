@@ -1,6 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { b64url, unsignedAssertion } from "./oauth";
 import { OWNER_EMAIL, testEnv } from "./worker";
+import { afterEach, expect } from "vite-plus/test";
 
 export const MARKER = "PRIVATE_GOOGLE_TOKEN_";
 export const SCOPES = ["gmail.readonly", "gmail.compose", "gmail.send", "gmail.modify"]
@@ -29,6 +30,11 @@ export const LABELS_RESPONSE = {
   ],
 };
 export const THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
+export const MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+export const unhandledMessages: string[] = [];
+afterEach(() => {
+  expect(unhandledMessages, "Every message request must have an explicit test answer").toEqual([]);
+});
 // Shapes observed on a real account on 2026-11-11 (issue #23), with made-up values. The list
 // holds only IDs and snippets, snippets are HTML-escaped, and a thread's messages come oldest
 // first with internalDate in milliseconds. Fields the tool must omit are included.
@@ -172,6 +178,16 @@ export const google = {
     (request: Pick<Request, "signal">) => Response | Promise<Response>
   >(),
   modifiedLabels: new Map<string, string[][]>(),
+  messageRequests: [] as Array<{
+    url: string;
+    method: string;
+    authorization: string | null;
+    redirect: RequestRedirect;
+  }>,
+  messageAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal" | "method" | "url">) => Response | Promise<Response>
+  >(),
   codes: new Map<string, Code>(),
   exchangeAnswer: "ok" as Answer,
   refreshAnswers: [] as Answer[],
@@ -202,6 +218,9 @@ export const google = {
     this.modifyRequests = [];
     this.modifyAnswers.clear();
     this.modifiedLabels.clear();
+    this.messageRequests = [];
+    this.messageAnswers.clear();
+    unhandledMessages.length = 0;
     this.exchangeAnswer = "ok";
     this.revokeAnswer = "ok";
     this.refreshAnswers = [];
@@ -249,6 +268,22 @@ export const google = {
     return answer === "ok"
       ? null
       : HttpResponse.json({ error: answer }, { status: answer === "invalid_client" ? 401 : 400 });
+  },
+  async messageAnswer(
+    request: Pick<Request, "signal" | "method" | "url" | "headers" | "redirect">,
+    id: string,
+  ) {
+    this.methods.push(request.method);
+    this.messageRequests.push({
+      url: request.url,
+      method: request.method,
+      authorization: request.headers.get("Authorization"),
+      redirect: request.redirect,
+    });
+    const answer = this.messageAnswers.get(id);
+    if (answer) return answer(request);
+    unhandledMessages.push(`${request.method} ${request.url}`);
+    return HttpResponse.error();
   },
   handlers() {
     return [
@@ -402,6 +437,15 @@ export const google = {
         );
         return HttpResponse.json({ id, messages });
       }),
+      http.all(`${MESSAGES_URL}/:id`, ({ request, params }) =>
+        this.messageAnswer(request, String(params.id)),
+      ),
+      http.all(`${MESSAGES_URL}/:id/trash`, ({ request, params }) =>
+        this.messageAnswer(request, String(params.id)),
+      ),
+      http.all(`${MESSAGES_URL}/:id/untrash`, ({ request, params }) =>
+        this.messageAnswer(request, String(params.id)),
+      ),
       http.all(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/:message/attachments/:attachment",
         async ({ request, params }) => {
