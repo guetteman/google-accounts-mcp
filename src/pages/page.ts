@@ -20,7 +20,7 @@ export type FramePage =
       readonly connection: ConnectionView;
       readonly accounts: ReadonlyArray<AccountView>;
       readonly tools: ReadonlyArray<{
-        name: import("../mcp/tools").AccountTool;
+        name: string;
         label: string;
         description: string;
       }>;

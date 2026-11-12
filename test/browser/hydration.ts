@@ -211,7 +211,7 @@ export async function hydrateAccounts(input: {
       );
       let collapsed = false;
       try {
-        await page.getByRole("button", { name: /Personal.*1 tool/ }).click();
+        await page.getByRole("button", { name: /Personal.*\d+ tools?/ }).click();
         collapsed = !(await page
           .getByRole("radiogroup", { name: "List labels on Personal for Claude", exact: true })
           .isVisible());

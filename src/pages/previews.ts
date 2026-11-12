@@ -112,6 +112,12 @@ const connectionPreview = (scenario: string): Page => {
         label: "List labels",
         description: "See the names of this account's Gmail labels.",
       },
+      {
+        name: "search_threads",
+        label: "Search mail",
+        description:
+          "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",
+      },
     ],
     requiredGmailScopes: GMAIL_SCOPES.length,
   };

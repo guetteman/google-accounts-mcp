@@ -33,7 +33,9 @@ it("hydrates the Worker's connection page once and collapses an account without 
   expect(hydrated.clientLoads).toBe(1);
   expect(hydrated.controls).toEqual([
     { name: "List labels on Personal for Claude", selected: "Allowed" },
+    { name: "Search mail on Personal for Claude", selected: "Not allowed" },
     { name: "List labels on Northwind for Claude", selected: "Not allowed" },
+    { name: "Search mail on Northwind for Claude", selected: "Not allowed" },
   ]);
   expect(hydrated.collapsed).toBe(true);
 }, 30_000);

@@ -52,7 +52,19 @@ export const withGoogle = (
   deps: Deps,
   account: Credential,
   build: (accessToken: string) => Request,
-): Effect.Effect<Response, TokenError> => {
+): Effect.Effect<Response, TokenError> => googleSession(deps, account)(build);
+
+/**
+ * One call's requests to Google for one account. withGoogle's contract holds for each request.
+ * The first request acquires the access token and later requests reuse it, so a call with
+ * several requests refreshes an expired token once. Send the first request alone: requests
+ * that start together each acquire a token.
+ */
+export const googleSession = (
+  deps: Deps,
+  account: Credential,
+): ((build: (accessToken: string) => Request) => Effect.Effect<Response, TokenError>) => {
+  let held: Access | null = null;
   const acquire = (
     snapshot: Credential,
     force: boolean,
@@ -126,15 +138,19 @@ export const withGoogle = (
       }
       return { token: result.success.accessToken, refreshed: true, snapshot, reloaded };
     });
-  const send = (token: string) => {
-    const request = build(token);
-    return Effect.tryPromise({ try: () => fetch(request), catch: () => new RequestLost() });
+  return (build) => {
+    const send = (token: string) => {
+      const request = build(token);
+      return Effect.tryPromise({ try: () => fetch(request), catch: () => new RequestLost() });
+    };
+    return Effect.gen(function* () {
+      const access = held ?? (yield* acquire(account, false, false));
+      held = access;
+      const response = yield* send(access.token);
+      if (response.status !== 401 || access.refreshed) return response;
+      const next = yield* acquire(access.snapshot, true, access.reloaded);
+      held = next;
+      return yield* send(next.token);
+    });
   };
-  return Effect.gen(function* () {
-    const access = yield* acquire(account, false, false);
-    const response = yield* send(access.token);
-    if (response.status !== 401 || access.refreshed) return response;
-    const next = yield* acquire(access.snapshot, true, access.reloaded);
-    return yield* send(next.token);
-  });
 };

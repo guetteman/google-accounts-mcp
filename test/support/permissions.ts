@@ -55,10 +55,11 @@ export async function permission(
   f: Awaited<ReturnType<typeof fixture>>,
   account = f.personal,
   allowed = true,
+  tool = "list_labels",
 ) {
   const response = await f.mcp.browser.post(`/connections/${f.connection.id}/permissions`, {
     account: account.id,
-    tool: "list_labels",
+    tool,
     setting: allowed ? "allow" : "deny",
   });
   expect(response.status, "the owner can set a permission through the Worker").toBe(200);
