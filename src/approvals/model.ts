@@ -63,8 +63,18 @@ export type Target =
 export interface ApprovalRequest {
   connection: { id: string; name: string; app: string };
   account: { name: string; email: string; workspace: boolean };
-  tool: { label: string; action: string; joiner: string; empty: string; note?: string };
+  tool: { label: string; action: string; joiner: string; empty: string };
+  notes: ReadonlyArray<ViewNote>;
   values: ReadonlyArray<ViewValue>;
+}
+/**
+ * A sentence of the page's own about a call. The page never shades it, so it must never hold
+ * text that someone else chose: a tool computes its notes from the arguments alone, before any
+ * read of Gmail, and writes the words itself. Text of the agent or of a mail goes in a ViewValue.
+ */
+export interface ViewNote {
+  text: string;
+  warning: boolean;
 }
 /** One value of a view. Its text is the agent's own, or was read from the account's mail. */
 export interface ViewValue {
@@ -99,3 +109,18 @@ export interface ApprovalPageProps {
 }
 export type StoredPayload = { result: unknown } | { error: { code: string; message: string } };
 export const isoSeconds = (time: number) => new Date(time).toISOString().replace(/\.\d{3}Z$/, "Z");
+/** A time as a view shows it, with its year: `Nov 12, 2026 at 10:02 UTC`. */
+export const viewDate = (at: number): string => {
+  const date = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(at);
+  const time = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(at);
+  return `${date} at ${time} UTC`;
+};

@@ -29,6 +29,7 @@ it("shows the whole request in UTC before Approve and covers every displayed val
       joiner: "of",
       empty: "This call has no other values. The sentence above is the whole call.",
     },
+    notes: [],
     values,
   });
   expect(p.times).toEqual({

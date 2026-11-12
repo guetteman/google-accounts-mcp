@@ -4,7 +4,6 @@ import "./support/account-checks";
 import type { TestEnv } from "./env";
 import { renderPage } from "../src/pages/render";
 import { previews } from "../src/pages/previews";
-import { viewDigest } from "../src/approvals/view";
 import { answer, approve, decided, digest, page, post } from "./support/approvals";
 import { decodedMail, SOURCE } from "./support/draft";
 import { google } from "./support/google";
@@ -143,7 +142,7 @@ it("V3: a forward with 31 files has no Approve", async () => {
   expect(google.attachmentRequests).toEqual([]);
 });
 
-it("V4: the draft view shows all 200 recipients and whole raw headers with its note outside the digest", async () => {
+it("V4: the draft view shows all 200 recipients and whole raw headers with its warning above Approve", async () => {
   const f = await sendFixture("send_draft", "ask");
   const to = Array.from({ length: 200 }, (_, i) => `Recipient ${i} <r${i}@example.com>`).join(", ");
   const raw = fullMessage({
@@ -169,14 +168,13 @@ it("V4: the draft view shows all 200 recipients and whole raw headers with its n
   expect(props.request.values.every((v) => v.from === "gmail")).toBe(true);
   const note =
     "This is the draft as it is in Gmail now. It is sent as it is at the moment you approve, also if it changed after this page loaded.";
-  expect(props.request.tool.note).toBe(note);
-  expect(textOf(await renderPage(props).text())).toContain(note);
-  expect(
-    await viewDigest({
-      ...props.request,
-      tool: { ...props.request.tool, note: "different page wording" },
-    }),
-  ).toBe(await viewDigest(props.request));
+  expect(props.request.notes).toEqual([{ text: note, warning: true }]);
+  const html = (await renderPage(props).text()).replace(/<script[\s\S]*?<\/script>/g, "");
+  const warning = /<div\b[^>]*role="alert"[\s\S]*?<\/div><\/div>/.exec(html)?.[0];
+  expect(warning).toContain(note);
+  expect(warning).toContain("bg-warning");
+  expect(html.indexOf(note)).toBeGreaterThan(html.indexOf("That is the whole call."));
+  expect(html.indexOf(note)).toBeLessThan(html.indexOf(">Approve</button>"));
   expect(google.fullDraftRequests).toEqual([
     "https://gmail.googleapis.com/gmail/v1/users/me/drafts/existing-draft?format=full",
   ]);

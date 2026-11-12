@@ -1,6 +1,6 @@
-import { Effect, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import type { Send } from "../mcp/tools";
-import { notFound, ToolFailure } from "../mcp/failures";
+import { notFound, ToolFailure, type Missing } from "../mcp/failures";
 import { isoSeconds } from "../approvals/model";
 import { decodeEntities } from "./html";
 import { Headers, InternalDate, header } from "./message";
@@ -101,6 +101,48 @@ const changed = <A>(
     return yield* Schema.decodeUnknownEffect(schema)(parsed).pipe(Effect.mapError(uncertain));
   });
 
+/**
+ * The most threads or messages that one call which changes mail may name. Approving a call of
+ * 15 makes about 34 requests to Google and Cloudflare Access (rebuilding the view, running,
+ * one token refresh, Access's keys on a cold Worker) plus about 8 D1 queries: about 42, inside
+ * the 50 subrequests of the Workers Free plan however D1 is counted.
+ */
+export const MAX_ITEMS = 15;
+
+/**
+ * Send the first item alone so a session without a token acquires it once, and a failure other
+ * than not_found stops the call after one request. Keep every item's outcome.
+ */
+export const changeEach = <A>(
+  kind: Missing,
+  ids: readonly string[],
+  one: (id: string) => Effect.Effect<A, ToolFailure>,
+): Effect.Effect<{ changed: A[]; not_found: string[]; unconfirmed: string[] }, ToolFailure> =>
+  Effect.gen(function* () {
+    const attempt = (id: string) =>
+      Effect.result(one(id)).pipe(Effect.map((result) => ({ id, result })));
+    const first = yield* Effect.forEach(ids.slice(0, 1), attempt);
+    const initial = first[0]?.result;
+    if (initial && Result.isFailure(initial) && initial.failure.code !== "not_found")
+      return yield* Effect.fail(initial.failure);
+    const rest = yield* Effect.forEach(ids.slice(1), attempt, { concurrency: REQUESTS_AT_ONCE });
+    const changed: A[] = [];
+    const not_found: string[] = [];
+    const unconfirmed: string[] = [];
+    const failures: ToolFailure[] = [];
+    for (const { id, result } of [...first, ...rest]) {
+      if (Result.isSuccess(result)) changed.push(result.success);
+      else if (result.failure.code === "not_found") not_found.push(id);
+      else {
+        unconfirmed.push(id);
+        failures.push(result.failure);
+      }
+    }
+    if (changed.length > 0) return { changed, not_found, unconfirmed };
+    const failure = failures.find((failure) => failure.unknown) ?? failures[0];
+    return yield* Effect.fail(failure ?? notFound(kind, ids));
+  });
+
 const Labels = Schema.Struct({
   labels: Schema.optionalKey(
     Schema.Array(
@@ -168,7 +210,7 @@ export const threadSummary = (
     ),
   );
 /** Cloudflare allows a Worker six connections at once for one request; five leave one free. */
-const THREADS_AT_ONCE = 5;
+export const REQUESTS_AT_ONCE = 5;
 export const searchThreads = (
   send: Send,
   input: { query: string; limit: number; page: string | undefined },
@@ -200,7 +242,7 @@ export const searchThreads = (
             unread: thread.unread,
           })),
         ),
-      { concurrency: THREADS_AT_ONCE },
+      { concurrency: REQUESTS_AT_ONCE },
     );
     return {
       threads,

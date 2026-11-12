@@ -274,16 +274,14 @@ export async function runCall(
   args: Record<string, unknown> | undefined,
 ): Promise<CallToolResult> {
   const at = ctx.now();
+  const tool = TOOLS.find((t) => t.name === name);
   let id: CallId | null = null;
   let email = "";
-  let toolName = "";
   let input = "";
   let unknownTool = false;
   let result: CallToolResult;
   let outcome: Outcome | null = "success";
   try {
-    const tool = TOOLS.find((t) => t.name === name);
-    toolName = tool?.name ?? "";
     // This measure must precede any decoding or parsing of the arguments.
     const oversized =
       tool?.kind === "account" &&
@@ -438,7 +436,16 @@ export async function runCall(
     const classified = classify(
       error,
       { approved: false, aborted: false },
-      { input, email, origin: ctx.origin, tool: toolName, connection: ctx.connection.connectionId },
+      {
+        input,
+        email,
+        origin: ctx.origin,
+        tool: tool?.name ?? "",
+        connection: ctx.connection.connectionId,
+        // A tool with `create` marks its own uncertain request as outcome_unknown, so its other
+        // failures never mean that a change may have happened.
+        annotations: tool?.kind === "account" && tool.create ? undefined : tool?.annotations,
+      },
     );
     outcome = classified.audit;
     if (classified.audit === "failed") console.error("Tool call failed", classified.error?.code);
