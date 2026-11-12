@@ -86,7 +86,11 @@ export type Missing = "thread" | "message" | "draft" | "attachment" | "label";
 export const notFound = (kind: Missing, id: string | readonly string[]): ToolFailure =>
   new ToolFailure({ code: "not_found", missing: { kind, id } });
 export const messageTooLarge = (
-  over: { bytes: number } | { attachments: number } | { text: true } | null,
+  over:
+    | { bytes: number; limit: number }
+    | { attachments: number; limit: number }
+    | { text: true }
+    | null,
 ): ToolFailure => new ToolFailure({ code: "message_too_large", over });
 export const notSendable = (draft: string | null): ToolFailure =>
   new ToolFailure({ code: "message_not_sendable", unsendable: { draft } });
@@ -106,7 +110,11 @@ type FailureData = {
   unknown?: boolean;
   released?: true;
   leftover?: true;
-  over?: { bytes: number } | { attachments: number } | { text: true } | null;
+  over?:
+    | { bytes: number; limit: number }
+    | { attachments: number; limit: number }
+    | { text: true }
+    | null;
   unsendable?: { draft: string | null };
   said?: string;
   missing?: { kind: Missing; id: string | readonly string[] };
@@ -179,8 +187,8 @@ export function classify(
     !failure.leftover
       ? message
       : failure.code === "google_unavailable"
-        ? `Nothing was sent from ${text.email}. Google did not confirm a step before the send, so a draft of this mail may be left in Drafts. Ask the owner to delete it there, then call again with the same arguments.`
-        : `${message} A draft of this mail may be left in Drafts. Ask the owner to delete it there.`;
+        ? `Nothing was sent from ${text.email}. Google did not confirm a step before the send, so a draft of this mail may be left in Drafts. Delete it there before this call is made again.`
+        : `${message} A draft of this mail may be left in Drafts. Delete it there before this call is made again.`;
   return {
     audit: unknown ? null : entry.outcome,
     error:
@@ -199,14 +207,14 @@ export function classify(
                       ? missingMessage(failure.missing, text.email)
                       : failure.over
                         ? "text" in failure.over
-                          ? "The text of this message is too large to forward whole."
+                          ? "The text of this message cannot be forwarded whole: it is too large, or its HTML could not be converted."
                           : "bytes" in failure.over
-                            ? `This forward would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is 25,000,000 bytes.`
-                            : `This forward would have ${failure.over.attachments} attachments. The limit is 30.`
+                            ? `This forward would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is ${failure.over.limit.toLocaleString("en-US")} bytes.`
+                            : `This forward would have ${failure.over.attachments} attachments. The limit is ${failure.over.limit}.`
                         : failure.unsendable
                           ? failure.unsendable.draft === null
-                            ? `Gmail refused this message from ${text.email}. Check that every address is valid.`
-                            : `Gmail refused to send draft "${failure.unsendable.draft}" from ${text.email}. A draft needs at least one recipient, and every address must be valid. The owner can complete it in Gmail.`
+                            ? `Gmail refused this message from ${text.email}. The usual cause is an address that is not valid.`
+                            : `Gmail refused to send draft "${failure.unsendable.draft}" from ${text.email}. The usual cause is a draft with no recipient or with an address that is not valid. The owner can complete it in Gmail.`
                           : message),
             ),
           },

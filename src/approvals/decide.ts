@@ -42,7 +42,9 @@ async function viewOf(
   reads?: { deadline: number; signal?: AbortSignal },
 ) {
   const payload =
-    approval.state === "finished" && approval.outcome === "failed" && approval.result !== null
+    approval.state === "finished" &&
+    (approval.outcome === "failed" || approval.outcome === "unknown") &&
+    approval.result !== null
       ? await openResult(deps.config.tokenKey, approval.id, approval.result)
       : null;
   let requests: ReturnType<typeof accountRequests> | undefined;
@@ -219,8 +221,19 @@ export const decide = (
             },
           );
           audit = classified.audit;
-          outcome = classified.error === null ? "unknown" : "failed";
-          payload = classified.error === null ? null : { error: classified.error };
+          const notice =
+            view.tool.create &&
+            error instanceof ToolFailure &&
+            error.code === "outcome_unknown" &&
+            error.said !== undefined
+              ? { code: error.code, message: error.said }
+              : null;
+          outcome = notice || classified.error === null ? "unknown" : "failed";
+          payload = notice
+            ? { error: notice }
+            : classified.error === null
+              ? null
+              : { error: classified.error };
         }
         const result =
           payload === null ? null : await sealResult(deps.config.tokenKey, id, payload);

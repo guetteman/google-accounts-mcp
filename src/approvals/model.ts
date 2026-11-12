@@ -88,7 +88,7 @@ export type ApprovalState =
   | { kind: "running" }
   | { kind: "succeeded" }
   | { kind: "failed"; message: string | null }
-  | { kind: "unknown" }
+  | { kind: "unknown"; message?: string }
   | { kind: "rejected" }
   | { kind: "expired" }
   | { kind: "ended"; by: "tool" | "connection" | "account" };

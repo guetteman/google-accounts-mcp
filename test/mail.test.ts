@@ -243,3 +243,57 @@ it("encodes an attachment filename with a lone surrogate as well-formed UTF-8", 
   ]).text();
   expect(text).toContain("filename*=UTF-8''bad%EF%BF%BD.txt");
 });
+
+it.each([
+  { filename: "🙂".repeat(100) + ".pdf", expected: "🙂".repeat(70) + ".pdf" },
+  {
+    filename: "a".repeat(1_000) + ".abcdefghijklmnop",
+    expected: "a".repeat(833) + ".abcdefghijklmnop",
+  },
+  { filename: "a".repeat(1_000) + ".abcdefghijklmnopq", expected: "a".repeat(850) },
+])(
+  "bounds the whole encoded filename line to 900 characters and keeps a short extension (%#)",
+  async ({ filename, expected }) => {
+    const { mixedMessage } = await import("../src/google/mail");
+    const text = await mixedMessage(outgoing(), [
+      { filename, type: "application/pdf", bytes: new Uint8Array([1]) },
+    ]).text();
+    const line = text.split("\r\n").find((value) => value.startsWith("Content-Disposition:"))!;
+    expect(line.length).toBeLessThanOrEqual(900);
+    const encoded = line.split("filename*=UTF-8''")[1]!;
+    expect(decodeURIComponent(encoded)).toBe(expected);
+    expect(decodeURIComponent(encoded)).not.toContain("�");
+  },
+);
+
+it.each(["message/rfc822", "message/global", "MESSAGE/RFC822"])(
+  "sends an attached %s as octet-stream with its bytes and filename",
+  async (type) => {
+    const { mixedMessage } = await import("../src/google/mail");
+    const { mime } = await import("./support/send");
+    const parsed = mime(
+      await mixedMessage(outgoing(), [
+        { filename: "attached.eml", type, bytes: new TextEncoder().encode("Attached mail bytes") },
+      ]).text(),
+    );
+    expect(parsed.parts[1]!.headers).toEqual({
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": "attachment; filename*=UTF-8''attached.eml",
+      "Content-Transfer-Encoding": "base64",
+    });
+    expect(new TextDecoder().decode(parsed.parts[1]!.data)).toBe("Attached mail bytes");
+  },
+);
+
+it("escapes every RFC 5987 punctuation character in an attachment filename", async () => {
+  const { mixedMessage } = await import("../src/google/mail");
+  const { mime } = await import("./support/send");
+  const parsed = mime(
+    await mixedMessage(outgoing(), [
+      { filename: "mark!'()*.txt", type: "text/plain", bytes: new Uint8Array([1]) },
+    ]).text(),
+  );
+  expect(parsed.parts[1]!.headers["Content-Disposition"]).toBe(
+    "attachment; filename*=UTF-8''mark%21%27%28%29%2A.txt",
+  );
+});

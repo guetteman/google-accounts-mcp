@@ -1,3 +1,4 @@
+import { MAX_FORWARD_FILES } from "../src/google/forward";
 import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
@@ -233,13 +234,15 @@ it("the forward lists every file before its exact quoted block without downloadi
     expect(mail.headers[name]).toBe(values.find((value) => value.name === name)!.text);
 });
 
-it("a forward with 31 files has no Approve", async () => {
+it("a forward above its attachment-count limit has no Approve", async () => {
   const f = await sendFixture("forward_message", "ask");
   const raw = fullMessage();
   raw.payload = {
     ...tree(
       "multipart/mixed",
-      Array.from({ length: 31 }, (_, i) => part("image/png", "x", String(i), `f${i}`)),
+      Array.from({ length: MAX_FORWARD_FILES + 1 }, (_, i) =>
+        part("image/png", "x", String(i), `f${i}`),
+      ),
     ),
     headers: raw.payload.headers,
   };
@@ -336,7 +339,9 @@ it.each(["headers", "text", "html", "parts", "bytes", "files"])(
       raw.payload = {
         ...tree(
           "multipart/mixed",
-          Array.from({ length: 31 }, (_, i) => part("image/png", "x", String(i), `f${i}`)),
+          Array.from({ length: MAX_FORWARD_FILES + 1 }, (_, i) =>
+            part("image/png", "x", String(i), `f${i}`),
+          ),
         ),
         headers: raw.payload.headers,
       };
@@ -528,7 +533,7 @@ it("offers no Approve for a forward whose attachment bytes exceed the limit", as
   expect(google.sends).toEqual([]);
 });
 
-it("sends a shown draft even when Approve posts the wrong digest, by the maintainer's exception", async () => {
+it("sends a shown draft as it is at approval even when the posted digest differs", async () => {
   const f = await sendFixture("send_draft", "ask");
   const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
   expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: true });

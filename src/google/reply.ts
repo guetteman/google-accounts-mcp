@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import { notFound, ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
 import { get } from "./gmail";
+import { unfold } from "./bounds";
 import { Headers, InternalDate, header } from "./message";
 import { MAX_SUBJECT, envelopeLines, messageIds, parseAddressList, type Mailbox } from "./mail";
 
@@ -19,9 +20,6 @@ const Message = Schema.Struct({
   internalDate: InternalDate,
   payload: Schema.Struct({ headers: Headers }),
 });
-export const unfold = (text: string) =>
-  // oxlint-disable-next-line no-control-regex -- Sender-controlled headers must be unfolded before use.
-  text.replace(/(?:\r\n|\r|\n)([ \t])/g, "$1").replace(/[\u0000-\u001f\u007f]/g, " ");
 const recipientsFailure = () =>
   new ToolFailure({
     code: "invalid_arguments",

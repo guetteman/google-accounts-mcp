@@ -8,6 +8,7 @@ import {
   BODY_BYTES_LEFT_OUT,
   HTML_UNREADABLE,
   MAX_TEXT,
+  MAX_BODY_PARTS,
   PAGE_BODY_BYTES,
   shorten,
 } from "./bounds";
@@ -46,6 +47,7 @@ export interface ThreadMessage {
   message: string;
   position: number;
   from: string;
+  reply_to?: string;
   to: string[];
   cc: string[];
   bcc?: string[];
@@ -77,7 +79,7 @@ const bodyParts = (bodies: readonly Body[], fallbacks: boolean, parts = new Set<
 };
 /** One page budget for both decoded bytes and deferred requests, counting each part once. */
 export class BodyBudget {
-  private left = { bytes: PAGE_BODY_BYTES, requests: 3 };
+  private left = { bytes: PAGE_BODY_BYTES, requests: MAX_BODY_PARTS };
   private used = new Set<BodyPart>();
   private cost(bodies: readonly Body[], fallbacks: boolean) {
     const cost = { bytes: 0, requests: 0 };

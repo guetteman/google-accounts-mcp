@@ -1,11 +1,14 @@
 import { leftoverNote } from "./support/send";
+import { renderPage } from "../src/pages/render";
+import { draftFixture, draftCall } from "./support/draft";
+import { textOf } from "./support/worker";
 import { expect, it, vi } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
 import { TOOLS } from "../src/mcp/tools";
 import { WINDOW } from "../src/once/store";
 import { isoSeconds } from "../src/approvals/model";
-import { answer, approve, decided, get, post, rows } from "./support/approvals";
+import { answer, approve, decided, get, page, post, rows } from "./support/approvals";
 import {
   callRows,
   expectError,
@@ -104,6 +107,9 @@ it("names message and the draft workaround when reply recipients cannot be fille
 
 it.each([
   { name: "send_message", args: { to: [] }, field: "to" },
+  { name: "send_message", args: { to: undefined }, field: "to" },
+  { name: "send_message", args: { subject: undefined }, field: "subject" },
+  { name: "forward_message", args: { to: undefined }, field: "to" },
   ...["to", "cc", "bcc"].flatMap((field) => [
     { name: "send_message", args: { [field]: ["not a mailbox"] }, field },
     { name: "forward_message", args: { [field]: ["not a mailbox"] }, field },
@@ -244,8 +250,8 @@ it.each(sendCases)(
         status === 400 ? "message_not_sendable" : "google_unavailable",
         status === 400
           ? name === "send_draft"
-            ? `Gmail refused to send draft "existing-draft" from ${PERSONAL}. A draft needs at least one recipient, and every address must be valid. The owner can complete it in Gmail.`
-            : `Gmail refused this message from ${PERSONAL}. Check that every address is valid.`
+            ? `Gmail refused to send draft "existing-draft" from ${PERSONAL}. The usual cause is a draft with no recipient or with an address that is not valid. The owner can complete it in Gmail.`
+            : `Gmail refused this message from ${PERSONAL}. The usual cause is an address that is not valid.`
           : /Google could not complete/,
       );
       expect(await onceRows()).toEqual([]);
@@ -269,7 +275,7 @@ it.each(["send_message", "send_reply", "forward_message"] as const)(
     await expectError(
       await sendCall(f, name),
       "message_not_sendable",
-      `Gmail refused this message from ${PERSONAL}. Check that every address is valid.`,
+      `Gmail refused this message from ${PERSONAL}. The usual cause is an address that is not valid.`,
     );
     expect(google.sends).toEqual([]);
     expect(await onceRows()).toEqual([]);
@@ -285,7 +291,7 @@ it("a failed cleanup preserves the refusal and reports the leftover draft", asyn
   await expectError(
     await sendCall(f),
     "message_not_sendable",
-    `Gmail refused this message from ${PERSONAL}. Check that every address is valid.${leftoverNote}`,
+    `Gmail refused this message from ${PERSONAL}. The usual cause is an address that is not valid.${leftoverNote}`,
   );
   expect(google.deletes).toEqual(["draft-1"]);
   expect(google.storedDrafts.has("draft-1")).toBe(true);
@@ -431,7 +437,7 @@ it("ask deduplicates pending calls, Approve sends once, get_approval returns the
   expect(google.sends).toHaveLength(1);
 });
 
-it("tools/list describes irreversible sends, fields, annotations and exact repeat instructions", async () => {
+it("tools/list exposes send warnings, annotations, actions and repeat instructions", async () => {
   const f = await sendFixture();
   for (const c of sendCases) await setSend(f, c.name, "allow");
   const tools = (await rpcResult(await f.mcp.call())).tools as Array<{
@@ -492,6 +498,16 @@ it("tools/list describes irreversible sends, fields, annotations and exact repea
   );
   expect(tools.find((t) => t.name === "forward_message")!.description).toContain("25,000,000");
   expect(tools.find((t) => t.name === "send_draft")!.description).toContain("gone from Drafts");
+  const forwardDescription = tools.find((tool) => tool.name === "forward_message")!.description;
+  const draftDescription = tools.find((tool) => tool.name === "send_draft")!.description;
+  for (const description of [forwardDescription, draftDescription]) {
+    expect(description).toContain("2,000,000 bytes of body");
+    expect(description).toContain("1,000,000 characters");
+    expect(description).toContain("3 body parts that Gmail gives apart");
+  }
+  expect(forwardDescription).toContain("without a file name or attachment ID");
+  expect(draftDescription).toContain("cannot show whole cannot be approved");
+  expect(draftDescription).toContain("20,000 characters of sender, recipient and subject headers");
   await permission(f);
 });
 
@@ -538,4 +554,65 @@ it("ask then allow returns the same pending approval until Approve sends once", 
   expect(google.draftCreates).toHaveLength(1);
   expect((await answer(await sendCall(f))).repeat_of).toBe(isoSeconds(Date.now()));
   expect(google.sends).toHaveLength(1);
+});
+
+it.each(["send_message", "create_draft"] as const)(
+  "keeps the exact recovery advice for an approved %s with a lost answer",
+  async (name) => {
+    const f =
+      name === "send_message"
+        ? await sendFixture("send_message", "ask")
+        : await draftFixture("ask");
+    const id = (await answer(name === "send_message" ? await sendCall(f) : await draftCall(f)))
+      .approval as string;
+    (name === "send_message" ? google.sendAnswers : google.draftCreateAnswers).push(() =>
+      HttpResponse.error(),
+    );
+    const until = isoSeconds(Date.now() + WINDOW);
+    const message =
+      name === "send_message"
+        ? `The server does not know whether this mail went out from ${PERSONAL}. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until ${until}, repeating this call does not send it again. Only if the owner says that it is in neither place, call again with duplicate: 2.`
+        : `The server does not know whether the draft was created in ${PERSONAL}. Ask the owner to look in Drafts. Until ${until}, repeating this call does not create it again. If the owner says that the draft is missing, call again with duplicate: 2.`;
+    const props = await approve(f, id);
+    expect(props.state).toEqual({ kind: "unknown", message });
+    expect(await get(f, id)).toEqual({
+      status: "unknown",
+      error: { code: "outcome_unknown", message },
+    });
+    expect((await page(f, id)).state).toEqual({ kind: "unknown", message });
+    expect(textOf(await renderPage(props).text())).toContain(message);
+    expect((await callRows())[0]!.outcome).toBeNull();
+  },
+);
+
+it("treats a cleanup 404 as a draft that is already gone", async () => {
+  const f = await sendFixture();
+  google.sendAnswers.push(() => new Response(null, { status: 400 }));
+  google.deleteAnswers.push(() => {
+    google.storedDrafts.delete("draft-1");
+    return new Response(null, { status: 404 });
+  });
+  await expectError(
+    await sendCall(f),
+    "message_not_sendable",
+    /^Gmail refused this message.*valid\.$/,
+  );
+  expect(google.storedDrafts.has("draft-1")).toBe(false);
+  expect(await onceRows()).toEqual([]);
+  expect((await callRows())[0]!.outcome).toBe("refused");
+});
+
+it.each(sendCases)("$name releases a send refused as too large and can retry", async ({ name }) => {
+  const f = await sendFixture(name);
+  google.sendAnswers.push(() => new Response(null, { status: 413 }));
+  await expectError(
+    await sendCall(f, name),
+    "message_too_large",
+    "Gmail refused this message as too large.",
+  );
+  expect((await callRows())[0]!.outcome).toBe("refused");
+  expect(await onceRows()).toEqual([]);
+  expect(google.deletes).toEqual(name === "send_draft" ? [] : ["draft-1"]);
+  await answer(await sendCall(f, name));
+  expect(google.sends).toHaveLength(2);
 });

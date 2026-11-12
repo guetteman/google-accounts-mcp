@@ -5,6 +5,8 @@ import type { Created } from "../once/store";
 import { RawMessage } from "./message";
 import { change, get, upload } from "./gmail";
 
+export type CreatedDraft = Created & { draft: string };
+
 const Draft = Schema.Struct({
   id: Schema.String,
   message: Schema.Struct({ id: Schema.String, threadId: Schema.String }),
@@ -13,7 +15,7 @@ export const createDraft = (
   send: Send,
   input: { raw: string; thread?: string },
   refused: (status: number) => ToolFailure = () => new ToolFailure({ code: "google_unavailable" }),
-): Effect.Effect<Created, ToolFailure> =>
+): Effect.Effect<CreatedDraft, ToolFailure> =>
   change(send, "POST", "drafts", Draft, refused, {
     message: { raw: input.raw, ...(input.thread === undefined ? {} : { threadId: input.thread }) },
   }).pipe(
@@ -27,7 +29,7 @@ export const createDraft = (
 export const uploadDraft = (
   send: Send,
   input: { message: Blob; thread?: string },
-): Effect.Effect<Created, ToolFailure> => {
+): Effect.Effect<CreatedDraft, ToolFailure> => {
   const boundary = `related-${crypto.randomUUID()}`;
   const metadata = input.thread === undefined ? {} : { message: { threadId: input.thread } };
   const body = new Blob([

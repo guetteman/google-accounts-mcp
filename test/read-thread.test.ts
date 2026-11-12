@@ -735,6 +735,7 @@ it("bounds escaped headers and attachment lists so every page stays within its J
         headers: [
           { name: "Subject", value: rawSubject },
           { name: "From", value: rawFrom },
+          { name: "Reply-To", value: "r".repeat(40_000) },
           ...["To", "Cc", "Bcc"].map((name) => ({ name, value: recipients.join(", ") })),
         ],
       },
@@ -753,6 +754,7 @@ it("bounds escaped headers and attachment lists so every page stays within its J
     expect(serialized.length).toBeLessThanOrEqual(32000);
     expect(found.subject).toBe(rawSubject.slice(0, 499) + "…");
     expect(m.from).toBe(rawFrom.slice(0, 499) + "…");
+    expect(m).toHaveProperty("reply_to", "r".repeat(499) + "…");
     for (const addresses of [m.to, m.cc, m.bcc!]) {
       expect(JSON.stringify(addresses).length).toBeLessThanOrEqual(4000);
       const kept = addresses.slice(0, -1);
@@ -1175,3 +1177,35 @@ it("uses a readable HTML alternative when plain text exceeds the message's remai
   ]);
   expect(found.next_page).toBeUndefined();
 });
+
+it.each([
+  { header: undefined, expected: undefined },
+  {
+    header: "Different\r\n destination <other@elsewhere.example>",
+    expected: "Different destination <other@elsewhere.example>",
+  },
+  { header: "r".repeat(600), expected: "r".repeat(499) + "…" },
+])(
+  "returns the unfolded bounded reply address only when Reply-To is present (%#)",
+  async ({ header, expected }) => {
+    const f = await allowed();
+    const raw = message("m1", "Reply address body");
+    serveThread([
+      {
+        ...raw,
+        payload: {
+          ...raw.payload,
+          headers: [
+            ...(raw.payload.headers ?? []),
+            ...(header === undefined ? [] : [{ name: "rEpLy-To", value: header }]),
+          ],
+        },
+      },
+    ]);
+    const found = await result(await read(f));
+    const item = found.messages[0]!;
+    expect(item.from).toBe("Sam <sam@example.com>");
+    if (expected === undefined) expect(item).not.toHaveProperty("reply_to");
+    else expect(item).toHaveProperty("reply_to", expected);
+  },
+);

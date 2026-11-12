@@ -177,6 +177,28 @@ export interface FilePart {
   type: string;
   bytes: Uint8Array;
 }
+const DISPOSITION = "Content-Disposition: attachment; filename*=UTF-8''";
+/** Keep the encoded header within 900 ASCII characters, preserving a short extension. */
+const encodedFilename = (value: string): string => {
+  const name = value.toWellFormed();
+  const encode = (text: string) =>
+    encodeURIComponent(text).replace(
+      /[!'()*]/g,
+      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+    );
+  const dot = name.lastIndexOf(".");
+  const extension = dot > 0 && /^.{1,16}$/su.test(name.slice(dot + 1)) ? name.slice(dot) : "";
+  const suffix = encode(extension);
+  const budget = 900 - DISPOSITION.length - suffix.length;
+  let encoded = "";
+  for (const character of name.slice(0, name.length - extension.length)) {
+    const next = encode(character);
+    if (encoded.length + next.length > budget) break;
+    encoded += next;
+  }
+  return encoded + suffix;
+};
+
 /** Encode in multiples of 57 bytes, so chunks end on both a base64 and a MIME line boundary. */
 export const mixedMessage = (mail: Outgoing, files: ReadonlyArray<FilePart>): Blob => {
   const boundary = `mixed-${crypto.randomUUID()}`;
@@ -195,15 +217,14 @@ export const mixedMessage = (mail: Outgoing, files: ReadonlyArray<FilePart>): Bl
   ];
   for (const file of files) {
     const type =
-      file.type.length <= 100 && /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(file.type)
+      file.type.length <= 100 &&
+      !/^message\//i.test(file.type) &&
+      /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(file.type)
         ? file.type
         : "application/octet-stream";
-    const filename = encodeURIComponent(file.filename.toWellFormed()).replace(
-      /[!'()*]/g,
-      (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
-    );
+    const filename = encodedFilename(file.filename);
     parts.push(
-      `--${boundary}\r\nContent-Type: ${type}\r\nContent-Disposition: attachment; filename*=UTF-8''${filename}\r\nContent-Transfer-Encoding: base64\r\n\r\n`,
+      `--${boundary}\r\nContent-Type: ${type}\r\n${DISPOSITION}${filename}\r\nContent-Transfer-Encoding: base64\r\n\r\n`,
     );
     for (let at = 0; at < file.bytes.length; at += 57 * 512) {
       const encoded = btoa(String.fromCharCode(...file.bytes.subarray(at, at + 57 * 512)));

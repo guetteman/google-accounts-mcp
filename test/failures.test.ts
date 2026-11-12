@@ -54,28 +54,28 @@ it.each([
   {
     code: "google_unavailable",
     audit: "failed",
-    message: `Nothing was sent from ${PERSONAL}. Google did not confirm a step before the send, so a draft of this mail may be left in Drafts. Ask the owner to delete it there, then call again with the same arguments.`,
+    message: `Nothing was sent from ${PERSONAL}. Google did not confirm a step before the send, so a draft of this mail may be left in Drafts. Delete it there before this call is made again.`,
   },
   {
     code: "server_unavailable",
     audit: "failed",
     message:
-      "The server could not complete the call. Try again later. A draft of this mail may be left in Drafts. Ask the owner to delete it there.",
+      "The server could not complete the call. Try again later. A draft of this mail may be left in Drafts. Delete it there before this call is made again.",
   },
   {
     code: "tool_not_allowed",
     audit: "refused",
-    message: `The owner has not allowed send_message on ${PERSONAL} for this connection. The owner can change this at https://mail.example.com/connections/aaaaaaaa-aaaa-4aaa-8aaa-000000000001. A draft of this mail may be left in Drafts. Ask the owner to delete it there.`,
+    message: `The owner has not allowed send_message on ${PERSONAL} for this connection. The owner can change this at https://mail.example.com/connections/aaaaaaaa-aaaa-4aaa-8aaa-000000000001. A draft of this mail may be left in Drafts. Delete it there before this call is made again.`,
   },
   {
     code: "account_not_available",
     audit: "refused",
-    message: `No account "${PERSONAL}" is available to this connection. Call list_accounts to see the accounts you can use. A draft of this mail may be left in Drafts. Ask the owner to delete it there.`,
+    message: `No account "${PERSONAL}" is available to this connection. Call list_accounts to see the accounts you can use. A draft of this mail may be left in Drafts. Delete it there before this call is made again.`,
   },
   {
     code: "message_not_sendable",
     audit: "refused",
-    message: `Gmail refused this message from ${PERSONAL}. Check that every address is valid. A draft of this mail may be left in Drafts. Ask the owner to delete it there.`,
+    message: `Gmail refused this message from ${PERSONAL}. The usual cause is an address that is not valid. A draft of this mail may be left in Drafts. Delete it there before this call is made again.`,
   },
 ] as const)(
   "reports a leftover draft without changing the released $code outcome",
@@ -103,3 +103,29 @@ it.each([
     }
   },
 );
+
+it.each([
+  {
+    over: { attachments: 21, limit: 20 },
+    message: "This forward would have 21 attachments. The limit is 20.",
+  },
+  {
+    over: { bytes: 12_345, limit: 10_000 },
+    message:
+      "This forward would have 12,345 bytes of attachments and text. The limit is 10,000 bytes.",
+  },
+])("formats a forward's limit from the failure itself (%#)", ({ over, message }) => {
+  expect(
+    classify(
+      new ToolFailure({ code: "message_too_large", over }),
+      { approved: false, aborted: false },
+      {
+        input: PERSONAL,
+        email: PERSONAL,
+        origin: "https://mail.example.com",
+        tool: "forward_message",
+        connection: parseConnectionId("aaaaaaaa-aaaa-4aaa-8aaa-000000000001")!,
+      },
+    ),
+  ).toEqual({ audit: "refused", error: { code: "message_too_large", message } });
+});

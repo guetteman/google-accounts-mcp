@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
-import { MAX_FORWARD_BYTES } from "../src/google/forward";
+import { MAX_FORWARD_BYTES, MAX_FORWARD_FILES } from "../src/google/forward";
 import { answer, approve, get, page, row } from "./support/approvals";
 import { callRows, expectError, permission } from "./support/permissions";
 import { onceRows, SOURCE, THREAD } from "./support/draft";
@@ -131,10 +131,10 @@ it("a forward carries every original file, inline image and hostile name with on
   expect(google.threadRequests).toEqual([]);
 });
 
-it("all 30 long-named attachments survive without read_thread's list bound", async () => {
+it("all allowed long-named attachments survive without read_thread's list bound", async () => {
   const f = await sendFixture("forward_message");
   const raw = fullMessage();
-  const files = Array.from({ length: 30 }, (_, i) =>
+  const files = Array.from({ length: MAX_FORWARD_FILES }, (_, i) =>
     part(
       "application/octet-stream",
       `file-${i}`,
@@ -149,7 +149,8 @@ it("all 30 long-named attachments survive without read_thread's list bound", asy
   serveFull(raw);
   await answer(await sendCall(f, "forward_message"));
   const mail = mime(google.uploads[0]!.message);
-  expect(mail.parts).toHaveLength(31);
+  expect(MAX_FORWARD_FILES).toBe(20);
+  expect(mail.parts).toHaveLength(MAX_FORWARD_FILES + 1);
   for (const [i, file] of files.entries()) {
     expect(new TextDecoder().decode(mail.parts[i + 1]!.data)).toBe(`file-${i}`);
     expect(
@@ -163,9 +164,9 @@ it.each(["size", "count", "actual", "413"])(
   async (kind) => {
     const f = await sendFixture("forward_message");
     const raw = fullMessage();
-    const files = Array.from({ length: kind === "count" ? 31 : 1 }, (_, i) => ({
+    const files = Array.from({ length: kind === "count" ? MAX_FORWARD_FILES + 1 : 1 }, (_, i) => ({
       ...part("application/octet-stream", "", String(i + 1), `file-${i}`),
-      body: { size: kind === "size" ? 25_000_001 : 1, attachmentId: `file-${i}` },
+      body: { size: kind === "size" ? MAX_FORWARD_BYTES + 1 : 1, attachmentId: `file-${i}` },
     }));
     raw.payload = {
       ...tree("multipart/mixed", [part("text/plain", "Message", "0"), ...files]),
@@ -173,21 +174,24 @@ it.each(["size", "count", "actual", "413"])(
     };
     serveFull(raw);
     google.attachmentAnswers.set("file-0", () =>
-      Response.json({ data: kind === "actual" ? "A".repeat(33_333_336) : "AA" }),
+      Response.json({
+        data: kind === "actual" ? "A".repeat(4 * Math.ceil((MAX_FORWARD_BYTES + 1) / 3)) : "AA",
+      }),
     );
     if (kind === "413") google.uploadAnswers.push(() => new Response(null, { status: 413 }));
     const quoted =
       "---------- Forwarded message ---------\nFrom: Sam <sam@example.com>\nDate: 2026-11-11T09:41:36Z\nSubject: Lunch\nTo: Alex <alex.personal@example.com>, Kim <kim@example.com>\nCc: Jo <jo@example.com>, sam@EXAMPLE.com, ALEX.PERSONAL@EXAMPLE.COM\n\nMessage";
     const total =
-      new TextEncoder().encode(quoted).byteLength + (kind === "size" ? 25_000_001 : 25_000_002);
+      new TextEncoder().encode(quoted).byteLength +
+      (kind === "size" ? MAX_FORWARD_BYTES + 1 : 3 * Math.ceil((MAX_FORWARD_BYTES + 1) / 3));
     await expectError(
       await sendCall(f, "forward_message"),
       "message_too_large",
       kind === "count"
-        ? "This forward would have 31 attachments. The limit is 30."
+        ? `This forward would have ${MAX_FORWARD_FILES + 1} attachments. The limit is ${MAX_FORWARD_FILES}.`
         : kind === "413"
           ? "Gmail refused this message as too large."
-          : `This forward would have ${total.toLocaleString("en-US")} bytes of attachments and text. The limit is 25,000,000 bytes.`,
+          : `This forward would have ${total.toLocaleString("en-US")} bytes of attachments and text. The limit is ${MAX_FORWARD_BYTES.toLocaleString("en-US")} bytes.`,
     );
     expect(google.sends).toEqual([]);
     expect(await onceRows()).toEqual([]);
@@ -196,7 +200,7 @@ it.each(["size", "count", "actual", "413"])(
   },
 );
 
-it("a large attachment given by reference arrives byte for byte across the decode and encode blocks", async () => {
+it("a large referenced attachment keeps its length and sampled bytes across encoding blocks", async () => {
   const f = await sendFixture("forward_message");
   const raw = fullMessage();
   const size = 3_000_000;
@@ -378,7 +382,7 @@ it("an attached mail is one file and its inner body and files stay inside it", a
   expect(sent.parts).toHaveLength(2);
   expect(new TextDecoder().decode(sent.parts[0]!.data)).toContain("Outer body");
   expect(new TextDecoder().decode(sent.parts[0]!.data)).not.toContain("MUST_STAY_INSIDE");
-  expect(sent.parts[1]!.headers["Content-Type"]).toBe("message/rfc822");
+  expect(sent.parts[1]!.headers["Content-Type"]).toBe("application/octet-stream");
   expect(new TextDecoder().decode(sent.parts[1]!.data)).toBe(attached);
   expect(google.attachmentRequests).toEqual([]);
 });
@@ -396,7 +400,7 @@ it.each(["cut", "omitted"])(
     await expectError(
       await sendCall(f, "forward_message"),
       "message_too_large",
-      "The text of this message is too large to forward whole.",
+      "The text of this message cannot be forwarded whole: it is too large, or its HTML could not be converted.",
     );
     expect(google.uploads).toEqual([]);
     expect(google.sends).toEqual([]);
@@ -426,3 +430,56 @@ it("unfolds original headers before quoting or composing a forward", async () =>
   expect(text.split("\n").filter((line) => /^(To|Cc):/.test(line))).toHaveLength(2);
   expect(text).not.toMatch(/\nBcc:/);
 });
+
+it("refuses an alternative that replaces preferred text which did not fit the body budget", async () => {
+  const f = await sendFixture("forward_message");
+  const raw = fullMessage();
+  raw.payload = {
+    ...tree("multipart/alternative", [
+      tree("multipart/mixed", [
+        part("text/plain", "a".repeat(1_100_000), "0.0"),
+        part("text/plain", "b".repeat(1_100_000), "0.1"),
+      ]),
+      part("text/html", "<p>Fallback alternative</p>", "1"),
+    ]),
+    headers: raw.payload.headers,
+  };
+  serveFull(raw);
+  await expectError(
+    await sendCall(f, "forward_message"),
+    "message_too_large",
+    "The text of this message cannot be forwarded whole: it is too large, or its HTML could not be converted.",
+  );
+  expect(google.uploads).toEqual([]);
+  expect(google.sends).toEqual([]);
+  expect(await onceRows()).toEqual([]);
+});
+
+it.each(["drafts", "upload", "send", "delete"])(
+  "the fake refuses an unauthenticated %s write",
+  async (operation) => {
+    const f = await sendFixture();
+    let url = "https://gmail.googleapis.com/gmail/v1/users/me/drafts";
+    let method = "POST";
+    let body: string | undefined = "{}";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (operation === "send") {
+      url += "/send";
+      body = JSON.stringify({ id: "existing-draft" });
+    }
+    if (operation === "delete") {
+      url += "/existing-draft";
+      method = "DELETE";
+      body = undefined;
+    }
+    if (operation === "upload") {
+      url = "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts?uploadType=multipart";
+      headers["Content-Type"] = "multipart/related; boundary=unauthorized";
+      body =
+        "--unauthorized\r\nContent-Type: application/json\r\n\r\n{}\r\n--unauthorized\r\nContent-Type: message/rfc822\r\n\r\nSubject: Unauthorized\r\n\r\nBody\r\n--unauthorized--\r\n";
+    }
+    expect((await fetch(url, { method, headers, body, redirect: "manual" })).status).toBe(401);
+    expect(google.storedDrafts.has("existing-draft")).toBe(true);
+    await permission(f);
+  },
+);

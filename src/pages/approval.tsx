@@ -483,9 +483,10 @@ function DecidedView({
       <div className="flex flex-col gap-4" aria-live="polite">
         <h1 className="text-2xl/9 font-semibold tracking-tight text-balance">{outcome.headline}</h1>
         <p className="text-base/7 text-muted-foreground">{outcome.detail}</p>
-        {state.kind === "failed" && state.message !== null && (
-          <Quoted label="The tool's message" text={state.message} />
-        )}
+        {(state.kind === "failed" || state.kind === "unknown") &&
+          typeof state.message === "string" && (
+            <Quoted label="The tool's message" text={state.message} />
+          )}
         <p className="text-base/7">{outcome.next}</p>
         {state.kind === "unconfirmed" && (
           <Button asChild size="lg" className="mt-2 h-11 text-base sm:w-52">

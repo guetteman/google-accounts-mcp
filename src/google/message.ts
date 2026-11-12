@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { isoSeconds } from "../approvals/model";
-import { boundedRecipients, PAGE_BODY_BYTES, shorten } from "./bounds";
+import { boundedRecipients, PAGE_BODY_BYTES, shorten, unfold } from "./bounds";
 
 export const Headers = Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String }));
 export interface RawPart {
@@ -61,6 +61,7 @@ export interface Attachment {
 export interface Message {
   message: string;
   from: string;
+  reply_to?: string;
   to: string[];
   cc: string[];
   bcc?: string[];
@@ -189,6 +190,9 @@ export const readMessage = (raw: RawMessage): Message => {
   return {
     message: raw.id,
     from: shorten(header(raw.payload.headers, "From"), 500),
+    ...(raw.payload.headers?.some((field) => field.name.toLowerCase() === "reply-to")
+      ? { reply_to: shorten(unfold(header(raw.payload.headers, "Reply-To")), 500) }
+      : {}),
     to: boundedRecipients(addresses(header(raw.payload.headers, "To"))),
     cc: boundedRecipients(addresses(header(raw.payload.headers, "Cc"))),
     ...(raw.payload.headers?.some((h) => h.name.toLowerCase() === "bcc")

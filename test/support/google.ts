@@ -522,6 +522,7 @@ export const google = {
         "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send",
         async ({ request }) => {
           this.methods.push(request.method);
+          if (!authorized(request)) return new HttpResponse(null, { status: 401 });
           const body = (await request.json()) as { id: string };
           this.sends.push({ url: request.url, body, redirect: request.redirect });
           const draft = this.storedDrafts.get(body.id) as { threadId?: string } | undefined;
@@ -543,6 +544,7 @@ export const google = {
           this.methods.push(request.method);
           const id = String(params.id);
           if (request.method === "DELETE") {
+            if (!authorized(request)) return new HttpResponse(null, { status: 401 });
             this.deletes.push(id);
             const response = await this.deleteAnswers.shift()?.(request);
             if (!response || response.ok) this.storedDrafts.delete(id);
@@ -563,6 +565,7 @@ export const google = {
         "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts",
         async ({ request }) => {
           this.methods.push(request.method);
+          if (!authorized(request)) return new HttpResponse(null, { status: 401 });
           const contentType = request.headers.get("Content-Type") ?? "";
           const boundary = /boundary="?([^";]+)/.exec(contentType)?.[1];
           if (!boundary) return new HttpResponse(null, { status: 400 });
@@ -593,6 +596,7 @@ export const google = {
       http.all("https://gmail.googleapis.com/gmail/v1/users/me/drafts", async ({ request }) => {
         this.methods.push(request.method);
         if (request.method === "POST") {
+          if (!authorized(request)) return new HttpResponse(null, { status: 401 });
           this.draftCreates.push({
             url: request.url,
             method: request.method,

@@ -441,6 +441,23 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
       { ...approvalBase, state: { kind } },
     ]),
   ),
+  "approval-unknown": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Send message",
+        action: "send a message",
+        joiner: "from",
+      },
+    },
+    state: {
+      kind: "unknown",
+      message:
+        "The server does not know whether this mail went out from alex.personal@example.com. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until 2026-11-17T19:19:00Z, repeating this call does not send it again. Only if the owner says that it is in neither place, call again with duplicate: 2.",
+    },
+  },
   "approval-failed": {
     ...approvalBase,
     state: {

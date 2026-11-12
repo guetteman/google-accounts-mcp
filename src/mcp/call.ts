@@ -40,6 +40,7 @@ import { identityOf } from "../once/identity";
 import { take, settle, release, WINDOW, type Repeat } from "../once/store";
 export const MAX_ARGUMENTS_BYTES = 256 * 1024;
 export const SEND_RESERVE = 5_000;
+const isSend = (request: Request) => new URL(request.url).pathname.endsWith("/send");
 export { CALL_DEADLINE } from "../approvals/model";
 
 export interface CallContext {
@@ -150,7 +151,7 @@ export async function executeAccount(
       return Effect.sync(() => controller.signal.removeEventListener("abort", fail));
     });
     const preparing = (request: Request) => {
-      if (new URL(request.url).pathname.endsWith("/send")) throw unavailable();
+      if (isSend(request)) throw unavailable();
       return request;
     };
     const send: Send = (build) => {
@@ -183,7 +184,7 @@ export async function executeAccount(
             throw unavailable();
           }
           const request = build(token, signal);
-          if (request.method === "POST" && new URL(request.url).pathname.endsWith("/drafts/send")) {
+          if (isSend(request)) {
             sends = true;
             seen.started = true;
             seen.status = null;
@@ -462,8 +463,8 @@ export async function runCall(
         origin: ctx.origin,
         tool: tool?.name ?? "",
         connection: ctx.connection.connectionId,
-        // A tool with `create` marks its own uncertain request as outcome_unknown, so its other
-        // failures never mean that a change may have happened.
+        // Only run tools use the generic uncertain-change wording. A create tool marks its
+        // creating or sending request and reports a possible leftover draft separately.
         annotations: tool?.kind === "account" && tool.create ? undefined : tool?.annotations,
       },
     );

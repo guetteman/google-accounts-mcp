@@ -13,7 +13,6 @@ import { normalizeEmail, readOwner } from "../src/owner/owner";
 import { answer, decided, digest, page, post, row } from "./support/approvals";
 import { callRows, expectError, PERSONAL, permission } from "./support/permissions";
 import { network } from "./support/network";
-import { sendStaged } from "../src/google/send";
 import { onceRows } from "./support/draft";
 import { observeStatements } from "./support/db";
 import { google, deferred, token } from "./support/google";
@@ -594,34 +593,6 @@ it.each(["send_draft", "send_message"] as const)(
   },
 );
 
-it("releases a staged result with no draft ID as a known failure", async () => {
-  const f = await sendFixture();
-  const ctx = await context(f);
-  const tool = TOOLS.find((tool) => tool.name === "send_message")!;
-  if (tool.kind !== "account" || !tool.create) throw new Error("Missing send tool");
-  const allowed = await decodeAllowedAccount(
-    await allowedAccountStatement(ctx, tool.name, normalizeEmail(PERSONAL)!).first(),
-    ctx.config.tokenKey,
-  );
-  const broken: typeof tool = {
-    ...tool,
-    create: (send, _account, _args, confirm) =>
-      sendStaged(send, confirm, Effect.succeed({ message: "unused", thread: "unused" })),
-  };
-  await expect(
-    executeAccount(
-      ctx,
-      broken,
-      allowed,
-      { account: PERSONAL, ...sendCases[0].args },
-      Date.now() + CALL_DEADLINE,
-      Effect.void,
-    ),
-  ).rejects.toMatchObject({ code: "google_unavailable", released: true });
-  expect(await onceRows()).toEqual([]);
-  expect(google.sends).toEqual([]);
-});
-
 it.each(["attachment_too_large", "attachment_not_readable"] as const)(
   "preserves the fields of a released %s failure and drops unknown",
   async (code) => {
@@ -698,4 +669,78 @@ it("forgets an earlier refusal before recording the next sending request's lost 
   ).rejects.toMatchObject({ code: "outcome_unknown" });
   expect(google.sends).toHaveLength(2);
   expect((await onceRows()).map((entry) => entry.state)).toEqual(["unknown"]);
+});
+
+it("keeps a checked messages/send request unknown after the stub fails", async () => {
+  const f = await sendFixture();
+  const ctx = await context(f);
+  const tool = TOOLS.find((entry) => entry.name === "send_message")!;
+  if (tool.kind !== "account" || !tool.create) throw new Error("Missing send tool");
+  const allowed = await decodeAllowedAccount(
+    await allowedAccountStatement(ctx, tool.name, normalizeEmail(PERSONAL)!).first(),
+    ctx.config.tokenKey,
+  );
+  let writes = 0;
+  network.use(
+    http.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", () => {
+      writes++;
+      return sent();
+    }),
+  );
+  const stub: typeof tool = {
+    ...tool,
+    create: (_send, _account, _args, confirm) =>
+      Effect.gen(function* () {
+        const sending = yield* confirm.check;
+        yield* sending(
+          (token, signal) =>
+            new Request("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+              method: "POST",
+              signal,
+              headers: { Authorization: `Bearer ${token}` },
+              body: "{}",
+            }),
+        );
+        return yield* Effect.fail(new ToolFailure({ code: "google_unavailable" }));
+      }),
+  };
+  const args = { account: PERSONAL, ...sendCases[0].args };
+  await expect(
+    executeAccount(ctx, stub, allowed, args, Date.now() + CALL_DEADLINE, Effect.void),
+  ).rejects.toMatchObject({ code: "outcome_unknown" });
+  expect((await onceRows())[0]!.state).toBe("unknown");
+  await expectError(await sendCall(f), "outcome_unknown", /Ask the owner to look in Sent/);
+  expect(writes).toBe(1);
+});
+
+it("starts no preparing request after the reserve even before its timer fires", async () => {
+  const f = await sendFixture();
+  const ctx = await context(f);
+  const at = Date.now();
+  const tool = TOOLS.find((entry) => entry.name === "send_message")!;
+  if (tool.kind !== "account" || !tool.create) throw new Error("Missing send tool");
+  const allowed = await decodeAllowedAccount(
+    await allowedAccountStatement(ctx, tool.name, normalizeEmail(PERSONAL)!).first(),
+    ctx.config.tokenKey,
+  );
+  const stub: typeof tool = {
+    ...tool,
+    create: (send) =>
+      Effect.gen(function* () {
+        vi.mocked(Date.now).mockReturnValue(at + CALL_DEADLINE - SEND_RESERVE + 1);
+        yield* send(
+          (token, signal) =>
+            new Request("https://gmail.googleapis.com/gmail/v1/users/me/labels", {
+              signal,
+              headers: { Authorization: `Bearer ${token}` },
+            }),
+        );
+        return yield* Effect.fail(new ToolFailure({ code: "google_unavailable" }));
+      }),
+  };
+  await expect(
+    executeAccount(ctx, stub, allowed, { account: PERSONAL }, at + CALL_DEADLINE, Effect.void),
+  ).rejects.toMatchObject({ code: "google_unavailable", released: true });
+  expect(google.labelRequests).toEqual([]);
+  expect(await onceRows()).toEqual([]);
 });

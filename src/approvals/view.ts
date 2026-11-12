@@ -42,7 +42,7 @@ export async function approvalView(
   key: TokenKey,
   now: number,
   changed = false,
-  failureMessage: string | null = null,
+  outcomeMessage: string | null = null,
   send?: Send,
 ) {
   const tool = TOOLS.find((t) => t.kind === "account" && t.name === row.tool);
@@ -101,8 +101,10 @@ export async function approvalView(
     case "finished":
       state =
         row.outcome === "failed"
-          ? { kind: "failed", message: failureMessage }
-          : { kind: row.outcome === "success" ? "succeeded" : "unknown" };
+          ? { kind: "failed", message: outcomeMessage }
+          : row.outcome === "unknown"
+            ? { kind: "unknown", ...(outcomeMessage !== null ? { message: outcomeMessage } : {}) }
+            : { kind: "succeeded" };
       break;
     case "refused":
       state = { kind: "ended", by: row.endedBy };
