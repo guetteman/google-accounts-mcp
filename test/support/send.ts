@@ -103,21 +103,21 @@ export const never = (request: Pick<Request, "signal">) =>
   });
 export interface Mime {
   headers: Record<string, string>;
+  entries: ReadonlyArray<readonly [string, string]>;
   parts: Mime[];
   data: Uint8Array;
 }
 export const mime = (text: string): Mime => {
   const at = text.indexOf("\r\n\r\n");
   const envelope = text.slice(0, at);
-  const headers = Object.fromEntries(
-    envelope
-      .replace(/\r\n[ \t]/g, " ")
-      .split("\r\n")
-      .map((line) => {
-        const split = line.indexOf(":");
-        return [line.slice(0, split), line.slice(split + 1).trim()];
-      }),
-  );
+  const entries = envelope
+    .replace(/\r\n[ \t]/g, " ")
+    .split("\r\n")
+    .map((line) => {
+      const split = line.indexOf(":");
+      return [line.slice(0, split), line.slice(split + 1).trim()] as const;
+    });
+  const headers = Object.fromEntries(entries);
   const boundary = /boundary="?([^";]+)/.exec(headers["Content-Type"] ?? "")?.[1];
   const parts = boundary
     ? text
@@ -129,5 +129,9 @@ export const mime = (text: string): Mime => {
   const data = boundary
     ? new Uint8Array()
     : Uint8Array.from(atob(text.slice(at + 4).replace(/\s/g, "")), (c) => c.charCodeAt(0));
-  return { headers, parts, data };
+  return { headers, entries, parts, data };
 };
+
+export const leftoverMessage = `Nothing was sent from ${PERSONAL}. Google did not confirm a step before the send, so a draft of this mail may be left in Drafts. Ask the owner to delete it there, then call again with the same arguments.`;
+export const leftoverNote =
+  " A draft of this mail may be left in Drafts. Ask the owner to delete it there.";

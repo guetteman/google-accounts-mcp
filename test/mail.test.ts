@@ -180,7 +180,7 @@ it("rechecks addresses and encodes header injection even from an unsafe caller",
   ).toEqual(["MIME-Version: 1.0"]);
 });
 
-it("F4: multipart file names round trip while unsafe media types cannot add headers or boundaries", async () => {
+it("multipart file names round trip while unsafe media types cannot add headers or boundaries", async () => {
   const { mixedMessage } = await import("../src/google/mail");
   const { mime } = await import("./support/send");
   const files = [
@@ -223,7 +223,7 @@ it("F4: multipart file names round trip while unsafe media types cannot add head
   }
 });
 
-it("F3: the multipart root named 0 never hides a file child named 0", async () => {
+it("the multipart root named 0 never hides a file child named 0", async () => {
   const { attachmentPart, attachmentFields, readMessage } = await import("../src/google/message");
   const { message, part, tree } = await import("./support/thread");
   const raw = message();
@@ -234,4 +234,12 @@ it("F3: the multipart root named 0 never hides a file child named 0", async () =
   const root = { ...raw, payload: { ...file, partId: "" } };
   expect(attachmentPart(root, "0")).toBe(root.payload);
   expect(readMessage(multipart).attachments).toHaveLength(1);
+});
+
+it("encodes an attachment filename with a lone surrogate as well-formed UTF-8", async () => {
+  const { mixedMessage } = await import("../src/google/mail");
+  const text = await mixedMessage(outgoing({ body: "Body" }), [
+    { filename: "bad\ud800.txt", type: "text/plain", bytes: new Uint8Array([1]) },
+  ]).text();
+  expect(text).toContain("filename*=UTF-8''bad%EF%BF%BD.txt");
 });

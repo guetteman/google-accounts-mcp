@@ -235,3 +235,21 @@ it("returns the same list in revision 2026-07-28, which clients that listen spea
   );
   expect(listed.tools).toEqual([plainTools[0], labelsTool, plainTools[1]]);
 });
+
+it("advertises closed argument objects for tools that refuse extra fields", async () => {
+  const f = await fixture();
+  for (const tool of TOOLS)
+    if (tool.kind === "account" && tool.create) await permission(f, f.personal, true, tool.name);
+  const listed = (await rpcResult(await f.mcp.call())).tools as Array<{
+    name: string;
+    inputSchema: { additionalProperties?: boolean };
+  }>;
+  for (const name of [
+    "create_draft",
+    "send_message",
+    "send_reply",
+    "forward_message",
+    "send_draft",
+  ])
+    expect(listed.find((tool) => tool.name === name)!.inputSchema.additionalProperties).toBe(false);
+});

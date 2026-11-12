@@ -11,7 +11,7 @@ import { fullMessage, mime, sendCall, sendFixture, serveFull } from "./support/s
 import { part, tree } from "./support/thread";
 import { ORIGIN, textOf } from "./support/worker";
 
-it("V1: a new send shows normalized recipients, subject, duplicate and its whole body without reading Gmail", async () => {
+it("a new send shows normalized recipients, subject, duplicate and its whole body without reading Gmail", async () => {
   const f = await sendFixture("send_message", "ask");
   const id = (
     await answer(
@@ -38,9 +38,32 @@ it("V1: a new send shows normalized recipients, subject, duplicate and its whole
   );
   expect(google.messageRequests).toEqual([]);
   expect(google.fullDraftRequests).toEqual([]);
+  expect((await approve(f, id)).state.kind).toBe("succeeded");
+  const mail = decodedMail();
+  expect(mail.entries.map(([name]) => name).sort()).toEqual(
+    [
+      "To",
+      "Cc",
+      "Bcc",
+      "Subject",
+      "MIME-Version",
+      "Content-Type",
+      "Content-Transfer-Encoding",
+    ].sort(),
+  );
+  expect(mail.headers).toEqual({
+    To: "Sam Lee <sam@example.com>",
+    Cc: "kim@example.com",
+    Bcc: "lee@example.com",
+    Subject: "Lunch",
+    "MIME-Version": "1.0",
+    "Content-Type": "text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding": "base64",
+  });
+  expect(mail.body).toBe("Hello\n\nWhole body");
 });
 
-it("V2: the reply view and run use the same plan with Gmail recipients before the agent's body", async () => {
+it("the reply view and run use the same plan with Gmail recipients before the agent's body", async () => {
   const f = await sendFixture("send_reply", "ask");
   const id = (await answer(await sendCall(f, "send_reply", { reply_all: true, duplicate: 2 })))
     .approval as string;
@@ -60,9 +83,36 @@ it("V2: the reply view and run use the same plan with Gmail recipients before th
   expect(decodedMail().headers.To).toBe(props.request.values[3]!.text);
   expect(decodedMail().headers.Cc).toBe(props.request.values[4]!.text);
   expect(decodedMail().body).toBe(props.request.values.at(-1)!.text);
+  const mail = decodedMail();
+  expect(mail.entries.map(([name]) => name).sort()).toEqual(
+    [
+      "To",
+      "Cc",
+      "Subject",
+      "In-Reply-To",
+      "References",
+      "MIME-Version",
+      "Content-Type",
+      "Content-Transfer-Encoding",
+    ].sort(),
+  );
+  expect(mail.headers).toEqual({
+    To: "Sam <sam@example.com>",
+    Cc: "Kim <kim@example.com>, Jo <jo@example.com>",
+    Subject: "Re: Lunch",
+    "In-Reply-To": "<source@example.com>",
+    References: "<earlier@example.com> <source@example.com>",
+    "MIME-Version": "1.0",
+    "Content-Type": "text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding": "base64",
+  });
+  expect(mail.headers.Subject).toBe(
+    props.request.values.find((value) => value.name === "Subject")!.text,
+  );
+  expect(mail.body).toBe("Hello");
 });
 
-it("V3: the forward lists every file before its exact quoted block without downloading files for the view", async () => {
+it("the forward lists every file before its exact quoted block without downloading files for the view", async () => {
   const f = await sendFixture("forward_message", "ask");
   const raw = fullMessage();
   raw.payload = {
@@ -122,9 +172,19 @@ it("V3: the forward lists every file before its exact quoted block without downl
   expect((await approve(f, id)).state.kind).toBe("succeeded");
   const sent = new TextDecoder().decode(mime(google.uploads[0]!.message).parts[0]!.data);
   expect(sent).toBe(`See below.\n\n${values.at(-1)!.text}`);
+  const mail = mime(google.uploads[0]!.message);
+  expect(mail.entries.map(([name]) => name).sort()).toEqual(
+    ["To", "Cc", "Bcc", "Subject", "MIME-Version", "Content-Type"].sort(),
+  );
+  expect(mail.headers.To).toBe("lee@example.com");
+  expect(mail.headers.Cc).toBe("kim@example.com");
+  expect(mail.headers.Bcc).toBe("sam@example.com");
+  expect(mail.headers.Subject).toBe("Fwd: Lunch");
+  for (const name of ["To", "Cc", "Bcc", "Subject"])
+    expect(mail.headers[name]).toBe(values.find((value) => value.name === name)!.text);
 });
 
-it("V3: a forward with 31 files has no Approve", async () => {
+it("a forward with 31 files has no Approve", async () => {
   const f = await sendFixture("forward_message", "ask");
   const raw = fullMessage();
   raw.payload = {
@@ -142,7 +202,7 @@ it("V3: a forward with 31 files has no Approve", async () => {
   expect(google.attachmentRequests).toEqual([]);
 });
 
-it("V4: the draft view shows all 200 recipients and whole raw headers with its warning above Approve", async () => {
+it("the draft view shows all 200 recipients and whole raw headers with its warning above Approve", async () => {
   const f = await sendFixture("send_draft", "ask");
   const to = Array.from({ length: 200 }, (_, i) => `Recipient ${i} <r${i}@example.com>`).join(", ");
   const raw = fullMessage({
@@ -152,6 +212,13 @@ it("V4: the draft view shows all 200 recipients and whole raw headers with its w
     Bcc: "lee@example.com",
     Subject: "s".repeat(1100),
   });
+  raw.payload = {
+    ...tree("multipart/mixed", [
+      part("text/plain", "Draft body", "0"),
+      part("application/pdf", "PDF", "1", "report.pdf"),
+    ]),
+    headers: raw.payload.headers,
+  };
   google.storedDrafts.set("existing-draft", raw);
   const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
   const props = await page(f, id);
@@ -161,15 +228,21 @@ it("V4: the draft view shows all 200 recipients and whole raw headers with its w
     "Cc",
     "Bcc",
     "Subject",
+    "Attachments",
+    "Attachment 1",
     "Body",
   ]);
   expect(props.request.values.find((v) => v.name === "To")!.text).toBe(to);
   expect(props.request.values.find((v) => v.name === "Subject")!.text).toBe("s".repeat(1100));
-  expect(props.request.values.every((v) => v.from === "gmail")).toBe(true);
+  expect(props.request.values.every((v) => v.from === "draft")).toBe(true);
   const note =
     "This is the draft as it is in Gmail now. It is sent as it is at the moment you approve, also if it changed after this page loaded.";
   expect(props.request.notes).toEqual([{ text: note, warning: true }]);
   const html = (await renderPage(props).text()).replace(/<script[\s\S]*?<\/script>/g, "");
+  expect(textOf(html)).toContain(
+    "The server read the shaded text below from a draft in Gmail. The agent or you may have written it.",
+  );
+  expect(textOf(html)).not.toContain("The agent did not write it.");
   const warning = /<div\b[^>]*role="alert"[\s\S]*?<\/div><\/div>/.exec(html)?.[0];
   expect(warning).toContain(note);
   expect(warning).toContain("bg-warning");
@@ -181,7 +254,7 @@ it("V4: the draft view shows all 200 recipients and whole raw headers with its w
 });
 
 it.each(["headers", "text", "html", "parts", "bytes", "files"])(
-  "V5: incomplete draft %s never offers Approve or sends",
+  "incomplete draft %s never offers Approve or sends",
   async (kind) => {
     const f = await sendFixture("send_draft", "ask");
     const raw = fullMessage(
@@ -235,7 +308,7 @@ const bytesForTest = (value: string) =>
   btoa(value).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 
 it.each(["send_reply", "forward_message", "send_draft"] as const)(
-  "V6: %s offers no Approve on 404 or 500 and Reject still works",
+  "%s offers no Approve on 404 or 500 and Reject still works",
   async (name) => {
     const f = await sendFixture(name, "ask");
     for (const status of [404, 500]) {
@@ -255,7 +328,7 @@ it.each(["send_reply", "forward_message", "send_draft"] as const)(
 );
 
 it.each(["send_reply", "forward_message"] as const)(
-  "V7: a changed %s subject prevents the send",
+  "a changed %s subject prevents the send",
   async (name) => {
     const f = await sendFixture(name, "ask");
     const id = (await answer(await sendCall(f, name))).approval as string;
@@ -269,7 +342,7 @@ it.each(["send_reply", "forward_message"] as const)(
   },
 );
 
-it("V7: send_draft sends the changed draft as it is when approved", async () => {
+it("send_draft sends the changed draft as it is when approved", async () => {
   const f = await sendFixture("send_draft", "ask");
   const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
   const shown = await digest(f, id);
@@ -285,7 +358,7 @@ it("V7: send_draft sends the changed draft as it is when approved", async () => 
 });
 
 it.each(["gone", "unreadable", "incomplete"])(
-  "V7: a draft that becomes %s at Approve sends nothing",
+  "a draft that becomes %s at Approve sends nothing",
   async (kind) => {
     const f = await sendFixture("send_draft", "ask");
     const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
@@ -300,7 +373,7 @@ it.each(["gone", "unreadable", "incomplete"])(
   },
 );
 
-it("V8: the four send previews render at 390 and 1280 pixels without overflow", async () => {
+it("the four send previews render at 390 and 1280 pixels without overflow", async () => {
   for (const name of [
     "approval-waiting-send",
     "approval-waiting-send-reply",
@@ -318,7 +391,6 @@ it("V8: the four send previews render at 390 and 1280 pixels without overflow", 
             headers: Object.fromEntries(response.headers),
             layout: true,
             width,
-            screenshot: `.work/screenshots/${name}-${width}.png`,
           }),
         })
       ).json<{ overflow: boolean; errors: string[] }>();
@@ -327,7 +399,7 @@ it("V8: the four send previews render at 390 and 1280 pixels without overflow", 
     }
 }, 60_000);
 
-it("V5: HTML that cannot be converted offers no Approve", async () => {
+it("HTML that cannot be converted offers no Approve", async () => {
   const f = await sendFixture("send_draft", "ask");
   const raw = fullMessage();
   raw.payload = { ...part("text/html", "<p>Body</p>"), headers: raw.payload.headers };
@@ -337,4 +409,79 @@ it("V5: HTML that cannot be converted offers no Approve", async () => {
   const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
   expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: false });
   expect(google.sends).toEqual([]);
+});
+
+it.each(["Owner <reply@example.com>", `${"Long name ".repeat(2_001)}<reply@example.com>`])(
+  "shows the whole draft Reply-To after its subject, including a long value (%#)",
+  async (replyTo) => {
+    const f = await sendFixture("send_draft", "ask");
+    google.storedDrafts.set("existing-draft", fullMessage({ "Reply-To": replyTo }));
+    const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
+    const props = await page(f, id);
+    const index = props.request.values.findIndex((value) => value.name === "Reply-To");
+    expect(props.request.values[index]).toEqual({ name: "Reply-To", text: replyTo, from: "draft" });
+    expect(props.request.values[index - 1]!.name).toBe("Subject");
+  },
+);
+
+it.each(["From", "To", "Cc", "Bcc", "Subject", "Reply-To"])(
+  "refuses to approve duplicate %s draft headers",
+  async (name) => {
+    const f = await sendFixture("send_draft", "ask");
+    const raw = fullMessage({ [name]: "first@example.com" });
+    raw.payload.headers.push({ name: name.toLowerCase(), value: "second@example.com" });
+    google.storedDrafts.set("existing-draft", raw);
+    const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
+    expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: false });
+    expect(
+      (await decided(await post(f, id, "approve", { digest: "ignored for a draft" }))).state,
+    ).toMatchObject({ kind: "waiting", shown: false });
+    expect(google.sends).toEqual([]);
+  },
+);
+
+it.each(["send_message", "send_reply", "forward_message"] as const)(
+  "warns that the approved %s cannot be taken back",
+  async (name) => {
+    const f = await sendFixture(name, "ask");
+    const id = (await answer(await sendCall(f, name))).approval as string;
+    const props = await page(f, id);
+    expect(props.request.notes).toEqual([
+      { text: "A sent message cannot be taken back.", warning: true },
+    ]);
+    const html = (await renderPage(props).text()).replace(/<script[\s\S]*?<\/script>/g, "");
+    expect(html).toMatch(/role="alert"[\s\S]*A sent message cannot be taken back/);
+    expect(html.indexOf("A sent message cannot be taken back.")).toBeLessThan(
+      html.indexOf(">Approve</button>"),
+    );
+  },
+);
+
+it("offers no Approve for a forward whose attachment bytes exceed the limit", async () => {
+  const f = await sendFixture("forward_message", "ask");
+  const raw = fullMessage();
+  raw.payload = {
+    ...tree("multipart/mixed", [
+      part("text/plain", "Small text", "0"),
+      {
+        ...part("image/png", "", "1", "large.png"),
+        body: { size: 25_000_001, attachmentId: "large" },
+      },
+    ]),
+    headers: raw.payload.headers,
+  };
+  serveFull(raw);
+  const id = (await answer(await sendCall(f, "forward_message"))).approval as string;
+  expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: false });
+  expect(google.attachmentRequests).toEqual([]);
+  expect(google.sends).toEqual([]);
+});
+
+it("sends a shown draft even when Approve posts the wrong digest, by the maintainer's exception", async () => {
+  const f = await sendFixture("send_draft", "ask");
+  const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
+  expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: true });
+  const props = await decided(await post(f, id, "approve", { digest: "wrong" }));
+  expect(props.state.kind).toBe("succeeded");
+  expect(google.sends).toHaveLength(1);
 });

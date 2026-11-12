@@ -81,7 +81,7 @@ export interface ViewNote {
 export interface ViewValue {
   name: string;
   text: string;
-  from: "agent" | "gmail";
+  from: "agent" | "gmail" | "draft";
 }
 export type ApprovalState =
   | { kind: "waiting"; shown: boolean; changed: boolean; digest: string | null }

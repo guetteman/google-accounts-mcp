@@ -284,6 +284,7 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
         action: "send a message",
         joiner: "from",
       },
+      notes: [{ text: "A sent message cannot be taken back.", warning: true }],
       values: [
         { name: "To", text: "Sam Lee <sam@example.com>", from: "agent" },
         { name: "Cc", text: "Kim <kim@northwind.example>", from: "agent" },
@@ -307,6 +308,7 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
         action: "send a reply",
         joiner: "from",
       },
+      notes: [{ text: "A sent message cannot be taken back.", warning: true }],
       values: [
         { name: "Answers a message from", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
         { name: "Its subject", text: "Invoice for October", from: "gmail" },
@@ -331,6 +333,7 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
         action: "forward a message",
         joiner: "from",
       },
+      notes: [{ text: "A sent message cannot be taken back.", warning: true }],
       values: [
         { name: "Forwards a message from", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
         { name: "Its subject", text: "Invoice for October", from: "gmail" },
@@ -370,13 +373,13 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
         },
       ],
       values: [
-        { name: "From", text: "Alex <alex.personal@example.com>", from: "gmail" },
-        { name: "To", text: "Sam Lee <sam@example.com>", from: "gmail" },
-        { name: "Subject", text: "Notes for Thursday's meeting", from: "gmail" },
+        { name: "From", text: "Alex <alex.personal@example.com>", from: "draft" },
+        { name: "To", text: "Sam Lee <sam@example.com>", from: "draft" },
+        { name: "Subject", text: "Notes for Thursday's meeting", from: "draft" },
         {
           name: "Body",
           text: "Hi Sam,\n\nHere are the notes for Thursday. Please review the budget before we meet.\n\nThanks,\nAlex",
-          from: "gmail",
+          from: "draft",
         },
       ],
     },

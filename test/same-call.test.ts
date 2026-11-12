@@ -15,6 +15,7 @@ import { parseConnectionId } from "../src/connections/model";
 import { scheduled } from "../src/approvals/scheduled";
 import { answer, approve, decided, digest, get, post, row, rows } from "./support/approvals";
 import { draftCall, draftFixture, onceRows, setDraft, decodedMail } from "./support/draft";
+import { never } from "./support/send";
 import { deferred, google } from "./support/google";
 import { callRows, expectError, PERSONAL, permission, toolCall } from "./support/permissions";
 import { observeStatements, statementFailingDb } from "./support/db";
@@ -734,3 +735,33 @@ it.each([
     expect(google.draftCreates).toHaveLength(2);
   },
 );
+
+it("keeps an uncertain creating request cut at the reserve and never creates it again", async () => {
+  const f = await draftFixture();
+  const at = Date.now();
+  const db = observeStatements(
+    env.DB,
+    () => {},
+    (sql) => {
+      if (sql.startsWith("INSERT INTO once")) vi.mocked(Date.now).mockReturnValue(at + 8_000);
+    },
+  );
+  const entered = deferred();
+  google.draftCreateAnswers.push((request) => {
+    entered.resolve();
+    return never(request);
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const work = draftCall(f, {}, testEnv({ DB: db }));
+  await entered.promise;
+  try {
+    await vi.advanceTimersByTimeAsync(7_000);
+    await expectError(await work, "outcome_unknown", /does not know whether the draft was created/);
+    expect((await onceRows())[0]!.state).toBe("unknown");
+    await expectError(await draftCall(f), "outcome_unknown", /does not know/);
+    expect(google.draftCreates).toHaveLength(1);
+  } finally {
+    await vi.advanceTimersByTimeAsync(CALL_DEADLINE);
+    await work;
+  }
+});

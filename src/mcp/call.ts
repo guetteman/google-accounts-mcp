@@ -149,26 +149,39 @@ export async function executeAccount(
       controller.signal.addEventListener("abort", fail, { once: true });
       return Effect.sync(() => controller.signal.removeEventListener("abort", fail));
     });
-    const send: Send = (build) =>
-      requests
+    const preparing = (request: Request) => {
+      if (new URL(request.url).pathname.endsWith("/send")) throw unavailable();
+      return request;
+    };
+    const send: Send = (build) => {
+      let built = false;
+      return requests
         .send((token, signal) => {
           if (ctx.now() >= reserve || controller.signal.aborted) throw unavailable();
-          const request = build(token, AbortSignal.any([signal, controller.signal]));
-          if (new URL(request.url).pathname.endsWith("/drafts/send")) throw unavailable();
+          const request = preparing(build(token, AbortSignal.any([signal, controller.signal])));
+          built = true;
           return request;
         })
         .pipe(
           // Token acquisition can be waiting before a request is built. It shares the reserve.
           Effect.raceFirst(stopped),
           Effect.mapError((failure) =>
-            controller.signal.aborted || ctx.now() >= reserve ? unavailable() : failure,
+            controller.signal.aborted || ctx.now() >= reserve
+              ? new ToolFailure({ code: "google_unavailable", ...(built ? { unknown: true } : {}) })
+              : failure,
           ),
         );
+    };
     const seen: { started: boolean; status: number | null } = { started: false, status: null };
     const sending = ((build) => {
       let sends = false;
       return requests
         .send((token, signal) => {
+          // A retry here follows a 401, which sent nothing. Start a new call and check again.
+          if (sends) {
+            seen.status = 401;
+            throw unavailable();
+          }
           const request = build(token, signal);
           if (request.method === "POST" && new URL(request.url).pathname.endsWith("/drafts/send")) {
             sends = true;
@@ -178,6 +191,11 @@ export async function executeAccount(
           return request;
         })
         .pipe(
+          Effect.mapError((failure) => {
+            // A classified token failure after building the send follows its 401 response.
+            if (sends && !failure.unknown) seen.status = 401;
+            return failure;
+          }),
           Effect.tap((response) =>
             Effect.sync(() => {
               if (sends) seen.status = response.status;
@@ -185,11 +203,15 @@ export async function executeAccount(
           ),
         );
     }) as Sending;
-    const confirm: Confirm = Effect.gen(function* () {
-      yield* still;
-      if (ctx.now() > reserve) return yield* Effect.fail(unavailable());
-      return sending;
-    });
+    const late: Send = (build) => requests.send((token, signal) => preparing(build(token, signal)));
+    const confirm: Confirm = {
+      late,
+      check: Effect.gen(function* () {
+        yield* still;
+        if (ctx.now() > reserve) return yield* Effect.fail(unavailable());
+        return sending;
+      }),
+    };
     try {
       const result = await Effect.runPromise(
         Effect.result(tool.create(send, { email: allowed.credential.email }, args, confirm)),

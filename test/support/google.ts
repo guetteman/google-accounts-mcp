@@ -581,10 +581,12 @@ export const google = {
           });
           const n = this.draftCreates.length + this.uploads.length;
           const threadId = metadata.message?.threadId ?? `thread-${n}`;
+          this.storedDrafts.set(`draft-${n}`, { threadId });
           const response =
             (await this.uploadAnswers.shift()?.(request)) ??
             HttpResponse.json({ id: `draft-${n}`, message: { id: `message-${n}`, threadId } });
-          if (response.ok) this.storedDrafts.set(`draft-${n}`, { threadId });
+          if (response.status >= 400 && response.status < 500)
+            this.storedDrafts.delete(`draft-${n}`);
           return response;
         },
       ),
@@ -599,13 +601,15 @@ export const google = {
             body: await request.json(),
           });
           const id = this.draftCreates.length;
+          this.storedDrafts.set(`draft-${id}`, { threadId: `thread-${id}` });
           const response =
             (await this.draftCreateAnswers.shift()?.(request)) ??
             HttpResponse.json({
               id: `draft-${id}`,
               message: { id: `message-${id}`, threadId: `thread-${id}` },
             });
-          if (response.ok) this.storedDrafts.set(`draft-${id}`, { threadId: `thread-${id}` });
+          if (response.status >= 400 && response.status < 500)
+            this.storedDrafts.delete(`draft-${id}`);
           return response;
         }
         this.draftRequests.push(request.url);

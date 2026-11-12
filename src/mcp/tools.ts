@@ -1,5 +1,5 @@
 import type { Tool as McpTool } from "@modelcontextprotocol/server";
-import { viewDate, type ViewNote, type ViewValue } from "../approvals/model";
+import { isoSeconds, viewDate, type ViewNote, type ViewValue } from "../approvals/model";
 import { getApproval } from "../approvals/result";
 import { Data, Effect, Result, Schema, SchemaIssue } from "effect";
 import type { Unavailable } from "../db";
@@ -7,7 +7,7 @@ import { accountMessage } from "../accounts/model";
 import { listVisibleAccounts } from "../accounts/store";
 import { findAttachment, partBytes } from "../google/attachment";
 import { MAX_ATTACHMENT_BYTES, WithFile, type Takes } from "./file";
-import { LIMIT, placeOf, readThread } from "../google/thread";
+import { BodyBudget, LIMIT, placeOf, readThread, textOf } from "../google/thread";
 import { listLabels, MAX_ITEMS, searchThreads, threadSummary } from "../google/gmail";
 import {
   changeLabels,
@@ -48,8 +48,6 @@ import { shorten } from "../google/bounds";
 import { sendExisting, sendStaged } from "../google/send";
 import { forwardFiles, forwardPlan, MAX_FORWARD_FILES, MAX_FORWARD_BYTES } from "../google/forward";
 import { addresses, header, readMessage, attachmentParts } from "../google/message";
-import { BodyBudget, textOf } from "../google/thread";
-import { isoSeconds } from "../approvals/model";
 type AccountExecution<A> =
   | {
       run: (
@@ -82,7 +80,7 @@ export type Send = (
   build: (accessToken: string, signal: AbortSignal) => Request,
 ) => Effect.Effect<Response, ToolFailure>;
 export type Sending = Send & { readonly __sending: unique symbol };
-export type Confirm = Effect.Effect<Sending, ToolFailure>;
+export type Confirm = { readonly check: Effect.Effect<Sending, ToolFailure>; readonly late: Send };
 /** What tools/list tells a client about a tool. A tool that changes mail says so. */
 export type ToolAnnotations =
   | { readOnlyHint: true }
@@ -789,7 +787,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     permissionDescription:
       "Send a new message from this account. A sent message cannot be taken back.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
-    description: `Sends a new plain text message from one Google account. A sent message cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`to\` is a required non-empty list of mailboxes, each an address or Name <address>; \`cc\` and \`bcc\` are optional lists. \`subject\` is required, 1 to 998 characters without control characters. \`body\` is required plain text and may be empty. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWhen the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    description: `Sends a new plain text message from one Google account. A sent message cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`to\` is a required non-empty list of mailboxes, each an address or Name <address>; \`cc\` and \`bcc\` are optional lists. \`subject\` is required, 1 to 998 characters without control characters. \`body\` is required plain text and may be empty. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
     input: Schema.Struct({
       account: DraftInput.fields.account,
       to: Mailboxes.check(Schema.isMinLength(1)),
@@ -812,6 +810,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     unknown: unknownSend,
     view: {
       action: "send a message",
+      notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
       joiner: "from",
       empty: "This call has no other values. The sentence above is the whole call.",
       values: (args) => {
@@ -830,7 +829,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     permissionDescription:
       "Reply to a message in its thread, to its sender or to everyone on it. A sent reply cannot be taken back.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
-    description: `Sends a plain text reply in a message's thread. A sent reply cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The recipients and subject come from that message, as in create_draft with reply_to and no given recipients: Reply-To or From, or To for the account's own message, and Re: when needed. \`reply_all: true\` adds the message's other To and Cc recipients, without the account's own address or repeated addresses; it defaults to false. \`body\` is required plain text and may be empty. The body holds no quote unless you write one. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWhen the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    description: `Sends a plain text reply in a message's thread. A sent reply cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The recipients and subject come from that message, as in create_draft with reply_to and no given recipients: Reply-To or From, or To for the account's own message, and Re: when needed. \`reply_all: true\` adds the message's other To and Cc recipients, without the account's own address or repeated addresses; it defaults to false. \`body\` is required plain text and may be empty. The body holds no quote unless you write one. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
     input: Schema.Struct({
       account: DraftInput.fields.account,
       message: MessageId,
@@ -849,6 +848,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     unknown: unknownSend,
     view: {
       action: "send a reply",
+      notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
       joiner: "from",
       empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, send) =>
@@ -874,7 +874,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     permissionDescription:
       "Forward a message, with its text and its attachments, to the addresses the agent gives. It cannot be taken back.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
-    description: `Forwards a message's original text and every attachment, including inline images, as plain text with files. A sent message cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. \`to\` is a required non-empty list of mailboxes, each an address or Name <address>; \`cc\` and \`bcc\` are optional lists. \`body\` is an optional plain text note before the forwarded text, empty by default. The forward stays in the original's thread in this account and adds Fwd: to its subject when needed. The limit is 25,000,000 bytes of attachments and text, and 30 attachments. It needs only forward_message's setting. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWhen the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    description: `Forwards a message's original text and every attachment, including inline images, as plain text with files. A sent message cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. \`to\` is a required non-empty list of mailboxes, each an address or Name <address>; \`cc\` and \`bcc\` are optional lists. \`body\` is an optional plain text note before the forwarded text, empty by default. The forward stays in the original's thread in this account and adds Fwd: to its subject when needed. The limit is 25,000,000 bytes of attachments and text, and 30 attachments. It needs only forward_message's setting. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
     input: Schema.Struct({
       account: DraftInput.fields.account,
       message: MessageId,
@@ -897,6 +897,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     unknown: unknownSend,
     view: {
       action: "forward a message",
+      notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
       joiner: "from",
       empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, send) =>
@@ -953,7 +954,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     permissionDescription:
       "Send a draft that exists in this account, as it is in Gmail at that moment. It cannot be taken back.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
-    description: `Sends an existing draft as it is in Gmail at that moment, including changes made there. A sent message cannot be taken back, and the draft is gone from Drafts afterwards. \`account\` is the address of an account that list_accounts returns. \`draft\` is a draft ID from create_draft or read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}\n\nWhen the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    description: `Sends an existing draft as it is in Gmail at that moment, including changes made there. A sent message cannot be taken back, and the draft is gone from Drafts afterwards. \`account\` is the address of an account that list_accounts returns. \`draft\` is a draft ID from create_draft or read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
     input: Schema.Struct({ account: DraftInput.fields.account, draft: MessageId }),
     expects: {
       account: draftExpects.account,
@@ -971,13 +972,25 @@ export const TOOLS: ReadonlyArray<Tool> = [
       values: (args, send) =>
         Effect.gen(function* () {
           const raw = yield* readDraft(send, args.draft);
-          const fields = ["From", "To", "Cc", "Bcc", "Subject"].map((name) => ({
+          const names = ["From", "To", "Cc", "Bcc", "Subject", "Reply-To"];
+          const headers = raw.payload.headers ?? [];
+          if (
+            names.some(
+              (name) =>
+                headers.filter((field) => field.name.toLowerCase() === name.toLowerCase()).length >
+                1,
+            )
+          )
+            return yield* Effect.fail(new ViewUnavailable());
+          const fields = names.map((name) => ({
             name,
             text: header(raw.payload.headers, name),
           }));
           const files = attachmentParts(raw);
           if (
-            fields.reduce((n, f) => n + f.text.length, 0) > 20_000 ||
+            fields
+              .filter((field) => field.name !== "Reply-To")
+              .reduce((n, f) => n + f.text.length, 0) > 20_000 ||
             files.length > MAX_FORWARD_FILES
           )
             return yield* Effect.fail(new ViewUnavailable());
@@ -993,7 +1006,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
               .map((f) => ({
                 ...f,
                 text: ["To", "Cc", "Bcc"].includes(f.name) ? addresses(f.text).join(", ") : f.text,
-                from: "gmail" as const,
+                from: "draft" as const,
               })),
             ...fileValues(
               files.map((part) => ({
@@ -1001,8 +1014,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
                 type: part.mimeType,
                 size: part.body.size,
               })),
-            ),
-            { name: "Body", text: body.text, from: "gmail" as const },
+            ).map((value) => ({ ...value, from: "draft" as const })),
+            { name: "Body", text: body.text, from: "draft" as const },
           ];
         }),
     },

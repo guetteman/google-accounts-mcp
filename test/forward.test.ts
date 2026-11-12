@@ -2,16 +2,25 @@ import { expect, it, vi } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
 import { MAX_FORWARD_BYTES } from "../src/google/forward";
-import { answer, approve, get, row } from "./support/approvals";
+import { answer, approve, get, page, row } from "./support/approvals";
 import { callRows, expectError, permission } from "./support/permissions";
 import { onceRows, SOURCE, THREAD } from "./support/draft";
 import { bytes, part, tree, serveThread, read } from "./support/thread";
 import { decodeWords } from "./support/draft";
 import { google, deferred } from "./support/google";
-import { fullMessage, mime, never, sendCall, sendFixture, serveFull } from "./support/send";
+import {
+  leftoverMessage,
+  fullMessage,
+  mime,
+  never,
+  sendCall,
+  sendFixture,
+  serveFull,
+  setSend,
+} from "./support/send";
 
 it.each(["Lunch", "fWd: Lunch", "s".repeat(1100)])(
-  "F1 F6: a forward of %s uses one full read and the original thread in its multipart upload",
+  "a forward of %s uses one full read and the original thread in its multipart upload",
   async (subject) => {
     const f = await sendFixture("forward_message");
     serveFull(fullMessage({ Subject: subject }));
@@ -42,7 +51,7 @@ it.each(["Lunch", "fWd: Lunch", "s".repeat(1100)])(
 );
 
 it.each(["plain", "html", "alternative", "deferred"])(
-  "F2: %s forwarded text is the same bounded text as read_thread",
+  "%s forwarded text is whole and matches read_thread",
   async (kind) => {
     const f = await sendFixture("forward_message");
     await permission(f, f.personal, true, "read_thread");
@@ -78,7 +87,7 @@ it.each(["plain", "html", "alternative", "deferred"])(
   },
 );
 
-it("F3 F4 F7: a forward carries every original file, inline image and hostile name with only its own permission", async () => {
+it("a forward carries every original file, inline image and hostile name with only its own permission", async () => {
   const f = await sendFixture("forward_message");
   const raw = fullMessage();
   const pdf = part("application/pdf", "PDF\u0000\u00ff", "1", "a.pdf");
@@ -122,7 +131,7 @@ it("F3 F4 F7: a forward carries every original file, inline image and hostile na
   expect(google.threadRequests).toEqual([]);
 });
 
-it("F3: all 30 long-named attachments survive without read_thread's list bound", async () => {
+it("all 30 long-named attachments survive without read_thread's list bound", async () => {
   const f = await sendFixture("forward_message");
   const raw = fullMessage();
   const files = Array.from({ length: 30 }, (_, i) =>
@@ -150,7 +159,7 @@ it("F3: all 30 long-named attachments survive without read_thread's list bound",
 });
 
 it.each(["size", "count", "actual", "413"])(
-  "F5: %s limit refuses before sending and releases the call",
+  "%s limit refuses before sending and releases the call",
   async (kind) => {
     const f = await sendFixture("forward_message");
     const raw = fullMessage();
@@ -187,7 +196,7 @@ it.each(["size", "count", "actual", "413"])(
   },
 );
 
-it("F3: a large attachment given by reference arrives byte for byte across the decode and encode blocks", async () => {
+it("a large attachment given by reference arrives byte for byte across the decode and encode blocks", async () => {
   const f = await sendFixture("forward_message");
   const raw = fullMessage();
   const size = 3_000_000;
@@ -212,7 +221,7 @@ it("F3: a large attachment given by reference arrives byte for byte across the d
 });
 
 it.each(["read", "create", "upload"])(
-  "O3: a failed %s before send is known and its retry sends once",
+  "a failed %s before send is known and its retry sends once",
   async (where) => {
     const f = await sendFixture(where === "create" ? "send_message" : "forward_message");
     const name = where === "create" ? "send_message" : "forward_message";
@@ -222,7 +231,11 @@ it.each(["read", "create", "upload"])(
       (where === "create" ? google.draftCreateAnswers : google.uploadAnswers).push(
         () => new Response(null, { status: 503 }),
       );
-    await expectError(await sendCall(f, name), "google_unavailable", /Google could not complete/);
+    await expectError(
+      await sendCall(f, name),
+      "google_unavailable",
+      where === "read" ? /Google could not complete/ : leftoverMessage,
+    );
     expect(await onceRows()).toEqual([]);
     expect(google.sends).toEqual([]);
     expect((await callRows())[0]!.outcome).toBe("failed");
@@ -232,51 +245,43 @@ it.each(["read", "create", "upload"])(
   },
 );
 
-it.each([false, true])(
-  "O3 O4: an unanswered upload is a known failure, approved %s",
-  async (approved) => {
-    const f = await sendFixture("forward_message", approved ? "ask" : "allow");
-    const id = approved
-      ? ((await answer(await sendCall(f, "forward_message"))).approval as string)
-      : null;
-    const entered = deferred();
-    google.uploadAnswers.push((request) => {
-      entered.resolve();
-      return never(request);
+it.each([false, true])("an unanswered upload is a known failure, approved %s", async (approved) => {
+  const f = await sendFixture("forward_message", approved ? "ask" : "allow");
+  const id = approved
+    ? ((await answer(await sendCall(f, "forward_message"))).approval as string)
+    : null;
+  const entered = deferred();
+  google.uploadAnswers.push((request) => {
+    entered.resolve();
+    return never(request);
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const work = id ? approve(f, id) : sendCall(f, "forward_message");
+  await entered.promise;
+  await vi.advanceTimersByTimeAsync(10_000);
+  if (id) {
+    expect(((await work) as Awaited<ReturnType<typeof approve>>).state).toMatchObject({
+      kind: "failed",
+      message: leftoverMessage,
     });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const work = id ? approve(f, id) : sendCall(f, "forward_message");
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(10_000);
-    if (id) {
-      expect(((await work) as Awaited<ReturnType<typeof approve>>).state).toMatchObject({
-        kind: "failed",
-        message: expect.stringContaining("Google could not complete"),
-      });
-      expect((await row(id))!.outcome).toBe("failed");
-      expect(await get(f, id)).toMatchObject({
-        status: "failed",
-        error: { code: "google_unavailable" },
-      });
-    } else
-      await expectError(
-        (await work) as Response,
-        "google_unavailable",
-        /Google could not complete/,
-      );
-    expect(await onceRows()).toEqual([]);
-    expect(google.sends).toEqual([]);
-    expect((await callRows())[0]!.outcome).toBe("failed");
-    if (id) {
-      const next = (await answer(await sendCall(f, "forward_message"))).approval as string;
-      expect((await approve(f, next)).state.kind).toBe("succeeded");
-    } else await answer(await sendCall(f, "forward_message"));
-    expect(google.sends).toHaveLength(1);
-  },
-);
+    expect((await row(id))!.outcome).toBe("failed");
+    expect(await get(f, id)).toMatchObject({
+      status: "failed",
+      error: { code: "google_unavailable" },
+    });
+  } else await expectError((await work) as Response, "google_unavailable", leftoverMessage);
+  expect(await onceRows()).toEqual([]);
+  expect(google.sends).toEqual([]);
+  expect((await callRows())[0]!.outcome).toBe("failed");
+  if (id) {
+    const next = (await answer(await sendCall(f, "forward_message"))).approval as string;
+    expect((await approve(f, next)).state.kind).toBe("succeeded");
+  } else await answer(await sendCall(f, "forward_message"));
+  expect(google.sends).toHaveLength(1);
+});
 
 it.each([400, 404])(
-  "T9: a missing forward source (%s) is not_found and can be retried",
+  "a missing forward source (%s) is not_found and can be retried",
   async (status) => {
     const f = await sendFixture("forward_message");
     google.messageAnswers.set(SOURCE, () => new Response(null, { status }));
@@ -286,7 +291,7 @@ it.each([400, 404])(
 );
 
 it.each(["bad-data", "missing-data", "404", "padded"])(
-  "F3: attachment bytes handle %s without sending bad data",
+  "attachment bytes handle %s without sending bad data",
   async (kind) => {
     const f = await sendFixture("forward_message");
     const raw = fullMessage();
@@ -319,7 +324,7 @@ it.each(["bad-data", "missing-data", "404", "padded"])(
 );
 
 it.each(["create unreadable", "create lost", "create unanswered", "read lost"])(
-  "O3: %s before send is known and a retry can send",
+  "%s before send is known and a retry can send",
   async (kind) => {
     const f = await sendFixture(kind === "read lost" ? "send_reply" : "send_message");
     const name = kind === "read lost" ? "send_reply" : "send_message";
@@ -338,7 +343,11 @@ it.each(["create unreadable", "create lost", "create unanswered", "read lost"])(
       await entered.promise;
       await vi.advanceTimersByTimeAsync(10_000);
     }
-    await expectError(await work, "google_unavailable", /Google could not complete/);
+    await expectError(
+      await work,
+      "google_unavailable",
+      kind === "read lost" ? /Google could not complete/ : leftoverMessage,
+    );
     expect(await onceRows()).toEqual([]);
     expect(google.sends).toEqual([]);
     expect((await callRows())[0]!.outcome).toBe("failed");
@@ -348,7 +357,7 @@ it.each(["create unreadable", "create lost", "create unanswered", "read lost"])(
   },
 );
 
-it("F3: an attached mail is one file and its inner body and files stay inside it", async () => {
+it("an attached mail is one file and its inner body and files stay inside it", async () => {
   const f = await sendFixture("forward_message");
   const raw = fullMessage();
   const attached = "From: sam@example.com\r\nSubject: Attached\r\n\r\nInside the attached mail.";
@@ -372,4 +381,48 @@ it("F3: an attached mail is one file and its inner body and files stay inside it
   expect(sent.parts[1]!.headers["Content-Type"]).toBe("message/rfc822");
   expect(new TextDecoder().decode(sent.parts[1]!.data)).toBe(attached);
   expect(google.attachmentRequests).toEqual([]);
+});
+
+it.each(["cut", "omitted"])(
+  "refuses an original whose text is %s before staging or offering Approve",
+  async (kind) => {
+    const f = await sendFixture("forward_message");
+    const raw = fullMessage();
+    raw.payload.body =
+      kind === "cut"
+        ? { size: 1_000_001, data: bytes("x".repeat(1_000_001)) }
+        : { size: 2_000_001, attachmentId: "large-body" };
+    serveFull(raw);
+    await expectError(
+      await sendCall(f, "forward_message"),
+      "message_too_large",
+      "The text of this message is too large to forward whole.",
+    );
+    expect(google.uploads).toEqual([]);
+    expect(google.sends).toEqual([]);
+    expect(await onceRows()).toEqual([]);
+    await setSend(f, "forward_message", "ask");
+    const id = (await answer(await sendCall(f, "forward_message"))).approval as string;
+    expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: false });
+  },
+);
+
+it("unfolds original headers before quoting or composing a forward", async () => {
+  const f = await sendFixture("forward_message");
+  serveFull(
+    fullMessage({
+      From: "Sam <sam@example.com>\nBcc: hidden@example.com",
+      Subject: "Lunch\r\nTo: x@example.com",
+      To: "Alex <alex.personal@example.com>\nBcc: hidden@example.com",
+      Cc: "Kim <kim@example.com>\nTo: forged@example.com",
+    }),
+  );
+  await answer(await sendCall(f, "forward_message"));
+  const mail = mime(google.uploads[0]!.message);
+  expect(decodeWords(mail.headers.Subject!)).toBe("Fwd: Lunch  To: x@example.com");
+  const text = new TextDecoder().decode(mail.parts[0]!.data);
+  expect(text).toContain("Subject: Lunch  To: x@example.com\n");
+  expect(text).toContain("From: Sam <sam@example.com> Bcc: hidden@example.com\n");
+  expect(text.split("\n").filter((line) => /^(To|Cc):/.test(line))).toHaveLength(2);
+  expect(text).not.toMatch(/\nBcc:/);
 });

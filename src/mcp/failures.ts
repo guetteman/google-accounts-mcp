@@ -86,7 +86,7 @@ export type Missing = "thread" | "message" | "draft" | "attachment" | "label";
 export const notFound = (kind: Missing, id: string | readonly string[]): ToolFailure =>
   new ToolFailure({ code: "not_found", missing: { kind, id } });
 export const messageTooLarge = (
-  over: { bytes: number } | { attachments: number } | null,
+  over: { bytes: number } | { attachments: number } | { text: true } | null,
 ): ToolFailure => new ToolFailure({ code: "message_too_large", over });
 export const notSendable = (draft: string | null): ToolFailure =>
   new ToolFailure({ code: "message_not_sendable", unsendable: { draft } });
@@ -105,7 +105,8 @@ export const notReadable = (file: FileInfo): ToolFailure =>
 type FailureData = {
   unknown?: boolean;
   released?: true;
-  over?: { bytes: number } | { attachments: number } | null;
+  leftover?: true;
+  over?: { bytes: number } | { attachments: number } | { text: true } | null;
   unsendable?: { draft: string | null };
   said?: string;
   missing?: { kind: Missing; id: string | readonly string[] };
@@ -174,6 +175,12 @@ export function classify(
     text.annotations?.readOnlyHint === false
       ? `Google did not confirm the request for ${text.email}. It may have taken effect.${text.annotations.idempotentHint ? " Sending the same call again is safe." : ""}`
       : entry.message(text.input, text.email, text.origin, text.tool, text.connection);
+  const describe = (message: string) =>
+    !failure.leftover
+      ? message
+      : failure.code === "google_unavailable"
+        ? `Nothing was sent from ${text.email}. Google did not confirm a step before the send, so a draft of this mail may be left in Drafts. Ask the owner to delete it there, then call again with the same arguments.`
+        : `${message} A draft of this mail may be left in Drafts. Ask the owner to delete it there.`;
   return {
     audit: unknown ? null : entry.outcome,
     error:
@@ -181,24 +188,27 @@ export function classify(
         ? null
         : {
             code: failure.code,
-            message:
+            message: describe(
               failure.said ??
-              fileMessage ??
-              (failure.reason === "arguments_too_large"
-                ? "The arguments are too large. The limit is 256 KB."
-                : failure.field
-                  ? `The ${failure.field.name} field must be ${failure.field.expects}.`
-                  : failure.missing
-                    ? missingMessage(failure.missing, text.email)
-                    : failure.over
-                      ? "bytes" in failure.over
-                        ? `This forward would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is 25,000,000 bytes.`
-                        : `This forward would have ${failure.over.attachments} attachments. The limit is 30.`
-                      : failure.unsendable
-                        ? failure.unsendable.draft === null
-                          ? `Gmail refused this message from ${text.email}. Check that every address is valid.`
-                          : `Gmail refused to send draft "${failure.unsendable.draft}" from ${text.email}. A draft needs at least one recipient, and every address must be valid. The owner can complete it in Gmail.`
-                        : message),
+                fileMessage ??
+                (failure.reason === "arguments_too_large"
+                  ? "The arguments are too large. The limit is 256 KB."
+                  : failure.field
+                    ? `The ${failure.field.name} field must be ${failure.field.expects}.`
+                    : failure.missing
+                      ? missingMessage(failure.missing, text.email)
+                      : failure.over
+                        ? "text" in failure.over
+                          ? "The text of this message is too large to forward whole."
+                          : "bytes" in failure.over
+                            ? `This forward would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is 25,000,000 bytes.`
+                            : `This forward would have ${failure.over.attachments} attachments. The limit is 30.`
+                        : failure.unsendable
+                          ? failure.unsendable.draft === null
+                            ? `Gmail refused this message from ${text.email}. Check that every address is valid.`
+                            : `Gmail refused to send draft "${failure.unsendable.draft}" from ${text.email}. A draft needs at least one recipient, and every address must be valid. The owner can complete it in Gmail.`
+                          : message),
+            ),
           },
   };
 }

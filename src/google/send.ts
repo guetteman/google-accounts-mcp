@@ -1,9 +1,8 @@
-import { Effect, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { creating, notFound, notSendable, ToolFailure } from "../mcp/failures";
 import type { Confirm, Send, Sending } from "../mcp/tools";
 import type { Created } from "../once/store";
-import { readDraft } from "./draft";
-import { change } from "./gmail";
+import { change, get } from "./gmail";
 
 const Sent = Schema.Struct({ id: Schema.String, threadId: Schema.String });
 const unavailable = () => new ToolFailure({ code: "google_unavailable" });
@@ -14,7 +13,7 @@ const sendOne = (
   refused: (status: number) => ToolFailure,
 ): Effect.Effect<Created, ToolFailure> =>
   Effect.gen(function* () {
-    const sending = yield* confirm;
+    const sending = yield* confirm.check;
     const sent = yield* creating(
       change(sending, "POST", "drafts/send", Sent, refused, { id: draft }),
     );
@@ -22,22 +21,28 @@ const sendOne = (
   });
 
 export const sendStaged = (
-  send: Send,
+  _send: Send,
   confirm: Confirm,
   stage: Effect.Effect<Created, ToolFailure>,
 ): Effect.Effect<Created, ToolFailure> =>
   Effect.gen(function* () {
-    const staged = yield* stage;
-    if (!staged.draft) throw new Error("A staged draft must have an ID");
+    const staged = yield* stage.pipe(
+      Effect.mapError((failure) => {
+        if (!failure.unknown) return failure;
+        const data: ConstructorParameters<typeof ToolFailure>[0] = failure;
+        return new ToolFailure({ ...data, leftover: true });
+      }),
+    );
+    if (!staged.draft) return yield* Effect.fail(unavailable());
     let sending: Sending | undefined;
-    const checked = confirm.pipe(
+    const checked = confirm.check.pipe(
       Effect.tap((value) =>
         Effect.sync(() => {
           sending = value;
         }),
       ),
     );
-    return yield* sendOne(checked, staged.draft, (status) =>
+    return yield* sendOne({ ...confirm, check: checked }, staged.draft, (status) =>
       status === 400
         ? notSendable(null)
         : status === 404
@@ -46,14 +51,21 @@ export const sendStaged = (
     ).pipe(
       Effect.catch((failure) =>
         Effect.gen(function* () {
-          if (failure.code !== "outcome_unknown")
-            yield* change(
-              sending ?? send,
-              "DELETE",
-              `drafts/${staged.draft}`,
-              null,
-              unavailable,
-            ).pipe(Effect.ignore);
+          if (failure.code !== "outcome_unknown") {
+            const cleanup = yield* Effect.result(
+              change(
+                sending ?? confirm.late,
+                "DELETE",
+                `drafts/${staged.draft}`,
+                null,
+                unavailable,
+              ),
+            );
+            if (Result.isFailure(cleanup)) {
+              const data: ConstructorParameters<typeof ToolFailure>[0] = failure;
+              return yield* Effect.fail(new ToolFailure({ ...data, leftover: true }));
+            }
+          }
           return yield* Effect.fail(failure);
         }),
       ),
@@ -65,27 +77,17 @@ export const sendExisting = (
   draft: string,
 ): Effect.Effect<Created, ToolFailure> =>
   Effect.gen(function* () {
-    let sending: Sending | undefined;
-    let badRequest = false;
-    const checked = confirm.pipe(
-      Effect.tap((value) =>
-        Effect.sync(() => {
-          sending = value;
-        }),
-      ),
+    yield* get(
+      confirm.late,
+      `drafts/${draft}?format=minimal`,
+      Schema.Struct({ id: Schema.String }),
+      (status) => (status === 404 || status === 400 ? notFound("draft", draft) : unavailable()),
     );
-    return yield* sendOne(checked, draft, (status) => {
-      if (status === 400) {
-        badRequest = true;
-        return notSendable(draft);
-      }
-      return status === 404 ? notFound("draft", draft) : unavailable();
-    }).pipe(
-      Effect.catch((failure) =>
-        Effect.gen(function* () {
-          if (badRequest && sending) yield* readDraft(sending, draft);
-          return yield* Effect.fail(failure);
-        }),
-      ),
+    return yield* sendOne(confirm, draft, (status) =>
+      status === 400
+        ? notSendable(draft)
+        : status === 404
+          ? notFound("draft", draft)
+          : unavailable(),
     );
   });

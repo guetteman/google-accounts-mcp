@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import { messageTooLarge, notFound, ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
+import { unfold } from "./reply";
 import { shorten } from "./bounds";
 import { get } from "./gmail";
 import { attachmentParts, header, RawMessage, readMessage, type RawPart } from "./message";
@@ -33,14 +34,15 @@ export const forwardPlan = (send: Send, message: string): Effect.Effect<ForwardP
       catch: () => new ToolFailure({ code: "google_unavailable" }),
     });
     const body = yield* textOf(send, parsed, new BodyBudget());
-    const subject = header(raw.payload.headers, "Subject");
+    if (!body.whole) return yield* Effect.fail(messageTooLarge({ text: true }));
+    const subject = unfold(header(raw.payload.headers, "Subject"));
     const quoted = [
       "---------- Forwarded message ---------",
-      `From: ${parsed.from}`,
-      `Date: ${parsed.date}`,
+      `From: ${unfold(parsed.from)}`,
+      `Date: ${unfold(parsed.date)}`,
       `Subject: ${shorten(subject, 500)}`,
-      `To: ${parsed.to.join(", ")}`,
-      ...(parsed.cc.length ? [`Cc: ${parsed.cc.join(", ")}`] : []),
+      `To: ${parsed.to.map(unfold).join(", ")}`,
+      ...(parsed.cc.length ? [`Cc: ${parsed.cc.map(unfold).join(", ")}`] : []),
       "",
       body.text,
     ].join("\n");
@@ -55,7 +57,7 @@ export const forwardPlan = (send: Send, message: string): Effect.Effect<ForwardP
         size: part.body.size,
       })),
       original: {
-        from: parsed.from,
+        from: unfold(parsed.from),
         subject: shorten(subject, 500),
         date: Number(raw.internalDate),
       },

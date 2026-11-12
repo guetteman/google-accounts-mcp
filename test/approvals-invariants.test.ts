@@ -9,6 +9,7 @@ import {
   decideApproval,
   finishApproval,
   readApproval,
+  stillApproved,
 } from "../src/approvals/store";
 import { RUN_DEADLINE, OUTCOME_WINDOW, parseApprovalId } from "../src/approvals/model";
 import { readOwner } from "../src/owner/owner";
@@ -272,3 +273,24 @@ it("fails closed when an approval row cannot be decoded", async () => {
   );
   expect(google.labelRequests).toEqual([]);
 });
+
+it.each(["state", "claim", "decided_at", "owner"] as const)(
+  "requires the winning approval's current %s at the last check",
+  async (guard) => {
+    const f = await fixture();
+    await setting(f, "ask");
+    const id = await ask(f);
+    const won = await claim(id);
+    const ctx = await context();
+    await Effect.runPromise(stillApproved(ctx, won));
+    if (guard === "owner") {
+      ctx.owner.generation = (ctx.owner.generation + 1) as typeof ctx.owner.generation;
+    } else {
+      const value =
+        guard === "state" ? "rejected" : guard === "claim" ? crypto.randomUUID() : won.at + 1;
+      await env.DB.prepare(`UPDATE approvals SET ${guard} = ? WHERE id = ?`).bind(value, id).run();
+    }
+    const checked = await Effect.runPromise(Effect.result(stillApproved(ctx, won)));
+    expect(Result.isFailure(checked) && checked.failure.code).toBe("tool_not_allowed");
+  },
+);

@@ -19,7 +19,7 @@ const Message = Schema.Struct({
   internalDate: InternalDate,
   payload: Schema.Struct({ headers: Headers }),
 });
-const unfold = (text: string) =>
+export const unfold = (text: string) =>
   // oxlint-disable-next-line no-control-regex -- Sender-controlled headers must be unfolded before use.
   text.replace(/(?:\r\n|\r|\n)([ \t])/g, "$1").replace(/[\u0000-\u001f\u007f]/g, " ");
 const recipientsFailure = () =>

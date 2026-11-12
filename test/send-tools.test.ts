@@ -1,3 +1,4 @@
+import { leftoverNote } from "./support/send";
 import { expect, it, vi } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
@@ -30,7 +31,7 @@ import {
 } from "./support/send";
 
 it.each(sendCases)(
-  "T5 T7 T8 O1: $name sends once and returns the stored sending IDs on repeat",
+  "$name sends once and returns the stored sending IDs on repeat",
   async ({ name }) => {
     const f = await sendFixture(name);
     const result = await answer(await sendCall(f, name));
@@ -51,7 +52,9 @@ it.each(sendCases)(
       name === "send_draft" ? 1 : 2,
     );
     if (name === "send_draft") {
-      expect(google.fullDraftRequests).toEqual([]);
+      expect(google.fullDraftRequests).toEqual([
+        "https://gmail.googleapis.com/gmail/v1/users/me/drafts/existing-draft?format=minimal",
+      ]);
       expect(google.messageRequests).toEqual([]);
       expect(google.storedDrafts.has("existing-draft")).toBe(false);
     } else {
@@ -67,7 +70,7 @@ it.each(sendCases)(
 );
 
 it.each(replyCases.filter((c) => !c.name.startsWith("given")))(
-  "T2: send_reply reuses the reply plan for $name",
+  "send_reply reuses the reply plan for $name",
   async (test) => {
     const f = await sendFixture("send_reply");
     serveFull(fullMessage(test.headers));
@@ -85,7 +88,7 @@ it.each(replyCases.filter((c) => !c.name.startsWith("given")))(
   },
 );
 
-it("T3: names message and the draft workaround when reply recipients cannot be filled", async () => {
+it("names message and the draft workaround when reply recipients cannot be filled", async () => {
   const f = await sendFixture("send_reply");
   serveFull(
     fullMessage({ To: Array.from({ length: 200 }, (_, i) => `r${i}@example.com`).join(", ") }),
@@ -126,27 +129,24 @@ it.each([
   name: (typeof sendCases)[number]["name"];
   args: Record<string, unknown>;
   field: string;
-}>)(
-  "T1 T4 T5: refuses invalid $name input %# before Gmail or approval",
-  async ({ name, args, field }) => {
-    const f = await sendFixture(name, "ask");
-    const traffic = googleTraffic().length;
-    await expectError(
-      await sendCall(f, name, args),
-      "invalid_arguments",
-      field === "to"
-        ? "The to field must be a list of at least one mailbox, each an address or Name <address>."
-        : field === "cc" || field === "bcc"
-          ? `The ${field} field must be a list of mailboxes, each an address or Name <address>.`
-          : name === "send_message" && field === "subject"
-            ? "The subject field must be a string of 1 to 998 characters without control characters."
-            : new RegExp(`The ${field} field must be`),
-    );
-    expect(googleTraffic().slice(traffic)).toEqual([]);
-    expect(await onceRows()).toEqual([]);
-    expect(await rows()).toEqual([]);
-  },
-);
+}>)("refuses invalid $name input %# before Gmail or approval", async ({ name, args, field }) => {
+  const f = await sendFixture(name, "ask");
+  const traffic = googleTraffic().length;
+  await expectError(
+    await sendCall(f, name, args),
+    "invalid_arguments",
+    field === "to"
+      ? "The to field must be a list of at least one mailbox, each an address or Name <address>."
+      : field === "cc" || field === "bcc"
+        ? `The ${field} field must be a list of mailboxes, each an address or Name <address>.`
+        : name === "send_message" && field === "subject"
+          ? "The subject field must be a string of 1 to 998 characters without control characters."
+          : new RegExp(`The ${field} field must be`),
+  );
+  expect(googleTraffic().slice(traffic)).toEqual([]);
+  expect(await onceRows()).toEqual([]);
+  expect(await rows()).toEqual([]);
+});
 
 it.each([
   "send_message",
@@ -155,7 +155,7 @@ it.each([
   "send_draft",
   "create_draft",
   "list_labels",
-])("T1: oversized denied %s is refused before parsing or binding an account", async (name) => {
+])("oversized denied %s is refused before parsing or binding an account", async (name) => {
   const f = await sendFixture();
   await setSend(f, "send_message", "deny");
   const to = Array.from({ length: 100_000 }, () => "bad");
@@ -174,7 +174,7 @@ it.each([
 });
 
 it.each(sendCases)(
-  "T6: $name refuses undeclared recipients or actions before ask",
+  "$name refuses undeclared recipients or actions before ask",
   async ({ name }) => {
     const f = await sendFixture(name, "ask");
     const field = {
@@ -195,28 +195,25 @@ it.each(sendCases)(
   },
 );
 
-it.each([400, 404])(
-  "T9 O3: a %s source read releases its call for a corrected retry",
-  async (status) => {
-    const f = await sendFixture("send_reply");
-    google.messageAnswers.set(SOURCE, () => new Response(null, { status }));
-    await expectError(
-      await sendCall(f, "send_reply"),
-      "not_found",
-      `No message "${SOURCE}" exists in ${PERSONAL}. A message ID works only in the account that returned it.`,
-    );
-    expect(await onceRows()).toEqual([]);
-    serveFull();
-    await answer(await sendCall(f, "send_reply"));
-    expect(google.sends).toHaveLength(1);
-  },
-);
+it.each([400, 404])("a %s source read releases its call for a corrected retry", async (status) => {
+  const f = await sendFixture("send_reply");
+  google.messageAnswers.set(SOURCE, () => new Response(null, { status }));
+  await expectError(
+    await sendCall(f, "send_reply"),
+    "not_found",
+    `No message "${SOURCE}" exists in ${PERSONAL}. A message ID works only in the account that returned it.`,
+  );
+  expect(await onceRows()).toEqual([]);
+  serveFull();
+  await answer(await sendCall(f, "send_reply"));
+  expect(google.sends).toHaveLength(1);
+});
 
 it.each([0, 400, 404])(
-  "T9: an absent draft after send/read %s releases its call",
+  "an absent draft at the preflight read or send (%s) releases its call",
   async (readStatus) => {
     const f = await sendFixture("send_draft");
-    google.sendAnswers.push(() => new Response(null, { status: readStatus ? 400 : 404 }));
+    if (!readStatus) google.sendAnswers.push(() => new Response(null, { status: 404 }));
     if (readStatus)
       google.fullDraftAnswers.set(
         "existing-draft",
@@ -227,17 +224,17 @@ it.each([0, 400, 404])(
       "not_found",
       `No draft "existing-draft" exists in ${PERSONAL}. A draft ID works only in the account that returned it.`,
     );
-    expect(google.fullDraftRequests).toHaveLength(readStatus ? 1 : 0);
+    expect(google.fullDraftRequests).toHaveLength(1);
     expect(await onceRows()).toEqual([]);
     google.fullDraftAnswers.clear();
     await answer(await sendCall(f, "send_draft"));
-    expect(google.sends).toHaveLength(2);
+    expect(google.sends).toHaveLength(readStatus ? 1 : 2);
     expect(google.deletes).toEqual([]);
   },
 );
 
 it.each(sendCases)(
-  "T10 T11 T12: $name releases refused sends and only removes its staged draft",
+  "$name releases refused sends and only removes its staged draft",
   async ({ name }) => {
     const f = await sendFixture(name);
     for (const status of [400, 403, 429]) {
@@ -252,17 +249,18 @@ it.each(sendCases)(
           : /Google could not complete/,
       );
       expect(await onceRows()).toEqual([]);
+      expect([...google.storedDrafts.keys()]).toEqual(["existing-draft"]);
       expect((await callRows()).at(-1)!.outcome).toBe(status === 400 ? "refused" : "failed");
     }
     expect(google.deletes).toHaveLength(name === "send_draft" ? 0 : 3);
-    expect(google.fullDraftRequests).toHaveLength(name === "send_draft" ? 1 : 0);
+    expect(google.fullDraftRequests).toHaveLength(name === "send_draft" ? 3 : 0);
     await answer(await sendCall(f, name));
     expect(google.sends).toHaveLength(4);
   },
 );
 
 it.each(["send_message", "send_reply", "forward_message"] as const)(
-  "T10 O3: %s releases a refused staged draft",
+  "%s releases a refused staged draft",
   async (name) => {
     const f = await sendFixture(name);
     (name === "forward_message" ? google.uploadAnswers : google.draftCreateAnswers).push(
@@ -280,17 +278,21 @@ it.each(["send_message", "send_reply", "forward_message"] as const)(
   },
 );
 
-it("T12: a failed cleanup preserves the sending refusal", async () => {
+it("a failed cleanup preserves the refusal and reports the leftover draft", async () => {
   const f = await sendFixture();
   google.sendAnswers.push(() => new Response(null, { status: 400 }));
   google.deleteAnswers.push(() => new Response(null, { status: 500 }));
-  await expectError(await sendCall(f), "message_not_sendable", /Gmail refused this message/);
+  await expectError(
+    await sendCall(f),
+    "message_not_sendable",
+    `Gmail refused this message from ${PERSONAL}. Check that every address is valid.${leftoverNote}`,
+  );
   expect(google.deletes).toEqual(["draft-1"]);
   expect(google.storedDrafts.has("draft-1")).toBe(true);
   expect(await onceRows()).toEqual([]);
 });
 
-it.each(["held", "concurrent"])("O2: %s identical calls send at most once", async (kind) => {
+it.each(["held", "concurrent"])("%s identical calls send at most once", async (kind) => {
   const f = await sendFixture();
   const held = hold(google.draftCreateAnswers, created());
   const first = sendCall(f).then(answer);
@@ -313,7 +315,7 @@ it.each(["held", "concurrent"])("O2: %s identical calls send at most once", asyn
 });
 
 it.each(["server", "lost", "deadline", "unreadable", "shape"])(
-  "O5: %s sending outcome stays unknown with no cleanup or repeat send",
+  "%s sending outcome stays unknown with no cleanup or repeat send",
   async (kind) => {
     const f = await sendFixture();
     const entered = deferred();
@@ -339,7 +341,7 @@ it.each(["server", "lost", "deadline", "unreadable", "shape"])(
   },
 );
 
-it("O6: a 404 sending a staged draft is unknown and cannot send a second copy", async () => {
+it("a 404 sending a staged draft is unknown and cannot send a second copy", async () => {
   const f = await sendFixture();
   google.sendAnswers.push(() => new Response(null, { status: 404 }));
   await expectError(
@@ -358,7 +360,7 @@ it("O6: a 404 sending a staged draft is unknown and cannot send a second copy", 
 });
 
 it.each(sendCases.filter((c) => c.name !== "send_draft"))(
-  "O7 O10: $name defaults are identical and duplicate sends deliberately",
+  "$name defaults are identical and duplicate sends deliberately",
   async ({ name }) => {
     const f = await sendFixture(name);
     await answer(await sendCall(f, name));
@@ -389,7 +391,7 @@ it.each(sendCases.filter((c) => c.name !== "send_draft"))(
 );
 
 it.each([undefined, 2, 100])(
-  "O8: unknown composed mail gives the exact safe advice for duplicate %s",
+  "unknown composed mail gives the exact safe advice for duplicate %s",
   async (duplicate) => {
     const f = await sendFixture();
     google.sendAnswers.push(() => new Response(null, { status: 503 }));
@@ -400,7 +402,7 @@ it.each([undefined, 2, 100])(
     await expectError(await sendCall(f, "send_message", args), "outcome_unknown", expected);
   },
 );
-it("O8: an unknown existing draft never suggests duplicate", async () => {
+it("an unknown existing draft never suggests duplicate", async () => {
   const f = await sendFixture("send_draft");
   google.sendAnswers.push(() => new Response(null, { status: 503 }));
   await expectError(
@@ -410,7 +412,7 @@ it("O8: an unknown existing draft never suggests duplicate", async () => {
   );
 });
 
-it("O11: ask deduplicates pending calls, Approve sends once, get_approval returns the send, and Reject sends nothing", async () => {
+it("ask deduplicates pending calls, Approve sends once, get_approval returns the send, and Reject sends nothing", async () => {
   const f = await sendFixture("send_message", "ask");
   const pending = await answer(await sendCall(f));
   expect(await answer(await sendCall(f))).toEqual(pending);
@@ -429,7 +431,7 @@ it("O11: ask deduplicates pending calls, Approve sends once, get_approval return
   expect(google.sends).toHaveLength(1);
 });
 
-it("T13 O9: tools/list describes irreversible sends, fields, annotations and exact repeat instructions", async () => {
+it("tools/list describes irreversible sends, fields, annotations and exact repeat instructions", async () => {
   const f = await sendFixture();
   for (const c of sendCases) await setSend(f, c.name, "allow");
   const tools = (await rpcResult(await f.mcp.call())).tools as Array<{
@@ -449,8 +451,37 @@ it("T13 O9: tools/list describes irreversible sends, fields, annotations and exa
     expect(tool.description).toContain(paragraph);
     expect(tool.description).toContain("cannot be taken back");
     expect(tool.description).toContain("get_approval");
+    expect(tool.description).toContain(
+      "With ask, a send that cannot be built appears on the owner's page, not in your answer.",
+    );
     const entry = TOOLS.find((tool) => tool.name === c.name)!;
     expect(entry.kind === "account" && entry.group).toBe("Send");
+    const expected = {
+      send_message: {
+        action: "send a message",
+        permissionDescription:
+          "Send a new message from this account. A sent message cannot be taken back.",
+      },
+      send_reply: {
+        action: "send a reply",
+        permissionDescription:
+          "Reply to a message in its thread, to its sender or to everyone on it. A sent reply cannot be taken back.",
+      },
+      forward_message: {
+        action: "forward a message",
+        permissionDescription:
+          "Forward a message, with its text and its attachments, to the addresses the agent gives. It cannot be taken back.",
+      },
+      send_draft: {
+        action: "send a draft",
+        permissionDescription:
+          "Send a draft that exists in this account, as it is in Gmail at that moment. It cannot be taken back.",
+      },
+    }[c.name];
+    expect(entry.kind === "account" && entry.view.action).toBe(expected.action);
+    expect(entry.kind === "account" && entry.permissionDescription).toBe(
+      expected.permissionDescription,
+    );
     if (c.name !== "send_draft")
       expect(tool.description).toContain(
         "To send one more message with the same content on purpose, add duplicate: 2 (then 3).",
@@ -464,9 +495,8 @@ it("T13 O9: tools/list describes irreversible sends, fields, annotations and exa
   await permission(f);
 });
 
-it("T9 O4: an existing-draft diagnostic read failure is known after a refused send", async () => {
+it("an existing-draft preflight read failure is known without sending", async () => {
   const f = await sendFixture("send_draft");
-  google.sendAnswers.push(() => new Response(null, { status: 400 }));
   google.fullDraftAnswers.set("existing-draft", () => new Response(null, { status: 500 }));
   await expectError(
     await sendCall(f, "send_draft"),
@@ -476,10 +506,11 @@ it("T9 O4: an existing-draft diagnostic read failure is known after a refused se
   expect(await onceRows()).toEqual([]);
   expect((await callRows())[0]!.outcome).toBe("failed");
   expect(google.deletes).toEqual([]);
+  expect(google.sends).toEqual([]);
 });
 
 it.each(sendCases)(
-  "O2: simultaneously arriving $name calls contend for the real D1 claim",
+  "simultaneously arriving $name calls contend for the real D1 claim",
   async ({ name }) => {
     const f = await sendFixture(name);
     const values = await Promise.all([
@@ -492,7 +523,7 @@ it.each(sendCases)(
   },
 );
 
-it("O12: ask then allow returns the same pending approval until Approve sends once", async () => {
+it("ask then allow returns the same pending approval until Approve sends once", async () => {
   const f = await sendFixture("send_message", "ask");
   const pending = await answer(await sendCall(f));
   await setSend(f, "send_message", "allow");

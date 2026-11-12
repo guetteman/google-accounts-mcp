@@ -198,7 +198,7 @@ export const mixedMessage = (mail: Outgoing, files: ReadonlyArray<FilePart>): Bl
       file.type.length <= 100 && /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(file.type)
         ? file.type
         : "application/octet-stream";
-    const filename = encodeURIComponent(file.filename).replace(
+    const filename = encodeURIComponent(file.filename.toWellFormed()).replace(
       /[!'()*]/g,
       (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
     );
