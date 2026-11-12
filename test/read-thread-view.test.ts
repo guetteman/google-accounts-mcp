@@ -70,7 +70,7 @@ it.each([undefined, "m4", "m4+18000"])(
     const text = textOf(await renderPage(props).text());
     if (start) {
       expect(text).toContain(
-        "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which.",
+        "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each caption says which.",
       );
       for (const label of ["Subject", "Messages", "Last message from", "Last message date"])
         expect(text).toContain(`${label}, read from Gmail`);
@@ -97,7 +97,7 @@ it.each([
       { name: "Subject", text: "Lunch", from: "gmail" },
       { name: "Body", text: "Reply", from: "agent" },
     ],
-    "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which.",
+    "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each caption says which.",
   ],
 ] as [ViewValue[], string][])(
   "explains the source of shaded values %j",
@@ -117,11 +117,13 @@ it.each([
   },
 );
 
-it("renders thread, search and notes previews at 390 and 1280 pixels without overflow", async () => {
+it("renders thread, search, notes and label previews at 390 and 1280 pixels without overflow", async () => {
   for (const name of [
     "approval-waiting-thread",
     "approval-waiting-search",
     "approval-waiting-notes",
+    "approval-waiting-labels",
+    "approval-waiting-labels-many",
   ])
     for (const width of [390, 1280]) {
       const response = renderPage(previews[name]!);
@@ -140,7 +142,7 @@ it("renders thread, search and notes previews at 390 and 1280 pixels without ove
       expect(result.errors).toEqual([]);
       expect(result.overflow).toBe(false);
     }
-  // Six Chromium pages, within the existing browser-test budget.
+  // Ten Chromium pages, within the existing browser-test budget.
 }, 60_000);
 
 it.each([200, 500])(

@@ -96,7 +96,7 @@ const mixed = (values: Values) => new Set(values.map((value) => value.from)).siz
 /** Whose text the shaded values are. Text read from Gmail was never written by the agent. */
 const whose = (values: Values) =>
   mixed(values)
-    ? "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each label says which."
+    ? "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each caption says which."
     : values[0]?.from === "gmail"
       ? "The server read the shaded text below from Gmail. The agent did not write it."
       : "The agent wrote the shaded text below.";

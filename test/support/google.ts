@@ -159,6 +159,19 @@ export const google = {
     string,
     (request: Pick<Request, "signal">) => Response | Promise<Response>
   >(),
+  modifyRequests: [] as Array<{
+    url: string;
+    method: string;
+    thread: string;
+    body: unknown;
+    authorization: string | null;
+    redirect: RequestRedirect;
+  }>,
+  modifyAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
+  modifiedLabels: new Map<string, string[][]>(),
   codes: new Map<string, Code>(),
   exchangeAnswer: "ok" as Answer,
   refreshAnswers: [] as Answer[],
@@ -186,6 +199,9 @@ export const google = {
     this.threadRequests = [];
     this.threadListAnswers = [];
     this.threadAnswers.clear();
+    this.modifyRequests = [];
+    this.modifyAnswers.clear();
+    this.modifiedLabels.clear();
     this.exchangeAnswer = "ok";
     this.revokeAnswer = "ok";
     this.refreshAnswers = [];
@@ -346,6 +362,45 @@ export const google = {
           (await this.threadAnswers.get(id)?.(request)) ??
           (THREADS[id] ? HttpResponse.json(THREADS[id]) : new HttpResponse(null, { status: 404 }))
         );
+      }),
+      http.all(`${THREADS_URL}/:id/modify`, async ({ request, params }) => {
+        this.methods.push(request.method);
+        const id = String(params.id);
+        const body =
+          request.body !== null
+            ? ((await request.json()) as { addLabelIds?: string[]; removeLabelIds?: string[] })
+            : null;
+        this.modifyRequests.push({
+          url: request.url,
+          method: request.method,
+          thread: id,
+          body,
+          authorization: request.headers.get("Authorization"),
+          redirect: request.redirect,
+        });
+        if (request.method !== "POST") return new HttpResponse(null, { status: 405 });
+        const answer = await this.modifyAnswers.get(id)?.(request);
+        if (answer) return answer;
+        const thread = THREADS[id] as
+          | { messages: Array<{ id: string; labelIds?: string[] }> }
+          | undefined;
+        if (!thread) return new HttpResponse(null, { status: 404 });
+        const previous = this.modifiedLabels.get(id);
+        const messages = thread.messages.map((message, index) => {
+          const labels = new Set(previous?.[index] ?? message.labelIds ?? []);
+          for (const label of body?.addLabelIds ?? []) labels.add(label);
+          for (const label of body?.removeLabelIds ?? []) labels.delete(label);
+          return {
+            id: message.id,
+            threadId: id,
+            ...(labels.size ? { labelIds: [...labels] } : {}),
+          };
+        });
+        this.modifiedLabels.set(
+          id,
+          messages.map((message) => message.labelIds ?? []),
+        );
+        return HttpResponse.json({ id, messages });
       }),
       http.all(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/:message/attachments/:attachment",

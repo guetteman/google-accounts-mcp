@@ -3,6 +3,7 @@ import { accountMessage } from "../accounts/model";
 import type { Outcome } from "../calls/store";
 import { WAITING_LIMIT } from "../approvals/model";
 import type { ConnectionId } from "../connections/model";
+import type { ToolAnnotations } from "./tools";
 export const failures = {
   approval_not_available: {
     outcome: "refused",
@@ -91,13 +92,26 @@ const missingMessage = ({ kind, id }: NonNullable<ToolFailure["missing"]>, email
 export function classify(
   error: unknown,
   when: { approved: boolean; aborted: boolean },
-  text: { input: string; email: string; origin: string; tool: string; connection: ConnectionId },
+  text: {
+    input: string;
+    email: string;
+    origin: string;
+    tool: string;
+    connection: ConnectionId;
+    annotations?: ToolAnnotations;
+  },
 ): { audit: Outcome | null; error: { code: keyof typeof failures; message: string } | null } {
   const failure =
     error instanceof ToolFailure ? error : new ToolFailure({ code: "server_unavailable" });
   const entry = failures[failure.code];
   const unknown =
     failure.unknown || when.aborted || (when.approved && failure.code === "server_unavailable");
+  const message =
+    failure.code === "google_unavailable" &&
+    failure.unknown &&
+    text.annotations?.readOnlyHint === false
+      ? `Google did not confirm the request for ${text.email}. It may have taken effect.${text.annotations.idempotentHint ? " Sending the same call again is safe." : ""}`
+      : entry.message(text.input, text.email, text.origin, text.tool, text.connection);
   return {
     audit: unknown ? null : entry.outcome,
     error:
@@ -112,13 +126,7 @@ export function classify(
                   ? `The ${failure.field.name} field must be ${failure.field.expects}.`
                   : failure.missing
                     ? missingMessage(failure.missing, text.email)
-                    : entry.message(
-                        text.input,
-                        text.email,
-                        text.origin,
-                        text.tool,
-                        text.connection,
-                      ),
+                    : message,
           },
   };
 }
