@@ -35,6 +35,7 @@ import {
   type Confirm,
   type Tool,
 } from "./tools";
+import { contentOf, takes, type Reader } from "./file";
 import { identityOf } from "../once/identity";
 import { take, settle, release, WINDOW, type Repeat } from "../once/store";
 export const MAX_ARGUMENTS_BYTES = 256 * 1024;
@@ -43,6 +44,8 @@ export { CALL_DEADLINE } from "../approvals/model";
 
 export interface CallContext {
   db: D1Database;
+  files: KVNamespace;
+  reader: Reader;
   config: Config;
   owner: Owner;
   connection: ActiveConnection;
@@ -115,7 +118,9 @@ export async function executeAccount(
   try {
     if (!tool.create) {
       const result = await Effect.runPromise(
-        Effect.result(tool.run(requests.send, { email: allowed.credential.email }, args)),
+        Effect.result(
+          tool.run(requests.send, { email: allowed.credential.email }, args, takes(ctx.reader)),
+        ),
       );
       if (Result.isFailure(result)) throw result.failure;
       return { kind: "ran", value: result.success };
@@ -201,16 +206,9 @@ export async function executeAccount(
         (!seen.started || (seen.status !== null && seen.status >= 400 && seen.status < 500))
       ) {
         await Effect.runPromise(Effect.result(release(ctx, claim)));
-        throw new ToolFailure({
-          code: error.code,
-          said: error.said,
-          missing: error.missing,
-          field: error.field,
-          reason: error.reason,
-          over: error.over,
-          unsendable: error.unsendable,
-          released: true,
-        });
+        const data: ConstructorParameters<typeof ToolFailure>[0] = error;
+        const { unknown: _unknown, ...known } = data;
+        throw new ToolFailure({ ...known, released: true });
       }
       const now = ctx.now();
       await Effect.runPromise(Effect.result(settle(ctx, claim, now, { kind: "unknown" })));
@@ -430,7 +428,7 @@ export async function runCall(
           }
         }
       }
-      result = { content: [{ type: "text", text: JSON.stringify(value) }] };
+      result = { content: contentOf(value, ctx.reader) };
     }
   } catch (error) {
     const classified = classify(

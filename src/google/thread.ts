@@ -11,7 +11,7 @@ import {
   PAGE_BODY_BYTES,
   shorten,
 } from "./bounds";
-import { get } from "./gmail";
+import { AttachmentBytes, get } from "./gmail";
 import { htmlToText, referencedContentIds } from "./html";
 import {
   decodeBody,
@@ -66,7 +66,6 @@ export interface ThreadResult {
   next_page?: string;
 }
 const FullThread = Schema.Struct({ messages: Schema.NonEmptyArray(RawMessage) });
-const Bytes = Schema.Struct({ data: Schema.String });
 const bodyParts = (bodies: readonly Body[], fallbacks: boolean, parts = new Set<BodyPart>()) => {
   for (const body of bodies) {
     if (body.kind === "alternative") {
@@ -221,7 +220,7 @@ export const textOf = (
             : (yield* get(
                 send,
                 `messages/${encodeURIComponent(message.message)}/attachments/${encodeURIComponent(part.fetch)}`,
-                Bytes,
+                AttachmentBytes,
               )).data;
         const text = yield* Effect.try({
           try: () => decodeBody(data),

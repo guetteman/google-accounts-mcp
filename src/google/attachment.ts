@@ -1,51 +1,108 @@
-import { Effect, Schema } from "effect";
+import { Buffer } from "node:buffer";
+import { Effect } from "effect";
 import { notFound, ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
-import type { RawPart } from "./message";
-import { get } from "./gmail";
+import { AttachmentBytes, get } from "./gmail";
+import {
+  attachmentFields,
+  attachmentPart,
+  header,
+  RawMessage,
+  type RawPart,
+  type Attachment,
+} from "./message";
+import { shorten } from "./bounds";
 
-/** Read a file's bytes; the caller owns its size budget. */
-export const partBytes = (
+const unavailable = () => new ToolFailure({ code: "google_unavailable" });
+export interface Found extends Attachment {
+  part: RawPart;
+  contentId: string;
+  charset: string | null;
+  from: string;
+  subject: string;
+  date: number;
+}
+/** MIME parameters end at semicolons outside quoted strings; names cannot supply a charset. */
+const charsetOf = (value: string): string | null => {
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let i = 0; i <= value.length; i++) {
+    const char = value[i];
+    if (i < value.length) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quoted && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') quoted = !quoted;
+    }
+    if (i !== value.length && (char !== ";" || quoted)) continue;
+    const parameter = value.slice(start, i);
+    start = i + 1;
+    const equal = parameter.indexOf("=");
+    if (equal < 0 || parameter.slice(0, equal).trim().toLowerCase() !== "charset") continue;
+    let label = parameter.slice(equal + 1).trim();
+    if (label.startsWith('"') && label.endsWith('"'))
+      label = label.slice(1, -1).replace(/\\(.)/g, "$1");
+    return shorten(label, 40);
+  }
+  return null;
+};
+export const findAttachment = (
   send: Send,
-  message: string,
-  part: RawPart,
-): Effect.Effect<Uint8Array, ToolFailure> =>
+  input: { message: string; attachment: string },
+): Effect.Effect<Found, ToolFailure> =>
   Effect.gen(function* () {
-    const unavailable = () => new ToolFailure({ code: "google_unavailable" });
-    const data =
-      part.body.data !== undefined
-        ? part.body.data
-        : part.body.attachmentId !== undefined
-          ? (yield* get(
-              send,
-              `messages/${encodeURIComponent(message)}/attachments/${encodeURIComponent(part.body.attachmentId)}`,
-              Schema.Struct({ data: Schema.String }),
-              (status) =>
-                status === 404 ? notFound("attachment", part.partId || "0") : unavailable(),
-            )).data
-          : part.body.size === 0
-            ? ""
-            : null;
+    const raw = yield* get(
+      send,
+      `messages/${encodeURIComponent(input.message)}?format=full`,
+      RawMessage,
+      (status) =>
+        status === 404 || status === 400 ? notFound("message", input.message) : unavailable(),
+    );
+    const part = attachmentPart(raw, input.attachment);
+    if (part === null) return yield* Effect.fail(notFound("attachment", input.attachment));
+    return {
+      part,
+      ...attachmentFields(part),
+      charset: charsetOf(header(part.headers, "Content-Type")),
+      from: header(raw.payload.headers, "From"),
+      subject: header(raw.payload.headers, "Subject"),
+      date: Number(raw.internalDate),
+    };
+  });
+
+/** The attachment ID is from this message read, never from a previous read_thread response. */
+export const partBytes = (send: Send, message: string, part: RawPart) =>
+  Effect.gen(function* () {
+    let data = part.body.data;
+    if (data === undefined && part.body.attachmentId !== undefined) {
+      const answer = yield* get(
+        send,
+        `messages/${encodeURIComponent(message)}/attachments/${encodeURIComponent(part.body.attachmentId)}`,
+        AttachmentBytes,
+        (status) => (status === 404 ? notFound("attachment", part.partId || "0") : unavailable()),
+      );
+      data = answer.data;
+    }
+    if (data === undefined) {
+      if (part.body.size === 0) return new Uint8Array();
+      return yield* Effect.fail(unavailable());
+    }
     return yield* Effect.try({
       try: () => {
-        if (data === null || !/^[A-Za-z0-9_-]*={0,2}$/.test(data))
-          throw new Error("Invalid attachment bytes");
-        const length = data.length - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0);
-        if (length % 4 === 1 || (length !== data.length && data.length % 4 !== 0))
-          throw new Error("Invalid attachment bytes");
-        const bytes = new Uint8Array(Math.floor((length * 3) / 4));
-        let offset = 0;
-        // Decode in aligned blocks, without a whole second base64 or binary string.
-        for (let at = 0; at < length; at += 32768) {
-          const block = atob(
-            data
-              .slice(at, Math.min(at + 32768, length))
-              .replaceAll("-", "+")
-              .replaceAll("_", "/"),
-          );
-          for (let i = 0; i < block.length; i++) bytes[offset++] = block.charCodeAt(i);
-        }
-        return bytes;
+        if (
+          !/^[A-Za-z0-9_+/-]*={0,2}$/.test(data) ||
+          data.length % 4 === 1 ||
+          (data.endsWith("=") && data.length % 4 !== 0)
+        )
+          throw unavailable();
+        const bytes = Buffer.from(data, "base64url");
+        return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       },
       catch: unavailable,
     });

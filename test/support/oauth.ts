@@ -244,6 +244,31 @@ export class McpClient {
     );
   }
 
+  /** A tools/call request in revision 2026-07-28, with a stated client name or none. */
+  namedCall(
+    name: string,
+    args: Record<string, unknown>,
+    client: string | null,
+    workerEnv: Env = testEnv(),
+  ) {
+    return this.call(
+      "tools/call",
+      workerEnv,
+      {
+        name,
+        arguments: args,
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          ...(client === null
+            ? {}
+            : { "io.modelcontextprotocol/clientInfo": { name: client, version: "2.1.322" } }),
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+      { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call", "Mcp-Name": name },
+    );
+  }
+
   async listen(workerEnv: Env = testEnv()) {
     const response = await this.call(
       "subscriptions/listen",

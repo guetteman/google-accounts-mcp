@@ -3,7 +3,7 @@ import { expect } from "vite-plus/test";
 import { seedAccount, type AccountRow } from "./accounts";
 import { onlyConnection } from "./connections";
 import { requests } from "./network";
-import { McpClient, rpcResult } from "./oauth";
+import { McpClient, rpcResult, codeClient, type Client } from "./oauth";
 import { ORIGIN } from "./worker";
 
 export const PERSONAL = "alex.personal@example.com";
@@ -42,8 +42,8 @@ export const problemCases: Array<{ status: string; row: Partial<AccountRow>; mes
     message: `The server cannot read its stored access to ${PERSONAL}. Ask the owner to check ${ORIGIN}/accounts.`,
   },
 ];
-export async function fixture(overrides: Partial<AccountRow> = {}) {
-  const mcp = await new McpClient().connect("Claude");
+export async function fixture(overrides: Partial<AccountRow> = {}, client: Client = codeClient) {
+  const mcp = await new McpClient(client).connect("Claude");
   const connection = await onlyConnection();
   const personal = await seedAccount({ name: "Personal", email: PERSONAL, ...overrides });
   const northwind = await seedAccount({

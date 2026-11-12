@@ -1,4 +1,5 @@
 import {
+  CLIENT_INFO_META_KEY,
   ProtocolError,
   ProtocolErrorCode,
   Server,
@@ -32,8 +33,22 @@ export function createMcpServer(ctx: CallContext): Server {
       })),
     };
   });
-  server.setRequestHandler("tools/call", (request) => {
-    const work = runCall(ctx, request.params.name, request.params.arguments);
+  server.setRequestHandler("tools/call", (request, extra) => {
+    // SDK 2.3.0 types the envelope as {}; older requests can carry unvalidated metadata.
+    const envelope: { [CLIENT_INFO_META_KEY]?: { name?: unknown } } | undefined =
+      extra.mcpReq.envelope;
+    const stated = envelope?.[CLIENT_INFO_META_KEY]?.name;
+    const client =
+      ctx.connection.app === "claude-code"
+        ? "claude-code"
+        : ctx.connection.app === "claude-hosted" && typeof stated === "string"
+          ? stated
+          : null;
+    const work = runCall(
+      { ...ctx, reader: { client } },
+      request.params.name,
+      request.params.arguments,
+    );
     ctx.waitUntil(
       work.then(
         () => undefined,

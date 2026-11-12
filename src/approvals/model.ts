@@ -2,6 +2,7 @@ import type { AccountId } from "../accounts/model";
 import type { ConnectionId, App } from "../connections/model";
 import type { WonBrand } from "./store";
 import type { AccountTool } from "../mcp/tools";
+import type { FileRef } from "../files/store";
 import type { Sealed } from "../seal";
 
 export type ApprovalId = string & { readonly __approvalId: unique symbol };
@@ -107,7 +108,9 @@ export interface ApprovalPageProps {
   state: ApprovalState;
   unconfirmed?: boolean;
 }
-export type StoredPayload = { result: unknown } | { error: { code: string; message: string } };
+export type StoredPayload =
+  | { result: unknown; file?: FileRef }
+  | { error: { code: string; message: string } };
 export const isoSeconds = (time: number) => new Date(time).toISOString().replace(/\.\d{3}Z$/, "Z");
 /** A time as a view shows it, with its year: `Nov 12, 2026 at 10:02 UTC`. */
 export const viewDate = (at: number): string => {

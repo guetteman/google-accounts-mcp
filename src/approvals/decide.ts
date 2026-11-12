@@ -1,6 +1,8 @@
 import { Effect } from "effect";
 import { decodeAllowedAccount } from "../accounts/store";
 import type { Config } from "../config";
+import { putFile } from "../files/store";
+import { WithFile } from "../mcp/file";
 import { WriteUncertain } from "../db";
 import {
   accountRequests,
@@ -13,6 +15,7 @@ import { classify, ToolFailure } from "../mcp/failures";
 import type { Outcome } from "../calls/store";
 import {
   RUN_DEADLINE,
+  RESULT_LIFETIME,
   type Approval,
   type ApprovalId,
   type ApprovalPageProps,
@@ -31,7 +34,7 @@ import { openResult, sealResult } from "./text";
 import type { Send } from "../mcp/tools";
 import { approvalView } from "./view";
 
-type Dependencies = ApprovalContext & { config: Config; origin: string };
+type Dependencies = ApprovalContext & { config: Config; origin: string; files: KVNamespace };
 async function viewOf(
   approval: Approval,
   deps: ApprovalContext & { config: Config },
@@ -170,6 +173,7 @@ export const decide = (
           ...deps,
           connection: { connectionId: approval.connection.id, app: approval.connection.app },
           now: Date.now,
+          reader: approval.connection.app === "chatgpt" ? { client: null } : "later",
           waitUntil: () => {},
         };
         let outcome: "success" | "failed" | "unknown" = "success";
@@ -186,8 +190,15 @@ export const decide = (
             stillApproved(deps, decision.won),
             controller.signal,
           );
-          if (executed.kind === "ran") payload = { result: executed.value };
-          else {
+          if (executed.kind === "ran") {
+            const out = executed.value;
+            if (out instanceof WithFile) {
+              const ref = await Effect.runPromise(
+                putFile(deps.files, out.file, decision.won.at + RESULT_LIFETIME),
+              );
+              payload = { result: out.value, file: ref };
+            } else payload = { result: out };
+          } else {
             audit = "repeat";
             if (executed.repeat.kind === "done")
               payload = {

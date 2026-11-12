@@ -1,3 +1,5 @@
+import { Schema, Result } from "effect";
+import { FileRef } from "../files/store";
 import type { TokenKey } from "../config";
 import { open, seal, type Sealed } from "../seal";
 import type { ApprovalId, StoredPayload } from "./model";
@@ -26,7 +28,13 @@ export async function openResult(
   if (!opened.ok) return null;
   const parsed: unknown = JSON.parse(opened.value);
   if (typeof parsed !== "object" || parsed === null) return null;
-  if ("result" in parsed) return { result: parsed.result };
+  if ("result" in parsed) {
+    const file = "file" in parsed ? Schema.decodeUnknownResult(FileRef)(parsed.file) : null;
+    return {
+      result: parsed.result,
+      ...(file && Result.isSuccess(file) ? { file: file.success } : {}),
+    };
+  }
   if (
     "error" in parsed &&
     typeof parsed.error === "object" &&

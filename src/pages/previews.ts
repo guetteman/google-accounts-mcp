@@ -1,4 +1,5 @@
 import type { ApprovalPageProps } from "../approvals/model";
+import { TOOLS } from "../mcp/tools";
 import { GMAIL_SCOPES } from "../google/client";
 import { MAX_ITEMS } from "../google/gmail";
 import { acceptAuthorize } from "../oauth/clients";
@@ -83,6 +84,13 @@ const permissionAccounts: ReadonlyArray<import("../accounts/model").AccountView>
     status: { kind: "ready" },
   },
 ];
+const permissionTools = TOOLS.filter((tool) => tool.kind === "account").map((tool) => ({
+  name: tool.name,
+  group: tool.group,
+  irreversible: tool.irreversible,
+  label: tool.label,
+  description: tool.permissionDescription,
+}));
 const connectionPreview = (scenario: string): Page => {
   const accounts = ["no-accounts", "ended-connection"].includes(scenario) ? [] : permissionAccounts;
   const allowed = accounts.filter(
@@ -104,7 +112,7 @@ const connectionPreview = (scenario: string): Page => {
     settings: Object.fromEntries(
       allowed.flatMap((a, i) =>
         (scenario === "all-allowed" || i === 0
-          ? ["list_labels", "search_threads", "create_draft"]
+          ? permissionTools.map((tool) => tool.name)
           : ["list_labels"]
         ).map((tool) => [
           `${a.id}:${tool}`,
@@ -112,30 +120,7 @@ const connectionPreview = (scenario: string): Page => {
         ]),
       ),
     ),
-    tools: [
-      {
-        name: "list_labels",
-        group: "Find and read",
-        label: "List labels",
-        irreversible: false,
-        description: "See the names of this account's Gmail labels.",
-      },
-      {
-        name: "search_threads",
-        group: "Find and read",
-        label: "Search mail",
-        irreversible: false,
-        description:
-          "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",
-      },
-      {
-        name: "create_draft",
-        group: "Draft",
-        label: "Create draft",
-        irreversible: false,
-        description: "Write a draft, new or as a reply. Nothing is sent.",
-      },
-    ],
+    tools: permissionTools,
     requiredGmailScopes: GMAIL_SCOPES.length,
   };
 };
@@ -222,6 +207,26 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
     },
   },
 
+  "approval-waiting-attachment": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Download attachment",
+        action: "download an attachment",
+        joiner: "from",
+      },
+      values: [
+        { name: "File", text: "menu.pdf", from: "gmail" },
+        { name: "Type", text: "application/pdf", from: "gmail" },
+        { name: "Size", text: "48,213 bytes", from: "gmail" },
+        { name: "From", text: "Sam <sam@example.com>", from: "gmail" },
+        { name: "Subject", text: "Lunch", from: "gmail" },
+        { name: "Date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+      ],
+    },
+  },
   "approval-waiting-draft": {
     ...approvalBase,
     request: {

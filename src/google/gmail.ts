@@ -36,6 +36,9 @@ export const get = <A>(
     return yield* Schema.decodeUnknownEffect(schema)(body).pipe(Effect.mapError(unavailable));
   });
 
+/** Shared answer shape for attachments.get, including read_thread's deferred body parts. */
+export const AttachmentBytes = Schema.Struct({ data: Schema.String });
+
 /** One change as the account. Only a 4xx response confirms that Google refused it. */
 export const change = <A>(
   send: Send,

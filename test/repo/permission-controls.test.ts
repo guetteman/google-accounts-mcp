@@ -5,6 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { chromium, type Browser, type Locator, type Page, type Route } from "playwright-core";
 import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
+import { GROUPS } from "../../src/mcp/groups";
 import { TOOLS } from "../../src/mcp/tools";
 
 let browser: Browser;
@@ -1077,13 +1078,13 @@ const realTools = TOOLS.flatMap((tool) =>
 const withRealTools = `tools=${encodeURIComponent(JSON.stringify(realTools))}` as const;
 
 it("names all five irreversible tools, of the server's real tools, when all tools go to Allowed", async () => {
-  expect(realTools.filter((tool) => tool.irreversible).map((tool) => tool.label)).toEqual([
-    "Send message",
-    "Send reply",
-    "Forward message",
-    "Send draft",
-    "Delete permanently",
-  ]);
+  expect(
+    GROUPS.flatMap((group) =>
+      realTools
+        .filter((tool) => tool.group === group && tool.irreversible)
+        .map((tool) => tool.label),
+    ),
+  ).toEqual(["Send message", "Send reply", "Forward message", "Send draft", "Delete permanently"]);
   const page = await open(390, withRealTools);
   try {
     const routes = await pending(page);

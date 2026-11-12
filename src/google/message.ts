@@ -102,6 +102,32 @@ export const addresses = (value: string): string[] => {
   if (value.slice(start).trim()) result.push(value.slice(start).trim());
   return result;
 };
+/** One listing rule for read_thread and position lookup. Only multipart parts are containers. */
+export const attachmentParts = (raw: RawMessage): RawPart[] => {
+  const parts: RawPart[] = [];
+  const collect = (part: RawPart) => {
+    if (part.mimeType.startsWith("multipart/")) {
+      part.parts?.forEach(collect);
+      return;
+    }
+    if (
+      part.filename ||
+      (part.body.attachmentId && part.mimeType !== "text/plain" && part.mimeType !== "text/html")
+    )
+      parts.push(part);
+  };
+  collect(raw.payload);
+  return parts;
+};
+export const attachmentFields = (part: RawPart): Attachment & { contentId: string } => ({
+  attachment: part.partId || "0",
+  filename: shorten(part.filename, 200),
+  type: shorten(part.mimeType, 100),
+  size: part.body.size,
+  contentId: header(part.headers, "Content-ID").replace(/^<|>$/g, ""),
+});
+export const attachmentPart = (raw: RawMessage, attachment: string): RawPart | null =>
+  attachmentParts(raw).find((part) => (part.partId || "0") === attachment) ?? null;
 /** MIME selection stays pure. Bytes are decoded only after the page grants their cost. */
 export const readMessage = (raw: RawMessage): Message => {
   const html: BodyPart[] = [];
@@ -175,30 +201,3 @@ export const readMessage = (raw: RawMessage): Message => {
     attachments: attachmentParts(raw).map(attachmentFields),
   };
 };
-
-/** The single rule for files, shared by reads, downloads and forwards. */
-export const attachmentParts = (raw: RawMessage): RawPart[] => {
-  const files: RawPart[] = [];
-  const collect = (part: RawPart) => {
-    if (part.mimeType.startsWith("multipart/")) {
-      part.parts?.forEach(collect);
-      return;
-    }
-    if (
-      part.filename ||
-      (part.body.attachmentId && part.mimeType !== "text/plain" && part.mimeType !== "text/html")
-    )
-      files.push(part);
-  };
-  collect(raw.payload);
-  return files;
-};
-export const attachmentFields = (part: RawPart): Attachment & { contentId: string } => ({
-  attachment: part.partId || "0",
-  filename: shorten(part.filename, 200),
-  type: shorten(part.mimeType, 100),
-  size: part.body.size,
-  contentId: header(part.headers, "Content-ID").replace(/^<|>$/g, ""),
-});
-export const attachmentPart = (raw: RawMessage, attachment: string): RawPart | null =>
-  attachmentParts(raw).find((part) => (part.partId || "0") === attachment) ?? null;

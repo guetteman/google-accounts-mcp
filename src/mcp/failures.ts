@@ -14,6 +14,11 @@ export const failures = {
     message: () =>
       `This connection already has ${WAITING_LIMIT} calls waiting for approval. Wait for the owner to decide or for an approval to expire.`,
   },
+  attachment_too_large: { outcome: "refused", message: () => "The attachment is too large." },
+  attachment_not_readable: {
+    outcome: "refused",
+    message: () => "This client cannot read the attachment.",
+  },
   not_found: { outcome: "refused", message: () => "The requested item does not exist." },
   message_too_large: {
     outcome: "refused",
@@ -85,8 +90,19 @@ export const messageTooLarge = (
 ): ToolFailure => new ToolFailure({ code: "message_too_large", over });
 export const notSendable = (draft: string | null): ToolFailure =>
   new ToolFailure({ code: "message_not_sendable", unsendable: { draft } });
-export class ToolFailure extends Data.TaggedError("ToolFailure")<{
-  code: keyof typeof failures;
+type FileInfo = { filename: string; type: string; size: number };
+export const tooLarge = (file: FileInfo, limit: number): ToolFailure =>
+  new ToolFailure({
+    code: "attachment_too_large",
+    file: { filename: file.filename, type: file.type, size: file.size },
+    limit,
+  });
+export const notReadable = (file: FileInfo): ToolFailure =>
+  new ToolFailure({
+    code: "attachment_not_readable",
+    file: { filename: file.filename, type: file.type, size: file.size },
+  });
+type FailureData = {
   unknown?: boolean;
   released?: true;
   over?: { bytes: number } | { attachments: number } | null;
@@ -96,7 +112,17 @@ export class ToolFailure extends Data.TaggedError("ToolFailure")<{
   reason?: "arguments_too_large";
   /** The field that is wrong, with what it must be. */
   field?: { name: string; expects: string };
-}> {}
+} & (
+  | { code: "attachment_too_large"; file: FileInfo; limit: number }
+  | { code: "attachment_not_readable"; file: FileInfo; limit?: never }
+  | {
+      code: Exclude<keyof typeof failures, "attachment_too_large" | "attachment_not_readable">;
+      file?: never;
+      limit?: never;
+    }
+);
+export const ToolFailure = Data.TaggedError("ToolFailure")<FailureData>;
+export type ToolFailure = InstanceType<typeof ToolFailure>;
 
 const missingMessage = ({ kind, id }: NonNullable<ToolFailure["missing"]>, email: string) => {
   const ids = typeof id === "string" ? [id] : id;
@@ -134,6 +160,14 @@ export function classify(
   const unknown =
     !failure.released &&
     (failure.unknown || when.aborted || (when.approved && failure.code === "server_unavailable"));
+  const filename = failure.file?.filename ? JSON.stringify(failure.file.filename) : "(no name)";
+  const fileMessage =
+    failure.file &&
+    (failure.code === "attachment_too_large"
+      ? `The attachment ${filename} has ${failure.file.size.toLocaleString("en-US")} bytes. The limit is ${failure.limit.toLocaleString("en-US")} bytes.`
+      : failure.code === "attachment_not_readable"
+        ? `This client cannot read ${filename} (type ${JSON.stringify(failure.file.type)}). The owner can open it with Claude Code.`
+        : null);
   const message =
     failure.code === "google_unavailable" &&
     failure.unknown &&
@@ -149,6 +183,7 @@ export function classify(
             code: failure.code,
             message:
               failure.said ??
+              fileMessage ??
               (failure.reason === "arguments_too_large"
                 ? "The arguments are too large. The limit is 256 KB."
                 : failure.field

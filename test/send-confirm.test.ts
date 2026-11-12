@@ -298,6 +298,8 @@ const context = async (f: Awaited<ReturnType<typeof sendFixture>>): Promise<Call
   const owner = await Effect.runPromise(readOwner(env.DB));
   return {
     db: env.DB,
+    files: env.FILES_KV,
+    reader: "later",
     config: config.success,
     owner: { generation: owner.generation, email: owner.email! },
     connection: { connectionId: parseConnectionId(f.connection.id)!, app: f.connection.app },
