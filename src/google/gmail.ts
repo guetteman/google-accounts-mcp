@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import type { Send } from "../mcp/tools";
 import { ToolFailure } from "../mcp/failures";
+import { isoSeconds } from "../approvals/model";
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const unavailable = () => new ToolFailure({ code: "google_unavailable" });
@@ -85,7 +86,7 @@ const decodeEntities = (text: string) =>
   });
 const header = (message: (typeof Thread.Type)["messages"][number], name: string): string =>
   message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
-/** Gmail allows six connections at once for one Worker request; five leave one for a refresh. */
+/** Cloudflare allows a Worker six connections at once for one request; five leave one free. */
 const THREADS_AT_ONCE = 5;
 export const searchThreads = (
   send: Send,
@@ -115,12 +116,14 @@ export const searchThreads = (
             const first = thread.messages[0];
             const last = thread.messages[thread.messages.length - 1]!;
             const at = Number(last.internalDate);
-            if (!Number.isSafeInteger(at)) return Effect.fail(unavailable());
+            // A Date holds at most 8.64e15 milliseconds.
+            if (!Number.isSafeInteger(at) || Math.abs(at) > 8.64e15)
+              return Effect.fail(unavailable());
             return Effect.succeed({
               thread: listed.id,
               subject: header(first, "Subject"),
               from: header(last, "From"),
-              date: new Date(at).toISOString().replace(/\.\d{3}Z$/, "Z"),
+              date: isoSeconds(at),
               snippet: decodeEntities(listed.snippet),
               messages: thread.messages.length,
               unread: thread.messages.some((m) => m.labelIds?.includes("UNREAD") === true),

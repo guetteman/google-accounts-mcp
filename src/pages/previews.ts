@@ -164,6 +164,18 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
       },
     },
   },
+  "approval-waiting-search": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: { ...approvalBase.request.tool, label: "Search mail", action: "search the mail" },
+      values: [
+        { name: "Query", text: "in:inbox is:unread from:billing@northwind.example newer_than:7d" },
+        { name: "Limit", text: "10" },
+        { name: "Page", text: "0a1b2c3d4e5f6a7b8c9d" },
+      ],
+    },
+  },
   "approval-cannot-show": {
     ...approvalBase,
     state: { kind: "waiting", shown: false, changed: false, digest: null },

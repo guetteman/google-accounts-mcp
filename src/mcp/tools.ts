@@ -93,6 +93,8 @@ export const decodeArgs = (
 };
 export const DEFAULT_LIMIT = 10;
 export const MAX_LIMIT = 25;
+const MAX_QUERY = 2000;
+const MAX_PAGE = 500;
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -143,15 +145,16 @@ export const TOOLS: ReadonlyArray<Tool> = [
     description: `Searches the mail of one Google account and returns its threads, newest first. \`account\` is the address of an account that list_accounts returns; to search every account, call this tool once for each of them. \`query\` uses the syntax of Gmail's search box, for example \`in:inbox is:unread\` for unread inbox mail or \`from:alex subject:invoice\`. A search leaves out Spam and Trash unless the query names them, as \`in:trash\` does. \`limit\` is the largest number of threads, ${DEFAULT_LIMIT} by default and ${MAX_LIMIT} at most. When the result has \`next_page\`, send the same call with \`page\` set to that value to get more. Each thread has its ID, the subject of its first message, the sender and date of its last message, a snippet, its number of messages, and whether any message is unread. When the owner sets this tool to ask, it returns a pending approval with a link instead of threads; get_approval returns the threads after the owner approves.`,
     input: Schema.Struct({
       account: Schema.String,
-      query: Schema.NonEmptyString,
+      // Both go into the request's address, so each has a length limit.
+      query: Schema.String.check(Schema.isBetweenLength(1, MAX_QUERY)),
       limit: Schema.optionalKey(
         Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_LIMIT })),
       ),
-      page: Schema.optionalKey(Schema.NonEmptyString),
+      page: Schema.optionalKey(Schema.String.check(Schema.isBetweenLength(1, MAX_PAGE))),
     }),
     expects: {
       account: "a string",
-      query: "a string that is not empty",
+      query: `a string of 1 to ${MAX_QUERY} characters`,
       limit: `a whole number from 1 to ${MAX_LIMIT}`,
       page: "the next_page value of an earlier result",
     },
@@ -159,13 +162,12 @@ export const TOOLS: ReadonlyArray<Tool> = [
       action: "search the mail",
       joiner: "of",
       empty: "This call has no other values. The sentence above is the whole call.",
+      // The page marks every value as the agent's text, so each one is a value of the call.
       values: (args) =>
         Effect.succeed([
           { name: "Query", text: args.query },
-          { name: "Results", text: `Up to ${args.limit ?? DEFAULT_LIMIT} threads` },
-          ...(args.page === undefined
-            ? []
-            : [{ name: "Page", text: "The next page of an earlier search with this query" }]),
+          { name: "Limit", text: String(args.limit ?? DEFAULT_LIMIT) },
+          ...(args.page === undefined ? [] : [{ name: "Page", text: args.page }]),
         ]),
     },
     run: (send, account, args) =>

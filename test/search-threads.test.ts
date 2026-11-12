@@ -1,8 +1,8 @@
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
 import { fixtureOpen } from "./support/accounts";
-import { google, THREAD_LINES, THREAD_LIST, THREADS_URL } from "./support/google";
+import { google, THREAD_LINES, THREAD_LIST, THREADS, THREADS_URL } from "./support/google";
 import { McpClient, rpcResult } from "./support/oauth";
 import {
   callRows,
@@ -73,9 +73,14 @@ it("refuses an input that is not valid, names the field, and asks Gmail nothing"
   const f = await allowed();
   const before = googleTraffic().length;
   for (const [args, message] of [
-    [{}, "The query field must be a string that is not empty."],
-    [{ query: "" }, "The query field must be a string that is not empty."],
-    [{ query: 7 }, "The query field must be a string that is not empty."],
+    [{}, "The query field must be a string of 1 to 2000 characters."],
+    [{ query: "" }, "The query field must be a string of 1 to 2000 characters."],
+    [{ query: 7 }, "The query field must be a string of 1 to 2000 characters."],
+    [{ query: "a".repeat(2001) }, "The query field must be a string of 1 to 2000 characters."],
+    [
+      { query: "a", page: "p".repeat(501) },
+      "The page field must be the next_page value of an earlier result.",
+    ],
     [{ query: "a", limit: 0 }, "The limit field must be a whole number from 1 to 25."],
     [{ query: "a", limit: 26 }, "The limit field must be a whole number from 1 to 25."],
     [{ query: "a", limit: 2.5 }, "The limit field must be a whole number from 1 to 25."],
@@ -164,7 +169,8 @@ it("with ask, searches nothing until the owner approves what the page showed, th
     >;
   };
   const before = googleTraffic().length;
-  const pending = await text(await search(f, { query: "from:kim", limit: 2 }));
+  const query = `from:kim ${"subject:invoice ".repeat(40)}`.trim();
+  const pending = await text(await search(f, { query, limit: 2, page: "0a1b2c3d" }));
   expect(pending.status).toBe("pending");
   expect(googleTraffic().slice(before)).toEqual([]);
   const page = await f.mcp.browser.get(`/approvals/${String(pending.approval)}`);
@@ -178,9 +184,11 @@ it("with ask, searches nothing until the owner approves what the page showed, th
   };
   expect(props.request.account.email).toBe(PERSONAL);
   expect(props.request.tool.action).toBe("search the mail");
+  // Every value that the call sends, in full: the page says that the agent wrote them.
   expect(props.request.values).toEqual([
-    { name: "Query", text: "from:kim" },
-    { name: "Results", text: "Up to 2 threads" },
+    { name: "Query", text: query },
+    { name: "Limit", text: "2" },
+    { name: "Page", text: "0a1b2c3d" },
   ]);
   expect(googleTraffic().slice(before)).toEqual([]);
   const decided = await f.mcp.browser.post(`/approvals/${String(pending.approval)}/approve`, {
@@ -189,7 +197,9 @@ it("with ask, searches nothing until the owner approves what the page showed, th
   expect(
     ((await decided.json()) as { approval: { state: { kind: string } } }).approval.state.kind,
   ).toBe("succeeded");
-  expect(google.threadRequests[0]!.url).toBe(`${THREADS_URL}?q=from%3Akim&maxResults=2`);
+  expect(google.threadRequests[0]!.url).toBe(
+    `${THREADS_URL}?${new URLSearchParams({ q: query, maxResults: "2", pageToken: "0a1b2c3d" })}`,
+  );
   expect(await text(await toolCall(f.mcp, "get_approval", { approval: pending.approval }))).toEqual(
     {
       status: "success",
@@ -220,4 +230,96 @@ it("is listed with its input only for a connection that may search some account"
       required: ["account", "query"],
     },
   });
+});
+
+const manyThreads = (count: number) => {
+  const ids = Array.from(
+    { length: count },
+    (_, i) => `19a1b2c3d4e5f6${String(i).padStart(2, "0")}`,
+  );
+  google.threadListAnswers.push(() =>
+    HttpResponse.json({ threads: ids.map((id) => ({ id, snippet: id })) }),
+  );
+  return ids;
+};
+const oneThread = THREADS[THREAD_LIST.threads[1]!.id];
+
+it("asks Gmail for at most five threads at once and keeps Gmail's order", async () => {
+  const f = await allowed();
+  const ids = manyThreads(12);
+  let inFlight = 0;
+  let most = 0;
+  for (const id of ids)
+    google.threadAnswers.set(id, async () => {
+      most = Math.max(most, ++inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight--;
+      return HttpResponse.json(oneThread);
+    });
+  const result = await rpcResult(await search(f, { query: "a", limit: 12 }));
+  const found = JSON.parse((result.content as Array<{ text: string }>)[0]!.text) as {
+    threads: Array<{ thread: string }>;
+  };
+  expect(found.threads.map((line) => line.thread)).toEqual(ids);
+  expect(most).toBe(5);
+});
+
+it("ends the whole search twenty seconds after the call, with an unknown outcome", async () => {
+  const f = await allowed();
+  const ids = manyThreads(12);
+  // Two rounds of five threads take nine seconds each. The last two never answer.
+  ids.forEach((id, i) =>
+    google.threadAnswers.set(id, (request) =>
+      i < 10
+        ? new Promise<Response>((resolve) =>
+            setTimeout(() => resolve(HttpResponse.json(oneThread)), 9000),
+          )
+        : new Promise<Response>((_resolve, reject) => {
+            request.signal.addEventListener("abort", () => reject(request.signal.reason), {
+              once: true,
+            });
+          }),
+    ),
+  );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    const started = Date.now();
+    let settledAfter: number | null = null;
+    // The answer is a stream, so the call has settled only when its body is read.
+    const call = search(f, { query: "a", limit: 12 })
+      .then(rpcResult)
+      .then((result) => {
+        settledAfter = Date.now() - started;
+        return result;
+      });
+    for (let i = 0; i < 300 && settledAfter === null; i++) await vi.advanceTimersByTimeAsync(100);
+    expect(settledAfter).toBe(20_000);
+    expect(await call).toEqual({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            code: "google_unavailable",
+            message: unavailableMessage(PERSONAL),
+          }),
+        },
+      ],
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+  expect((await callRows()).at(-1)).toMatchObject({ tool: "search_threads", outcome: null });
+});
+
+it("reports a date that Gmail cannot mean as Google's failure", async () => {
+  const f = await allowed();
+  google.threadAnswers.set(THREAD_LIST.threads[0]!.id, () =>
+    HttpResponse.json({ messages: [{ internalDate: "8700000000000000" }] }),
+  );
+  await expectError(
+    await search(f, { query: "a" }),
+    "google_unavailable",
+    unavailableMessage(PERSONAL),
+  );
 });

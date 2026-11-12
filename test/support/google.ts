@@ -60,7 +60,7 @@ const message = (id: string, at: string, from: string, subject: string, labelIds
   historyId: "12345678",
   internalDate: at,
 });
-export const THREADS: Record<string, unknown> = {
+export const THREADS: Record<string, object> = {
   "19a1b2c3d4e5f601": {
     id: "19a1b2c3d4e5f601",
     historyId: "12345678",
