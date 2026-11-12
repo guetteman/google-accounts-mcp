@@ -117,11 +117,13 @@ it.each([
   },
 );
 
-it("renders thread, search and notes previews at 390 and 1280 pixels without overflow", async () => {
+it("renders thread, search, notes and label previews at 390 and 1280 pixels without overflow", async () => {
   for (const name of [
     "approval-waiting-thread",
     "approval-waiting-search",
     "approval-waiting-notes",
+    "approval-waiting-labels",
+    "approval-waiting-labels-many",
   ])
     for (const width of [390, 1280]) {
       const response = renderPage(previews[name]!);
@@ -140,7 +142,7 @@ it("renders thread, search and notes previews at 390 and 1280 pixels without ove
       expect(result.errors).toEqual([]);
       expect(result.overflow).toBe(false);
     }
-  // Six Chromium pages, within the existing browser-test budget.
+  // Ten Chromium pages, within the existing browser-test budget.
 }, 60_000);
 
 it.each([200, 500])(
