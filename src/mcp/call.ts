@@ -1,4 +1,4 @@
-import { createApproval } from "../approvals/store";
+import { createApproval, waitingApproval } from "../approvals/store";
 import { APPROVAL_LIFETIME, CALL_DEADLINE, isoSeconds, type ApprovalId } from "../approvals/model";
 import { pendingAnswer } from "../approvals/result";
 import { sealArguments } from "../approvals/text";
@@ -298,17 +298,37 @@ export async function runCall(
             value = pendingAnswer(ctx.origin, approval, at + APPROVAL_LIFETIME);
           }
         } else {
-          const executed = await executeAccount(
-            ctx,
-            tool,
-            allowed,
-            decoded.value,
-            at + CALL_DEADLINE,
-          );
-          if (executed.kind === "repeat") {
+          const waiting = tool.create
+            ? await Effect.runPromise(
+                waitingApproval(
+                  ctx,
+                  await identityOf(ctx.config.tokenKey, {
+                    connection: ctx.connection.connectionId,
+                    account: allowed.credential.id,
+                    tool: tool.name,
+                    args: { ...decoded.value },
+                    defaults: tool.defaults,
+                  }),
+                  ctx.now(),
+                ),
+              )
+            : null;
+          if (waiting) {
             outcome = "repeat";
-            value = repeatAnswer(executed.repeat, email, tool, decoded.value);
-          } else value = executed.value;
+            value = pendingAnswer(ctx.origin, waiting.id, waiting.expiresAt);
+          } else {
+            const executed = await executeAccount(
+              ctx,
+              tool,
+              allowed,
+              decoded.value,
+              at + CALL_DEADLINE,
+            );
+            if (executed.kind === "repeat") {
+              outcome = "repeat";
+              value = repeatAnswer(executed.repeat, email, tool, decoded.value);
+            } else value = executed.value;
+          }
         }
       }
       result = { content: [{ type: "text", text: JSON.stringify(value) }] };

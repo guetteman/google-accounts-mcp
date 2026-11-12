@@ -341,50 +341,138 @@ it.each(["success", "unknown"])(
   },
 );
 
-it("returns the stored result before a waiting approval across ask, allow, ask, then Approve", async () => {
-  const f = await draftFixture("ask");
-  const id = (await answer(await draftCall(f))).approval as string;
-  await setDraft(f, "allow");
-  expect(await answer(await draftCall(f))).toEqual(ids);
-  await setDraft(f, "ask");
-  expect(await answer(await draftCall(f))).toEqual(repeated(Date.now()));
-  expect(await rows()).toHaveLength(1);
-  expect((await row(id))!.state).toBe("waiting");
-  expect((await approve(f, id)).state.kind).toBe("succeeded");
-  expect(await get(f, id)).toEqual({ status: "success", result: repeated(Date.now()) });
-  expect(google.draftCreates).toHaveLength(1);
-  expect(
-    (await callRows()).filter((row) => row.tool === "create_draft").map((row) => row.outcome),
-  ).toEqual(["repeat", "success", "repeat"]);
-});
-
-it.each(["running", "unknown"])(
-  "finishes an old approval as unknown when its call is already %s",
-  async (state) => {
+it.each(["allow", "ask"] as const)(
+  "keeps the approval waiting after allow and approves once with %s",
+  async (setting) => {
     const f = await draftFixture("ask");
-    const id = (await answer(await draftCall(f))).approval as string;
-    const viewDigest = await digest(f, id);
+    const at = Date.now();
+    const pending = await answer(await draftCall(f));
+    expect(pending.status).toBe("pending");
+    const id = pending.approval as string;
     await setDraft(f, "allow");
+    vi.mocked(Date.now).mockReturnValue(at + 60_000);
+    expect(await answer(await draftCall(f))).toEqual(pending);
+    expect((await callRows()).map((row) => row.outcome)).toEqual(["pending", "repeat"]);
+    expect(google.draftCreates).toEqual([]);
+    expect(await onceRows()).toEqual([]);
+    if (setting === "ask") {
+      await setDraft(f, "ask");
+      expect(await answer(await draftCall(f))).toEqual(pending);
+    }
+    expect(await rows()).toHaveLength(1);
+    expect((await row(id))!.state).toBe("waiting");
+    expect(google.draftCreates).toEqual([]);
+    expect(await onceRows()).toEqual([]);
+
+    expect((await approve(f, id)).state.kind).toBe("succeeded");
+    expect((await row(id))!.outcome).toBe("success");
+    expect(await get(f, id)).toEqual({ status: "success", result: ids });
+    expect((await callRows())[0]!.outcome).toBe("success");
+    expect(await answer(await draftCall(f))).toEqual(repeated(at + 60_000));
+    expect(google.draftCreates).toHaveLength(1);
+    expect(await rows()).toHaveLength(1);
+    expect(
+      (await callRows()).filter((row) => row.tool === "create_draft").map((row) => row.outcome),
+    ).toEqual(
+      setting === "ask"
+        ? ["success", "repeat", "repeat", "repeat"]
+        : ["success", "repeat", "repeat"],
+    );
+  },
+);
+
+it.each(["done", "running", "unknown"])(
+  "finishes an approval after a direct call passed its waiting lookup first (%s)",
+  async (state) => {
+    const f = await draftFixture();
+    const taking = deferred();
+    const released = deferred();
+    const db = observeStatements(env.DB, async (sql) => {
+      if (/^INSERT INTO once\b/.test(sql)) {
+        taking.resolve();
+        await released.promise;
+      }
+    });
     const held = state === "running" ? holdCreate() : null;
     if (state === "unknown")
       google.draftCreateAnswers.push(() => new Response(null, { status: 500 }));
-    const first = draftCall(f);
+    const first = draftCall(f, {}, testEnv({ DB: db }));
     try {
+      await taking.promise;
+      await setDraft(f, "ask");
+      const id = (await answer(await draftCall(f))).approval as string;
+      const viewDigest = await digest(f, id);
+      released.resolve();
       if (held) await held.entered;
+      else if (state === "done") expect(await answer(await first)).toEqual(ids);
       else await expectError(await first, "outcome_unknown", unknownMessage(Date.now() + WINDOW));
       expect((await decided(await post(f, id, "approve", { digest: viewDigest }))).state.kind).toBe(
-        "unknown",
+        state === "done" ? "succeeded" : "unknown",
       );
-      expect(await get(f, id)).toEqual({ status: "unknown" });
-      expect((await row(id))!.outcome).toBe("unknown");
-      expect((await callRows())[0]!.outcome).toBe("repeat");
+      expect(await get(f, id)).toEqual(
+        state === "done"
+          ? { status: "success", result: repeated(Date.now()) }
+          : { status: "unknown" },
+      );
+      const approval = (await row(id))!;
+      expect(approval.outcome).toBe(state === "done" ? "success" : "unknown");
+      expect((await callRows()).find((call) => call.id === approval.call_id)!.outcome).toBe(
+        "repeat",
+      );
       expect(google.draftCreates).toHaveLength(1);
     } finally {
+      released.resolve();
       held?.release();
     }
     if (held) await answer(await first);
   },
 );
+
+it.each(["rejected", "expired"])(
+  "runs directly with allow after its pending approval is %s",
+  async (state) => {
+    const f = await draftFixture("ask");
+    const id = (await answer(await draftCall(f))).approval as string;
+    await setDraft(f, "allow");
+    if (state === "rejected") await post(f, id, "reject").then(decided);
+    else
+      await env.DB.prepare("UPDATE approvals SET expires_at = ? WHERE id = ?")
+        .bind(Date.now(), id)
+        .run();
+    expect(await answer(await draftCall(f))).toEqual(ids);
+    expect(google.draftCreates).toHaveLength(1);
+    expect(await onceRows()).toHaveLength(1);
+    expect(await rows()).toHaveLength(1);
+  },
+);
+
+it("runs duplicate 2 with allow while the original approval still waits", async () => {
+  const f = await draftFixture("ask");
+  const pending = await answer(await draftCall(f));
+  await setDraft(f, "allow");
+  expect(await answer(await draftCall(f, { duplicate: 2 }))).toEqual(ids);
+  expect(await answer(await draftCall(f))).toEqual(pending);
+  expect((await row(pending.approval as string))!.state).toBe("waiting");
+  expect(google.draftCreates).toHaveLength(1);
+  expect(await onceRows()).toHaveLength(1);
+  expect(await rows()).toHaveLength(1);
+});
+
+it("fails closed when the waiting approval lookup fails with allow", async () => {
+  const f = await draftFixture("ask");
+  const id = (await answer(await draftCall(f))).approval as string;
+  await setDraft(f, "allow");
+  const db = statementFailingDb(/^SELECT id, expires_at FROM approvals\b/);
+  await expectError(
+    await draftCall(f, {}, testEnv({ DB: db })),
+    "server_unavailable",
+    "The server could not complete the call. Try again later.",
+  );
+  expect(google.draftCreates).toEqual([]);
+  expect(await onceRows()).toEqual([]);
+  expect((await row(id))!.state).toBe("waiting");
+  expect((await callRows()).map((row) => row.outcome)).toEqual(["pending", "failed"]);
+});
 
 it.each(["rejected", "expired"])(
   "creates a fresh approval after the earlier one is %s",
