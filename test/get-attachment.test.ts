@@ -5,7 +5,7 @@ import type { FramePage } from "../src/pages/page";
 import type { ThreadResult } from "../src/google/thread";
 import { answer } from "./support/approvals";
 import { google, MESSAGES_URL } from "./support/google";
-import { rpcResult, codeClient } from "./support/oauth";
+import { rpcResult, codeClient, clients } from "./support/oauth";
 import {
   callRows,
   googleTraffic,
@@ -275,6 +275,21 @@ it("recognizes an OAuth-verified Claude Code connection without relying on a sta
     expect(resourceBytes(await blocks(await fromReader(f, reader)))).toEqual(CONTENT);
   }
   expect(google.messageRequests).toHaveLength(otherReaders.length);
+});
+
+it("refuses PDF before fetching bytes when a ChatGPT connection states claude-code", async () => {
+  const f = await allowedAttachment(clients[2]);
+  serveAttachment({ ...filePart(), body: { size: CONTENT.length, attachmentId: "chatgpt-pdf" } });
+  google.attachmentAnswers.set("chatgpt-pdf", () =>
+    Response.json({ size: CONTENT.length, data: Buffer.from(CONTENT).toString("base64url") }),
+  );
+  await fileError(
+    await download(f, {}, "claude-code"),
+    "attachment_not_readable",
+    'This client cannot read "menu.pdf" (type "application/pdf"). The owner can open it with Claude Code.',
+  );
+  expect(google.messageRequests).toEqual([`${MESSAGES_URL}/${MESSAGE}?format=full`]);
+  expect(google.attachmentRequests).toEqual([]);
 });
 
 it("treats a non-string client name in an older request as unnamed on a Claude connection", async () => {

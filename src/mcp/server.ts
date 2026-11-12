@@ -41,7 +41,7 @@ export function createMcpServer(ctx: CallContext): Server {
     const client =
       ctx.connection.app === "claude-code"
         ? "claude-code"
-        : typeof stated === "string"
+        : ctx.connection.app === "claude-hosted" && typeof stated === "string"
           ? stated
           : null;
     return runCall({ ...ctx, reader: { client } }, request.params.name, request.params.arguments);
