@@ -56,12 +56,14 @@ export const connectionPage = {
       name: "list_labels" as const,
       group: "Find and read",
       label: "List labels",
+      irreversible: false,
       description: "See the names of this account's Gmail labels.",
     },
     {
       name: "search_threads",
       group: "Find and read",
       label: "Search mail",
+      irreversible: false,
       description:
         "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",
     },
@@ -73,19 +75,33 @@ export const connectionPage = {
 export const groupedConnectionPage = {
   ...connectionPage,
   tools: [
-    { name: "send", label: "Send mail", description: "Send a message.", group: "Send" },
+    {
+      name: "send",
+      label: "Send mail",
+      description: "Send a message.",
+      group: "Send",
+      irreversible: false,
+    },
     {
       name: "list_labels",
       label: "List labels",
       description: "See Gmail labels.",
       group: "Find and read",
+      irreversible: false,
     },
-    { name: "draft", label: "Create draft", description: "Save a draft.", group: "Draft" },
+    {
+      name: "draft",
+      label: "Create draft",
+      description: "Save a draft.",
+      group: "Draft",
+      irreversible: false,
+    },
     {
       name: "search_threads",
       label: "Search mail",
       description: "Find threads.",
       group: "Find and read",
+      irreversible: false,
     },
   ],
   settings: {
@@ -93,5 +109,40 @@ export const groupedConnectionPage = {
     "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:list_labels": "allow",
     "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:search_threads": "ask",
     "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:draft": "ask",
+  },
+} satisfies ConnectionPage;
+
+/**
+ * Tools that no branch has yet: two whose effect cannot be undone and one, the trash, whose effect
+ * can. `delete` stands before `send` in the list, and the page shows Send first.
+ */
+export const irreversibleConnectionPage = {
+  ...groupedConnectionPage,
+  tools: [
+    {
+      name: "delete",
+      label: "Delete permanently",
+      description: "Delete messages for good.",
+      group: "Trash and delete",
+      irreversible: true,
+    },
+    ...groupedConnectionPage.tools.map((tool) => ({ ...tool, irreversible: tool.name === "send" })),
+    {
+      name: "trash",
+      label: "Move to trash",
+      description: "Move messages to the trash.",
+      group: "Trash and delete",
+      irreversible: false,
+    },
+  ],
+  settings: {
+    // Personal: nothing irreversible is Allowed yet, and Send mail waits at Ask first.
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:list_labels": "allow",
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:send": "ask",
+    // Northwind: Send mail is already Allowed, so only Delete permanently is left to name.
+    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:send": "allow",
+    // Projects: both irreversible tools are already Allowed.
+    "cccccccc-cccc-4ccc-8ccc-cccccccccccc:send": "allow",
+    "cccccccc-cccc-4ccc-8ccc-cccccccccccc:delete": "allow",
   },
 } satisfies ConnectionPage;

@@ -80,7 +80,8 @@ type Account = Props["accounts"][number];
 type Tool = Props["tools"][number];
 type Action = "name" | "revoke";
 type ControlState = { value: Setting; phase: "confirmed" | "saving" } | { phase: "unconfirmed" };
-type Pending = { account: Account; wanted: "ask" | "allow"; count: number };
+/** A change that waits for the owner's confirmation: one tool, or every tool when `tool` is null. */
+type Pending = { account: Account; tool: Tool | null; wanted: "ask" | "allow" };
 const values = [
   { value: "deny", label: "Not allowed", icon: BanIcon },
   { value: "ask", label: "Ask first", icon: CircleQuestionMarkIcon },
@@ -94,6 +95,14 @@ const selected: Record<Setting, string> = {
     "data-[state=on]:bg-primary aria-checked:bg-primary aria-checked:text-primary-foreground aria-checked:hover:bg-primary aria-checked:hover:text-primary-foreground",
 };
 const keyOf = (account: Account, tool: Tool) => `${account.id}:${tool.name}`;
+const listOf = (names: readonly string[], className: string) =>
+  new Intl.ListFormat("en", { style: "long", type: "conjunction" })
+    .formatToParts(names)
+    .map((part, i) => (
+      <span key={i} className={part.type === "element" ? className : undefined}>
+        {part.value}
+      </span>
+    ));
 const commonValue = (states: readonly ControlState[]): Setting | "" => {
   const first = states[0];
   if (!first || first.phase === "unconfirmed") return "";
@@ -150,14 +159,7 @@ export function ConnectionPage(props: Props) {
     names.length ? (
       <>
         <span className="font-medium">{connection.name}</span> can see{" "}
-        {new Intl.ListFormat("en", { style: "long", type: "conjunction" })
-          .formatToParts(names)
-          .map((part, i) => (
-            <span key={i} className={part.type === "element" ? "font-medium" : undefined}>
-              {part.value}
-            </span>
-          ))}
-        .
+        {listOf(names, "font-medium")}.
       </>
     ) : (
       <span className="font-medium">{connection.name} can't see any of your accounts yet.</span>
@@ -208,6 +210,10 @@ export function ConnectionPage(props: Props) {
     const uncertainNotice = permissionMessage("unknown", connection.name);
     if (notice) setMessage((current) => (current && notice !== uncertainNotice ? current : notice));
   };
+  const confirm = (change: Pending) => {
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPending(change);
+  };
   const chooseAll = (account: Account, wanted: Setting) => {
     const states = props.tools.map((tool) => controls[keyOf(account, tool)]!);
     if (states.some((state) => state.phase !== "confirmed")) return;
@@ -216,9 +222,21 @@ export function ConnectionPage(props: Props) {
     ).length;
     if (count === 0) return;
     if (wanted === "deny") return void save(account, props.tools, wanted);
-    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setPending({ account, wanted, count });
+    confirm({ account, tool: null, wanted });
   };
+  // What the dialog says comes from the same settings that the save will change.
+  const changing = pending
+    ? groups
+        .flatMap((group) => group.tools)
+        .filter((tool) => {
+          const state = controls[keyOf(pending.account, tool)]!;
+          return state.phase !== "unconfirmed" && state.value !== pending.wanted;
+        })
+    : [];
+  const irreversible =
+    pending?.wanted === "allow"
+      ? changing.filter((tool) => tool.irreversible).map((tool) => tool.label)
+      : [];
   return (
     <OwnerFrame frame={props.frame}>
       <div className="flex flex-col gap-10">
@@ -482,7 +500,11 @@ export function ConnectionPage(props: Props) {
                                             label={`${tool.label} on ${account.name} for ${connection.name}`}
                                             value={state.phase === "unconfirmed" ? "" : state.value}
                                             phase={state.phase}
-                                            choose={(wanted) => void save(account, [tool], wanted)}
+                                            choose={(wanted) =>
+                                              wanted === "allow" && tool.irreversible
+                                                ? confirm({ account, tool, wanted })
+                                                : void save(account, [tool], wanted)
+                                            }
                                           />
                                         </ItemActions>
                                       </Item>
@@ -529,19 +551,47 @@ export function ConnectionPage(props: Props) {
           >
             <AlertDialogHeader className="place-items-start text-left">
               <AlertDialogTitle className="wrap-anywhere">
-                Set all tools on {pending.account.name} to {labelOf(pending.wanted)}?
+                Set {pending.tool?.label ?? "all tools"} on {pending.account.name} to{" "}
+                {labelOf(pending.wanted)}?
               </AlertDialogTitle>
               <AlertDialogDescription className="wrap-anywhere">
-                {pending.wanted === "allow"
-                  ? `${connection.name} will be able to use every tool on ${pending.account.name} without asking you.`
-                  : `${connection.name} will be able to call every tool on ${pending.account.name}, and each call will wait for your approval.`}{" "}
-                This changes {pending.count} {pending.count === 1 ? "tool" : "tools"}.
+                {pending.tool ? (
+                  <>
+                    {connection.name} will be able to use {pending.tool.label} on{" "}
+                    {pending.account.name} without asking you.{" "}
+                    <span className="font-medium text-foreground">
+                      What it does cannot be undone.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {pending.wanted === "ask" ? (
+                      `${connection.name} will be able to call every tool on ${pending.account.name}, and each call will wait for your approval.`
+                    ) : (
+                      <>
+                        {connection.name} will be able to use every tool on {pending.account.name}{" "}
+                        without asking you
+                        {irreversible.length === 1 && ", including "}
+                        {irreversible.length > 1 && ", including these, which cannot be undone: "}
+                        {listOf(irreversible, "font-medium text-foreground")}
+                        {irreversible.length === 1 && ", which cannot be undone"}.
+                      </>
+                    )}{" "}
+                    This changes {changing.length} {changing.length === 1 ? "tool" : "tools"}.
+                  </>
+                )}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
-                onClick={() => void save(pending.account, props.tools, pending.wanted)}
+                onClick={() =>
+                  void save(
+                    pending.account,
+                    pending.tool ? [pending.tool] : props.tools,
+                    pending.wanted,
+                  )
+                }
               >
                 Set to {labelOf(pending.wanted)}
               </AlertDialogAction>

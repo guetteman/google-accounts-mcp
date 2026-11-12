@@ -7,6 +7,7 @@ import { fixture, permission, problemCases } from "./support/permissions";
 import { textOf } from "./support/worker";
 import type { FramePage } from "../src/pages/page";
 import { GROUPS } from "../src/mcp/groups";
+import { TOOLS } from "../src/mcp/tools";
 
 function pageProps(html: string) {
   const json = /<script\b[^>]*id="page-props"[^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];
@@ -173,3 +174,23 @@ it.each(["00000000-0000-4000-8000-000000000000", "not-an-id"])(
       expect(html).not.toContain(value);
   },
 );
+
+it("tells the page which tools cannot be undone, from each tool's own declaration", async () => {
+  const f = await fixture();
+  const tool = TOOLS.find((tool) => tool.name === "search_threads")!;
+  if (tool.kind !== "account") throw new Error("search_threads has a setting");
+  const original = tool.irreversible;
+  tool.irreversible = true;
+  try {
+    const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
+    expect(pageProps(html).tools.map(({ name, irreversible }) => ({ name, irreversible }))).toEqual(
+      [
+        { name: "list_labels", irreversible: false },
+        { name: "search_threads", irreversible: true },
+        { name: "read_thread", irreversible: false },
+      ],
+    );
+  } finally {
+    tool.irreversible = original;
+  }
+});

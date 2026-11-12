@@ -116,12 +116,14 @@ const connectionPreview = (scenario: string): Page => {
         name: "list_labels",
         group: "Find and read",
         label: "List labels",
+        irreversible: false,
         description: "See the names of this account's Gmail labels.",
       },
       {
         name: "search_threads",
         group: "Find and read",
         label: "Search mail",
+        irreversible: false,
         description:
           "Find threads with a Gmail search, and see each thread's subject, sender, date, and snippet.",
       },

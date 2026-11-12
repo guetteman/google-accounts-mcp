@@ -64,6 +64,8 @@ const accountControl = (page: Page, account = "Northwind") =>
   page.getByRole("radiogroup", { name: `All tools on ${account} for Claude`, exact: true });
 const searchControl = (page: Page, account = "Northwind") =>
   page.getByRole("radiogroup", { name: `Search mail on ${account} for Claude`, exact: true });
+const toolControl = (page: Page, tool: string, account = "Personal") =>
+  page.getByRole("radiogroup", { name: `${tool} on ${account} for Claude`, exact: true });
 const panel = (page: Page, account = "Northwind") =>
   page
     .locator('[data-slot="collapsible"]')
@@ -74,10 +76,10 @@ async function selected(group: Locator, value: "Allowed" | "Not allowed" | "Ask 
   for (const name of ["Not allowed", "Ask first", "Allowed"] as const)
     expect(await segment(group, name).getAttribute("aria-checked")).toBe(String(value === name));
 }
-async function open(width = 1280, groups = false) {
+async function open(width = 1280, fixture?: "groups" | "irreversible") {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(1500);
-  await page.goto(groups ? `${origin}/?groups` : origin);
+  await page.goto(fixture ? `${origin}/?${fixture}` : origin);
   // Resolve the real component before testing interaction; never replace it with a fake.
   try {
     await expect
@@ -827,7 +829,7 @@ it("accepts only one account activation before React commits the saving state", 
 });
 
 it("orders groups once per account, preserves tool order and starts only the first account open with several groups", async () => {
-  const page = await open(1280, true);
+  const page = await open(1280, "groups");
   try {
     const first = panel(page, "Personal");
     expect(await first.getByRole("heading", { level: 4 }).allTextContents()).toEqual([
@@ -870,7 +872,7 @@ it("orders groups once per account, preserves tool order and starts only the fir
 });
 
 it("shows ordered group values or counts only for a closed mixed account, and removes them after a lost answer", async () => {
-  const page = await open(390, true);
+  const page = await open(390, "groups");
   try {
     const routes = await pending(page);
     expect(
@@ -908,3 +910,136 @@ it("shows ordered group values or counts only for a closed mixed account, and re
     await page.close();
   }
 });
+
+it.each([
+  {
+    // Send mail is Ask first and Delete permanently is Not allowed: both change. The page shows
+    // Send before Trash and delete, though the tool list has Delete permanently first.
+    account: "Personal",
+    wanted: "Allowed" as const,
+    text: "Claude will be able to use every tool on Personal without asking you, including these, which cannot be undone: Send mail and Delete permanently. This changes 5 tools.",
+  },
+  {
+    // Send mail is already Allowed here, so the click does not change it.
+    account: "Northwind",
+    wanted: "Allowed" as const,
+    text: "Claude will be able to use every tool on Northwind without asking you, including Delete permanently, which cannot be undone. This changes 5 tools.",
+  },
+  {
+    // Both irreversible tools are already Allowed.
+    account: "Projects",
+    wanted: "Allowed" as const,
+    text: "Claude will be able to use every tool on Projects without asking you. This changes 4 tools.",
+  },
+  {
+    account: "Personal",
+    wanted: "Ask first" as const,
+    text: "Claude will be able to call every tool on Personal, and each call will wait for your approval. This changes 5 tools.",
+  },
+])(
+  "names only the irreversible tools that change when all tools on $account go to $wanted",
+  async ({ account, wanted, text }) => {
+    const page = await open(390, "irreversible");
+    try {
+      const routes = await pending(page);
+      await segment(accountControl(page, account), wanted).click();
+      const dialog = page.getByRole("alertdialog", {
+        name: `Set all tools on ${account} to ${wanted}?`,
+        exact: true,
+      });
+      await dialog.waitFor();
+      expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(text);
+      const sent = page.waitForRequest((request) => request.method() === "POST");
+      await dialog.getByRole("button", { name: `Set to ${wanted}`, exact: true }).click();
+      expect(new URLSearchParams((await sent).postData()!).getAll("tool")).toEqual([
+        "delete",
+        "send",
+        "list_labels",
+        "draft",
+        "search_threads",
+        "trash",
+      ]);
+      expect(routes).toHaveLength(1);
+    } finally {
+      await page.close();
+    }
+  },
+);
+
+it("confirms Allowed on one irreversible tool before it sends anything, with focus on Cancel", async () => {
+  const page = await open(390, "irreversible");
+  try {
+    const routes = await pending(page);
+    const group = toolControl(page, "Delete permanently");
+    const opener = segment(group, "Allowed");
+    const dialog = page.getByRole("alertdialog", {
+      name: "Set Delete permanently on Personal to Allowed?",
+      exact: true,
+    });
+    for (const close of ["Cancel", "Escape", "Enter", "confirm"]) {
+      if (close === "Enter") {
+        // A second Enter lands on Cancel, so a repeated key does not confirm.
+        await opener.focus();
+        await page.keyboard.press("Enter");
+      } else await opener.click();
+      await dialog.waitFor();
+      expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
+        "Claude will be able to use Delete permanently on Personal without asking you. What it does cannot be undone.",
+      );
+      const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+      await expect.poll(() => cancel.evaluate((el) => el === document.activeElement)).toBe(true);
+      expect(routes).toEqual([]);
+      if (close === "Cancel") await cancel.click();
+      else if (close === "confirm") {
+        const sent = page.waitForRequest((request) => request.method() === "POST");
+        await dialog.getByRole("button", { name: "Set to Allowed", exact: true }).click();
+        const form = new URLSearchParams((await sent).postData()!);
+        expect(form.getAll("tool")).toEqual(["delete"]);
+        expect(form.get("setting")).toBe("allow");
+        expect(form.get("account")).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      } else await page.keyboard.press(close);
+      await expect.poll(() => page.getByRole("alertdialog").count()).toBe(0);
+      await expect.poll(() => opener.evaluate((el) => el === document.activeElement)).toBe(true);
+      if (close !== "confirm") {
+        await frames(page);
+        expect(routes).toEqual([]);
+        await selected(group, "Not allowed");
+      }
+    }
+    expect(routes).toHaveLength(1);
+    await answer(routes[0]!, "ok");
+    await expect.poll(() => opener.getAttribute("aria-checked")).toBe("true");
+    // Ask first to Allowed is the same grant: Send mail starts at Ask first.
+    await segment(toolControl(page, "Send mail"), "Allowed").click();
+    await page
+      .getByRole("alertdialog", { name: "Set Send mail on Personal to Allowed?", exact: true })
+      .waitFor();
+    await frames(page);
+    expect(routes).toHaveLength(1);
+  } finally {
+    await page.close();
+  }
+});
+
+it.each([
+  { tool: "Delete permanently", name: "delete", wanted: "Ask first" as const, setting: "ask" },
+  { tool: "Send mail", name: "send", wanted: "Not allowed" as const, setting: "deny" },
+  { tool: "Move to trash", name: "trash", wanted: "Allowed" as const, setting: "allow" },
+])(
+  "saves $tool to $wanted at once, without a confirmation",
+  async ({ tool, name, wanted, setting }) => {
+    const page = await open(1280, "irreversible");
+    try {
+      const routes = await pending(page);
+      const sent = page.waitForRequest((request) => request.method() === "POST");
+      await segment(toolControl(page, tool), wanted).click();
+      const form = new URLSearchParams((await sent).postData()!);
+      expect(form.getAll("tool")).toEqual([name]);
+      expect(form.get("setting")).toBe(setting);
+      expect(await page.getByRole("alertdialog").count()).toBe(0);
+      expect(routes).toHaveLength(1);
+    } finally {
+      await page.close();
+    }
+  },
+);
