@@ -365,7 +365,15 @@ it.each(["success", "unknown"])(
       google.draftCreateAnswers.push(() => new Response(null, { status: 500 }));
     expect((await approve(f, id)).state.kind).toBe(outcome === "success" ? "succeeded" : "unknown");
     expect(await get(f, id)).toEqual(
-      outcome === "success" ? { status: "success", result: ids } : { status: "unknown" },
+      outcome === "success"
+        ? { status: "success", result: ids }
+        : {
+            status: "unknown",
+            error: {
+              code: "outcome_unknown",
+              message: unknownMessage(Date.now() + WINDOW),
+            },
+          },
     );
     if (outcome === "success")
       expect(await answer(await draftCall(f))).toEqual(repeated(Date.now()));
