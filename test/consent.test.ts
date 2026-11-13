@@ -272,6 +272,7 @@ describe("owner consent", () => {
     expect(listed.tools).toEqual([
       expect.objectContaining({ name: "list_accounts" }),
       expect.objectContaining({ name: "get_approval" }),
+      expect.objectContaining({ name: "create_upload_link" }),
     ]);
   });
 

@@ -1,11 +1,14 @@
 import { Effect } from "effect";
 import { decodeAllowedAccount } from "../accounts/store";
 import type { Config } from "../config";
-import { putFile } from "../files/store";
+import { getFile, type FileData, putFile } from "../files/store";
 import { WithFile } from "../mcp/file";
 import { WriteUncertain } from "../db";
 import {
   accountRequests,
+  sourceRead,
+  preparation,
+  SEND_RESERVE,
   CALL_DEADLINE,
   executeAccount,
   repeatAnswer,
@@ -62,31 +65,39 @@ async function viewOf(
     approval.result !== null
       ? await openResult(deps.config.tokenKey, approval.id, approval.result)
       : null;
-  let requests: ReturnType<typeof accountRequests> | undefined;
-  const send: Send = (build) =>
-    Effect.gen(function* () {
-      if (!requests) {
-        const row = yield* viewCredential(deps, approval.id, Date.now()).pipe(
-          Effect.mapError(() => new ToolFailure({ code: "server_unavailable" })),
+  const preparing = reads ? preparation(Date.now, reads.deadline - SEND_RESERVE) : null;
+  const requests = new Map<string, ReturnType<typeof accountRequests>>();
+  const sourceIds = new Set(approval.uses.slice(1).map((use) => use.account));
+  let loading: Promise<Awaited<ReturnType<typeof decodeAllowedAccount>>[]> | undefined;
+  const from = (account: string, source = false): Send =>
+    sourceRead((build) =>
+      Effect.gen(function* () {
+        loading ??= Effect.runPromise(viewCredential(deps, approval.id, Date.now())).then((rows) =>
+          Promise.all(rows.map((row) => decodeAllowedAccount(row, deps.config.tokenKey))),
         );
-        if (!row) return yield* Effect.fail(new ToolFailure({ code: "account_not_available" }));
-        const allowed = yield* Effect.tryPromise({
-          try: () => decodeAllowedAccount(row, deps.config.tokenKey),
+        const all = yield* Effect.tryPromise({
+          try: () => loading!,
           catch: () => new ToolFailure({ code: "server_unavailable" }),
         });
-        requests = accountRequests(
-          { ...deps, now: Date.now },
-          allowed,
-          reads!.deadline,
-          reads!.signal,
+        const allowed = all.find(
+          (value) =>
+            value.credential.email === account && (!source || sourceIds.has(value.credential.id)),
         );
-      }
-      return yield* requests.send((token, signal) => {
-        const request = build(token, signal);
-        if (request.method !== "GET") throw new Error("A view may only read");
-        return request;
-      });
-    });
+        if (!allowed) return yield* Effect.fail(new ToolFailure({ code: "account_not_available" }));
+        let request = requests.get(account);
+        if (!request) {
+          request = accountRequests(
+            { ...deps, now: Date.now },
+            allowed,
+            reads!.deadline,
+            reads!.signal,
+          );
+          requests.set(account, request);
+        }
+        return yield* request.send(build);
+      }),
+    );
+  const own = approval.accounts.find((account) => account.id === approval.uses[0]?.account);
   try {
     return await approvalView(
       approval,
@@ -94,10 +105,16 @@ async function viewOf(
       Date.now(),
       changed,
       payload && "error" in payload ? payload.error.message : null,
-      reads ? send : undefined,
+      reads && own
+        ? {
+            send: from(own.email),
+            from: (account) => preparing!.wrap(from(account.trim().toLowerCase(), true)),
+          }
+        : undefined,
     );
   } finally {
-    requests?.close();
+    preparing?.close();
+    for (const request of requests.values()) request.close();
   }
 }
 export const readApprovalPage = (
@@ -171,7 +188,21 @@ export const decide = (
           )
             return readPage(true);
         }
-        if (late()) throw new WriteUncertain();
+        const held = new Map<string, FileData>();
+        if (action === "approve") {
+          await Promise.all(
+            Object.entries(view.files).map(async ([id, ref]) => {
+              const file = await Effect.runPromise(getFile(deps.files, ref));
+              if (!file) throw new WriteUncertain();
+              held.set(id, file);
+            }),
+          );
+        }
+        if (
+          late() ||
+          (action === "approve" && view.tool.create && Date.now() >= deadline - SEND_RESERVE)
+        )
+          throw new WriteUncertain();
         const decision = await Effect.runPromise(
           decideApproval(deps, { id, at: input.arrivedAt, action }),
         );
@@ -200,14 +231,29 @@ export const decide = (
         let payload: StoredPayload | null = null;
         let retainNotice = false;
         try {
-          const allowed = await decodeAllowedAccount(decision.credentials[0], deps.config.tokenKey);
+          const all = await Promise.all(
+            decision.credentials.map((row) => decodeAllowedAccount(row, deps.config.tokenKey)),
+          );
+          const allowed = all.find((value) => value.credential.id === approval.uses[0]!.account);
+          if (!allowed) throw new WriteUncertain();
+          const accounts = {
+            own: allowed,
+            others: new Map(
+              all
+                .filter((value) =>
+                  approval.uses.slice(1).some((use) => use.account === value.credential.id),
+                )
+                .map((value) => [value.credential.email, value]),
+            ),
+          };
           const executed = await executeAccount(
             call,
             view.tool,
-            allowed,
+            accounts,
             args,
             deadline,
             stillApproved(deps, decision.won),
+            held,
             controller.signal,
           );
           if (executed.kind === "ran") {

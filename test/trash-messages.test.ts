@@ -312,7 +312,12 @@ it("permissions are independent and the connection groups all three tools under 
   expect(requests.slice(before)).toEqual([]);
   const names = async () =>
     ((await rpcResult(await f.mcp.call())).tools as { name: string }[]).map((t) => t.name);
-  expect(await names()).toEqual(["list_accounts", "trash_messages", "get_approval"]);
+  expect(await names()).toEqual([
+    "list_accounts",
+    "trash_messages",
+    "get_approval",
+    "create_upload_link",
+  ]);
   await permission(f, f.personal, true, "restore_messages");
   await permission(f, f.personal, true, "delete_messages");
   expect(await names()).toEqual([
@@ -321,6 +326,7 @@ it("permissions are independent and the connection groups all three tools under 
     "restore_messages",
     "delete_messages",
     "get_approval",
+    "create_upload_link",
   ]);
   await permission(f, f.personal, false, "trash_messages");
   expect(await names()).toEqual([
@@ -328,6 +334,7 @@ it("permissions are independent and the connection groups all three tools under 
     "restore_messages",
     "delete_messages",
     "get_approval",
+    "create_upload_link",
   ]);
   for (const op of operations) {
     const response = await f.mcp.browser.post(`/connections/${f.connection.id}/permissions`, {
@@ -343,6 +350,7 @@ it("permissions are independent and the connection groups all three tools under 
     "restore_messages",
     "delete_messages",
     "get_approval",
+    "create_upload_link",
   ]);
   const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
   const text = textOf(html);

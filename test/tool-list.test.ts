@@ -34,6 +34,12 @@ const plainTools = [
     },
     annotations: { readOnlyHint: true },
   },
+  {
+    name: "create_upload_link",
+    description: expect.stringContaining("Only that answer gives the ID."),
+    inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
 ];
 const labelsTool = {
   name: "list_labels",
@@ -67,6 +73,7 @@ it("lists an allowed or ask-first tool in registry order, and removes it when de
     plainTools[0],
     labelsTool,
     plainTools[1],
+    plainTools[2],
   ]);
   const response = await f.mcp.browser.post(`/connections/${f.connection.id}/permissions`, {
     account: f.personal.id,
@@ -79,6 +86,7 @@ it("lists an allowed or ask-first tool in registry order, and removes it when de
     plainTools[0],
     labelsTool,
     plainTools[1],
+    plainTools[2],
   ]);
   await permission(f, f.personal, false);
   expect((await rpcResult(await f.mcp.call())).tools).toEqual(plainTools);
@@ -87,7 +95,12 @@ it("lists an allowed or ask-first tool in registry order, and removes it when de
 it("lists a tool whose only permitted account needs reconnecting", async () => {
   const f = await fixture(problemCases.find((item) => item.status === "needs_reconnect")!.row);
   await permission(f);
-  expect(await names(f.mcp)).toEqual(["list_accounts", "list_labels", "get_approval"]);
+  expect(await names(f.mcp)).toEqual([
+    "list_accounts",
+    "list_labels",
+    "get_approval",
+    "create_upload_link",
+  ]);
 });
 
 it("publishes the expected annotations for every tool", async () => {
@@ -142,6 +155,10 @@ it("publishes the expected annotations for every tool", async () => {
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     { name: "get_approval", annotations: { readOnlyHint: true } },
+    {
+      name: "create_upload_link",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
   ]);
 });
 
@@ -157,7 +174,7 @@ it("removes a tool when the owner removes its only permitted account", async () 
 
 it("an unlisted tool still uses the existing call checks", async () => {
   const f = await fixture();
-  expect(await names(f.mcp)).toEqual(["list_accounts", "get_approval"]);
+  expect(await names(f.mcp)).toEqual(["list_accounts", "get_approval", "create_upload_link"]);
   await expectError(
     await toolCall(f.mcp, "list_labels", { account: 42 }),
     "invalid_arguments",
@@ -178,7 +195,12 @@ it("a permission changes only its connection's list", async () => {
   const f = await fixture();
   const other = await new McpClient().connect("Other laptop");
   await permission(f);
-  expect(await names(f.mcp)).toEqual(["list_accounts", "list_labels", "get_approval"]);
+  expect(await names(f.mcp)).toEqual([
+    "list_accounts",
+    "list_labels",
+    "get_approval",
+    "create_upload_link",
+  ]);
   expect((await rpcResult(await other.call())).tools).toEqual(plainTools);
   await permission(f, f.personal, false);
   expect((await rpcResult(await other.call())).tools).toEqual(plainTools);
@@ -213,7 +235,12 @@ it("keeps a tool out of the list of a connection that holds another stored tool 
   await env.DB.prepare("INSERT INTO permissions (connection_id, account_id, tool) VALUES (?, ?, ?)")
     .bind(otherConnection.id, f.personal.id, "another_tool")
     .run();
-  expect(await names(f.mcp)).toEqual(["list_accounts", "list_labels", "get_approval"]);
+  expect(await names(f.mcp)).toEqual([
+    "list_accounts",
+    "list_labels",
+    "get_approval",
+    "create_upload_link",
+  ]);
   expect((await rpcResult(await other.call())).tools).toEqual(plainTools);
 });
 
@@ -233,7 +260,7 @@ it("returns the same list in revision 2026-07-28, which clients that listen spea
       { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list" },
     ),
   );
-  expect(listed.tools).toEqual([plainTools[0], labelsTool, plainTools[1]]);
+  expect(listed.tools).toEqual([plainTools[0], labelsTool, plainTools[1], plainTools[2]]);
 });
 
 it("advertises closed argument objects for tools that refuse extra fields", async () => {

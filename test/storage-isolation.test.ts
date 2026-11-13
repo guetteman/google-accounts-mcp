@@ -1,6 +1,11 @@
+import { NOW } from "./support/accounts";
+import { google } from "./support/google";
+import { network } from "./support/network";
+import { attaching, upload, attachCall } from "./support/uploads";
+import { expectError } from "./support/permissions";
 import { abortAllDurableObjects } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { resetBindings } from "./support/reset";
 
 it("resets D1 and KV whose instances have been evicted, including the migration state", async () => {
@@ -33,5 +38,31 @@ describe("file storage isolation after eviction", { concurrent: false, shuffle: 
 
   it("does not retain the file stored by the previous test", async () => {
     expect(await env.FILES_KV.get("file:isolation-probe", "arrayBuffer")).toBeNull();
+  });
+});
+
+describe("upload storage isolation after eviction", { concurrent: false, shuffle: false }, () => {
+  let uploadId: string;
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    google.reset();
+    network.use(...google.handlers());
+  });
+  it("leaves an unused uploaded file before evicting storage", async () => {
+    const f = await attaching();
+    uploadId = (await upload(f)).upload;
+    expect((await env.DB.prepare("SELECT id FROM uploads").all()).results).toHaveLength(1);
+    expect((await env.FILES_KV.list()).keys).toHaveLength(1);
+    await abortAllDurableObjects();
+  });
+  it("retains neither the upload row nor its bytes in the next test", async () => {
+    expect((await env.DB.prepare("SELECT * FROM uploads").all()).results).toEqual([]);
+    expect((await env.FILES_KV.list()).keys).toEqual([]);
+    const f = await attaching();
+    await expectError(
+      await attachCall(f, [{ upload: uploadId }]),
+      "upload_not_available",
+      `No upload "${uploadId}" is available to this connection. An upload works once, in the connection that asked for its link, before it expires. Call create_upload_link and send the file again.`,
+    );
   });
 });

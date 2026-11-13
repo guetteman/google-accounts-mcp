@@ -1,9 +1,10 @@
-import { ToolFailure } from "../mcp/failures";
+import type { UploadRef } from "../uploads/store";
+import { uploadNotReady, ToolFailure } from "../mcp/failures";
 import { Effect } from "effect";
 import { APP_LABELS } from "../connections/model";
 import { openArguments } from "./text";
 import type { TokenKey } from "../config";
-import { decodeArgs, TOOLS, type DecodedArgs, type Send } from "../mcp/tools";
+import { decodeArgs, TOOLS, type DecodedArgs, type Send, type Sources } from "../mcp/tools";
 import type { Approval, ApprovalPageProps, ApprovalRequest } from "./model";
 
 // Property order is explicit, including each value in the order the owner reads it.
@@ -25,6 +26,7 @@ export const viewDigest = async (request: ApprovalRequest) => {
       joiner: request.tool.joiner,
       empty: request.tool.empty,
     },
+    ...((request.also?.length ?? 0) > 0 ? { also: request.also } : {}),
     notes: request.notes.map(({ text, warning }) => ({ text, warning })),
     values: request.values.map(({ name, text, from }) => ({ name, text, from })),
   });
@@ -43,11 +45,11 @@ export async function approvalView(
   now: number,
   changed = false,
   outcomeMessage: string | null = null,
-  send?: Send,
+  reads?: { send: Send; from: (account: string) => Send },
 ) {
   const tool = TOOLS.find((t) => t.kind === "account" && t.name === row.tool);
   if (!tool || tool.kind !== "account") throw new Error("Unknown approval tool");
-  const account = row.accounts[0];
+  const account = row.accounts.find((account) => account.id === row.uses[0]?.account);
   if (!account) throw new Error("Missing approval account");
   const request: ApprovalRequest = {
     connection: {
@@ -62,28 +64,56 @@ export async function approvalView(
       joiner: tool.view.joiner,
       empty: tool.view.empty,
     },
+    ...(row.uses.length > 1
+      ? {
+          also: row.uses.slice(1).map((use) => {
+            const account = row.accounts.find((account) => account.id === use.account);
+            const other = TOOLS.find((tool) => tool.kind === "account" && tool.name === use.tool);
+            if (!account || !other || other.kind !== "account")
+              throw new Error("Missing approval setting");
+            return {
+              label: other.label,
+              action: other.view.action,
+              joiner: other.view.joiner,
+              name: account.name,
+              email: account.email,
+              workspace: account.hd !== null,
+            };
+          }),
+        }
+      : {}),
     notes: [],
     values: [],
   };
   let decoded: DecodedArgs | null = null;
   let digest: string | null = null;
-  if (row.state === "waiting" && row.uses.length === 1) {
+  let files: Readonly<Record<string, UploadRef>> = {};
+  if (row.state === "waiting") {
     try {
       const opened = await openArguments(key, row.id, row.arguments);
       if (opened !== null) {
-        const parsed = decodeArgs(tool, opened);
+        const parsed = decodeArgs(tool, opened.args);
         if (parsed.ok) {
           const notes = tool.view.notes?.(parsed.value) ?? [];
-          const values = await Effect.runPromise(
-            tool.view.values(
-              parsed.value,
-              send ?? (() => Effect.fail(new ToolFailure({ code: "google_unavailable" }))),
+          const unavailable: Send = () =>
+            Effect.fail(new ToolFailure({ code: "google_unavailable" }));
+          const sources: Sources = {
+            from: reads?.from ?? (() => unavailable),
+            uploads: new Map(
+              Object.entries(opened.files).map(([id, ref]) => [
+                id,
+                { ...ref, bytes: Effect.fail(uploadNotReady()) },
+              ]),
             ),
+          };
+          const values = await Effect.runPromise(
+            tool.view.values(parsed.value, reads?.send ?? unavailable, sources),
           );
           digest = await viewDigest({ ...request, notes, values });
           request.notes = notes;
           request.values = values;
           decoded = parsed.value;
+          files = opened.files;
         }
       }
     } catch {
@@ -128,5 +158,5 @@ export async function approvalView(
       decidedOn: "decidedAt" in row ? dated(row.decidedAt) : null,
     },
   };
-  return { page, tool, decoded };
+  return { page, tool, decoded, files };
 }

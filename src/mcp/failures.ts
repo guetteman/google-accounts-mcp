@@ -5,6 +5,16 @@ import { WAITING_LIMIT } from "../approvals/model";
 import type { ConnectionId } from "../connections/model";
 import type { ToolAnnotations } from "./tools";
 export const failures = {
+  upload_not_available: {
+    outcome: "refused",
+    message: (id: string) =>
+      `No upload "${id}" is available to this connection. An upload works once, in the connection that asked for its link, before it expires. Call create_upload_link and send the file again.`,
+  },
+  upload_not_ready: {
+    outcome: "failed",
+    message: () =>
+      "The server cannot read the uploaded file yet. Call again with the same arguments in one minute.",
+  },
   approval_not_available: {
     outcome: "refused",
     message: () => "This approval is not available to this connection.",
@@ -106,7 +116,11 @@ export const notReadable = (file: FileInfo): ToolFailure =>
     code: "attachment_not_readable",
     file: { filename: file.filename, type: file.type, size: file.size },
   });
+export const uploadNotAvailable = (id: string): ToolFailure =>
+  new ToolFailure({ code: "upload_not_available", about: { input: id, email: "" } });
+export const uploadNotReady = (): ToolFailure => new ToolFailure({ code: "upload_not_ready" });
 type FailureData = {
+  about?: { input: string; email: string; tool?: string };
   unknown?: boolean;
   /** The once row was released; do not classify this as an unknown call. */
   released?: true;
@@ -169,6 +183,7 @@ export function classify(
 ): { audit: Outcome | null; error: { code: keyof typeof failures; message: string } | null } {
   const failure =
     error instanceof ToolFailure ? error : new ToolFailure({ code: "server_unavailable" });
+  text = { ...text, ...failure.about };
   const entry = failures[failure.code];
   const unknown =
     !failure.released &&

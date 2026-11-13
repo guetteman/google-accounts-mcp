@@ -208,7 +208,7 @@ it("refuses to show or approve stored arguments that no longer match the tool sc
   expect(google.labelRequests).toEqual([]);
 });
 
-it("refuses a multi-account view and Approve while keeping Reject available", async () => {
+it("shows every setting in a multi-account view and requires its digest before Approve", async () => {
   const f = await fixture();
   await setting(f, "ask");
   await setting(f, "ask", f.northwind);
@@ -222,9 +222,13 @@ it("refuses a multi-account view and Approve while keeping Reject available", as
       id,
     )
     .run();
-  expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: false, digest: null });
+  expect((await page(f, id)).state).toMatchObject({
+    kind: "waiting",
+    shown: true,
+    digest: expect.any(String),
+  });
   const html = await (await f.mcp.browser.get(`/approvals/${id}`)).text();
-  expect(html).not.toContain(">Approve</button>");
+  expect(html).toContain(">Approve</button>");
   expect(html).toContain(">Reject</button>");
   await post(f, id, "approve");
   expect((await row(id))!.state).toBe("waiting");

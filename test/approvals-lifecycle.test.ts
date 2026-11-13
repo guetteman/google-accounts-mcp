@@ -192,7 +192,7 @@ it("stores encrypted results with a different purpose and never stores them in t
   const columns = (
     await env.DB.prepare("PRAGMA table_info(calls)").all<{ name: string }>()
   ).results.map((row) => row.name);
-  expect(columns).toEqual(["id", "connection_id", "account_id", "tool", "at", "outcome"]);
+  expect(columns).toEqual(["id", "connection_id", "account_id", "tool", "at", "outcome", "also"]);
   expect(JSON.stringify(await callRows())).not.toContain("Receipts");
 });
 it("returns failed as a non-error status with the normal tool error and audit outcome", async () => {

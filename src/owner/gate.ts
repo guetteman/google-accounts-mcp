@@ -14,6 +14,14 @@ type Fetch = (
 
 function refuse(request: Request, page: Page): Response {
   const path = new URL(request.url).pathname;
+  if (path.startsWith("/uploads/"))
+    return Response.json(
+      {
+        code: "server_unavailable",
+        message: "The server is unavailable. The owner must check its setup.",
+      },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
   if (path === "/mcp") return new Response("Service unavailable", { status: 503 });
   if (path.startsWith("/oauth/") || path.startsWith("/.well-known/")) {
     return Response.json({ error: "temporarily_unavailable" }, { status: 503 });

@@ -392,8 +392,11 @@ it("announces each tool's annotations, duplicate schema, and the exact repeating
     "read_thread",
     "create_draft",
     "get_approval",
+    "create_upload_link",
   ]);
-  for (const tool of tools.filter((tool) => tool.name !== "create_draft"))
+  for (const tool of tools.filter(
+    (tool) => !["create_draft", "create_upload_link"].includes(tool.name),
+  ))
     expect(tool.annotations).toEqual({ readOnlyHint: true });
   const draft = tools.find((tool) => tool.name === "create_draft")!;
   expect(draft.annotations).toEqual({
@@ -451,7 +454,7 @@ it.each(["allow", "ask"] as const)(
   async (setting) => {
     const f = await draftFixture(setting);
     const before = googleTraffic().length;
-    for (const field of ["attachments", "constructor"])
+    for (const field of ["html", "constructor"])
       await expectError(
         await draftCall(f, { [field]: ["must not be silently discarded"] }),
         "invalid_arguments",

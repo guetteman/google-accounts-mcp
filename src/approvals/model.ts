@@ -65,6 +65,14 @@ export interface ApprovalRequest {
   connection: { id: string; name: string; app: string };
   account: { name: string; email: string; workspace: boolean };
   tool: { label: string; action: string; joiner: string; empty: string };
+  also?: ReadonlyArray<{
+    label: string;
+    action: string;
+    joiner: string;
+    name: string;
+    email: string;
+    workspace: boolean;
+  }>;
   notes: ReadonlyArray<ViewNote>;
   values: ReadonlyArray<ViewValue>;
 }
