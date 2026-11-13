@@ -159,10 +159,9 @@ function recordsStatement(db: D1Database, query: ActivityQuery) {
 
 const OtherAccounts = Schema.Array(Schema.Struct({ account: Schema.String, tool: Schema.String }));
 const decodeAlso = Schema.decodeUnknownSync(OtherAccounts);
-const toolOf = (name: string) => {
+const toolOf = (name: string): NonNullable<ActivityRecord["tool"]> => {
   const tool = TOOLS.find((tool) => tool.name === name);
-  if (!tool) throw new Error("Unknown recorded tool");
-  return { name: tool.name, label: tool.label, kind: tool.kind };
+  return { name, label: tool?.label ?? name, kind: tool?.kind ?? "account" };
 };
 const required = <T>(value: T | undefined): T => {
   if (value === undefined) throw new Error("Missing activity name");

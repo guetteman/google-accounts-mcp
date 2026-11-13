@@ -33,7 +33,7 @@ it("opens records in place with their stored details and navigates to an account
   const rejected = await record(ended.id, removed.id, { outcome: "rejected" });
   await approval(rejected, ended.id, "rejected");
   await record(f.connection.id, null, { tool: "list_accounts" });
-  await record(f.connection.id, null, { tool: "read_thread", outcome: "refused" });
+  await record(f.connection.id, null, { tool: "retired_read_mail", outcome: "refused" });
   await record(f.connection.id, null, { tool: null, outcome: "refused" });
   const initial = await f.browser.get("/activity");
   const filteredPath = `/activity?account=${source.id}`;
@@ -70,6 +70,7 @@ it("opens records in place with their stored details and navigates to an account
   expect(result.initialRows).toBe(5);
   expect(result.details[0]).toContain("The agent called a tool that this server does not have.");
   expect(result.details[1]).toContain("None. The call named no connected account.");
+  expect(result.details[1]!.match(/retired_read_mail/g)).toHaveLength(2);
   expect(result.details[2]).toContain("None. This tool acts on no account.");
   expect(result.details[2]).toContain("list_accounts");
   expect(result.details[3]).toContain("You removed this account on Nov 8.");

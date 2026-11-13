@@ -179,6 +179,24 @@ it("shows stored times in UTC, other accounts, absent accounts/tools, and every 
   expect(later[1]!.time.short).toBe("Nov 9, 23:59");
 });
 
+it("keeps a retired tool's stored name readable without hiding the other records", async () => {
+  const f = await activityFixture();
+  await record(f.connection.id, f.account.id);
+  await record(f.connection.id, null, { tool: "retired_read_mail", outcome: "refused" });
+  const response = await f.browser.get("/activity");
+  expect(response.status).toBe(200);
+  const html = await response.text();
+  const records = activityProps(html).load.records;
+  expect(records.map((r) => r.id)).toEqual([2, 1]);
+  expect(records[0]!.tool).toEqual({
+    name: "retired_read_mail",
+    label: "retired_read_mail",
+    kind: "account",
+  });
+  expect(textOf(html)).toContain("retired_read_mail");
+  expect(textOf(html)).toContain("No account");
+});
+
 it("links only pending records, keeps expired pending links and reads each approval's decision", async () => {
   const f = await activityFixture();
   const outcomes = [
