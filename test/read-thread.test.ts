@@ -330,7 +330,9 @@ it.each([400, 404])(
       "not_found",
       `No thread "${THREAD}" exists in ${PERSONAL}. A thread ID works only in the account that returned it.`,
     );
-    expect((await callRows()).at(-1)?.outcome).toBe("refused");
+    const record = (await callRows()).at(-1)!; // callRows reads SELECT *.
+    expect(record).toMatchObject({ outcome: "refused", reason: "not_found" });
+    expect(JSON.stringify(record)).not.toContain(THREAD);
   },
 );
 
@@ -356,7 +358,7 @@ it.each([
         connection: parseConnectionId("aaaaaaaa-aaaa-4aaa-8aaa-000000000001")!,
       },
     ),
-  ).toEqual({ audit: "refused", error: { code: "not_found", message } });
+  ).toEqual({ audit: "refused", reason: "not_found", error: { code: "not_found", message } });
 });
 
 it("rejects invalid arguments before Gmail, and maps other statuses and malformed messages to google_unavailable", async () => {

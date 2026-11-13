@@ -47,7 +47,11 @@ it.each<{
         annotations,
       },
     ),
-  ).toEqual({ audit: unknown ? null : "failed", error: { code: "google_unavailable", message } });
+  ).toEqual({
+    audit: unknown ? null : "failed",
+    reason: unknown ? null : "google_unavailable",
+    error: { code: "google_unavailable", message },
+  });
 });
 
 it.each([
@@ -106,7 +110,7 @@ it.each([
               connection: parseConnectionId("aaaaaaaa-aaaa-4aaa-8aaa-000000000001")!,
             },
           ),
-        ).toEqual({ audit, error: { code, message: expected } });
+        ).toEqual({ audit, reason: code, error: { code, message: expected } });
       }
     }
   },
@@ -140,5 +144,9 @@ it.each([
         connection: parseConnectionId("aaaaaaaa-aaaa-4aaa-8aaa-000000000001")!,
       },
     ),
-  ).toEqual({ audit: "refused", error: { code: "message_too_large", message } });
+  ).toEqual({
+    audit: "refused",
+    reason: "message_too_large",
+    error: { code: "message_too_large", message },
+  });
 });

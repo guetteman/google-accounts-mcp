@@ -6,7 +6,7 @@ import { seedAccount } from "./support/accounts";
 import { NOW, seedConnection } from "./support/connections";
 import { ORIGIN } from "./support/worker";
 
-it("opens records in place with their stored details and navigates to an account filter in Chromium", async () => {
+it("shows reasons before opening records in place and navigates to an account filter in Chromium", async () => {
   const f = await activityFixture();
   const source = await seedAccount({ name: "Northwind", email: "alex@northwind.example" });
   const removed = await seedAccount({
@@ -22,8 +22,12 @@ it("opens records in place with their stored details and navigates to an account
     state: "revoked",
     revoked_at: NOW - 86400000,
   });
+  const ownerEnded = await record(f.connection.id, f.account.id, { outcome: "refused" });
+  await approval(ownerEnded, f.connection.id, "refused", NOW + 3600000, "tool");
   const copied = await record(f.connection.id, f.account.id, {
     tool: "send_message",
+    outcome: "failed",
+    reason: "account_needs_reconnect",
     also: [
       { account: source.id, tool: "get_attachment" },
       { account: removed.id, tool: "get_attachment" },
@@ -33,7 +37,11 @@ it("opens records in place with their stored details and navigates to an account
   const rejected = await record(ended.id, removed.id, { outcome: "rejected" });
   await approval(rejected, ended.id, "rejected");
   await record(f.connection.id, null, { tool: "list_accounts" });
-  await record(f.connection.id, null, { tool: "retired_read_mail", outcome: "refused" });
+  await record(f.connection.id, null, {
+    tool: "retired_read_mail",
+    outcome: "refused",
+    reason: "tool_not_allowed",
+  });
   await record(f.connection.id, null, { tool: null, outcome: "refused" });
   const initial = await f.browser.get("/activity");
   const filteredPath = `/activity?account=${source.id}`;
@@ -57,6 +65,7 @@ it("opens records in place with their stored details and navigates to an account
     clientLoads: number;
     initialRows: number;
     details: string[];
+    reasons: string[];
     urls: string[];
     filteredUrl: string;
     filteredRows: number;
@@ -67,7 +76,12 @@ it("opens records in place with their stored details and navigates to an account
   }>();
   expect(result.errors).toEqual([]);
   expect(result.clientLoads).toBe(2);
-  expect(result.initialRows).toBe(5);
+  expect(result.initialRows).toBe(6);
+  expect(result.reasons).toEqual([
+    "Tool not allowed",
+    "Account needs reconnect",
+    "You set a tool to Not allowed while it waited",
+  ]);
   expect(result.details[0]).toContain("The agent called a tool that this server does not have.");
   expect(result.details[1]).toContain("None. The call named no connected account.");
   expect(result.details[1]!.match(/retired_read_mail/g)).toHaveLength(2);
@@ -83,7 +97,7 @@ it("opens records in place with their stored details and navigates to an account
   expect(result.details[4]).toContain("Claude Code");
   expect(result.details[4]).toContain("Sat, Nov 9, 2030 at 12:00 UTC");
   expect(result.details[4]).toContain("You approved it on Sat, Nov 9, 2030 at 11:59 UTC");
-  expect(result.urls).toEqual(Array(5).fill(`${ORIGIN}/activity`));
+  expect(result.urls).toEqual(Array(6).fill(`${ORIGIN}/activity`));
   expect(result.filteredUrl).toBe(`${ORIGIN}${filteredPath}`);
   expect(result.filteredRows).toBe(1);
   expect(result.topAfter).toBe(result.topBefore);

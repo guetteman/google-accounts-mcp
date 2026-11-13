@@ -308,6 +308,10 @@ it.each(["b", "<x@example.com>"])(
       "invalid_arguments",
       "The arguments are too large. The limit is 256 KB.",
     );
+    expect((await callRows()).at(-1)).toMatchObject({
+      outcome: "refused",
+      reason: "invalid_arguments",
+    });
     expect(await rows()).toEqual([]);
     expect(await onceRows()).toEqual([]);
     expect(google.draftCreates).toEqual([]);

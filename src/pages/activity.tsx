@@ -594,6 +594,9 @@ function Record({ record: r }: { readonly record: ActivityRecord }) {
           </Button>
         </CollapsibleTrigger>
       </div>
+      {r.reason !== null && (
+        <p className="-mt-2 pb-3 pl-24 text-xs text-muted-foreground md:pl-27">{r.reason}</p>
+      )}
       <CollapsibleContent>
         <Details record={r} />
       </CollapsibleContent>

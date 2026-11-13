@@ -4,6 +4,7 @@ import type { CallId, Outcome } from "../calls/store";
 import { APP_LABELS, type App, type ConnectionId, type ConnectionView } from "../connections/model";
 import { Unavailable } from "../db";
 import { TOOLS } from "../mcp/tools";
+import { reasonLabel } from "../mcp/failures";
 import type { Owner } from "../owner/owner";
 
 export type ActivityFilter =
@@ -36,6 +37,7 @@ export interface ActivityRecord {
     readonly kind: "plain" | "account";
   } | null;
   readonly outcome: Outcome | "unknown";
+  readonly reason: string | null;
   readonly also: ReadonlyArray<{
     readonly account: ActivityAccount;
     readonly tool: { readonly name: string; readonly label: string };
@@ -81,11 +83,19 @@ interface RecordRow {
   tool: string | null;
   at: number;
   outcome: Outcome | null;
+  reason: string | null;
   also: string | null;
   approval_id: string | null;
   approval_state: NonNullable<ActivityRecord["approval"]>["state"];
   decided_at: number | null;
+  ended_by: "tool" | "connection" | "account" | null;
 }
+
+const ENDED: Record<"tool" | "connection" | "account", string> = {
+  tool: "You set a tool to Not allowed while it waited",
+  connection: "You revoked the connection while it waited",
+  account: "You removed an account while it waited",
+};
 
 const date = (at: number, now: number) =>
   new Intl.DateTimeFormat("en-US", {
@@ -148,8 +158,8 @@ function recordsStatement(db: D1Database, query: ActivityQuery) {
     where += ` ${where ? "AND" : "WHERE"} ${order} < ?${values.length}`;
   }
   return db
-    .prepare(`SELECT c.id, c.connection_id, c.account_id, c.tool, c.at, c.outcome, c.also,
-    p.id AS approval_id, p.state AS approval_state, p.decided_at
+    .prepare(`SELECT c.id, c.connection_id, c.account_id, c.tool, c.at, c.outcome, c.reason, c.also,
+    p.id AS approval_id, p.state AS approval_state, p.decided_at, p.ended_by
     FROM ${source}
     LEFT JOIN approvals p ON p.call_id = c.id AND p.connection_id = c.connection_id
     ${where}
@@ -214,6 +224,12 @@ export const readActivity = (
           account: row.account_id === null ? null : required(accountById.get(row.account_id)),
           tool: row.tool === null ? null : toolOf(row.tool),
           outcome: row.outcome ?? "unknown",
+          reason:
+            row.reason !== null
+              ? reasonLabel(row.reason)
+              : row.ended_by !== null
+                ? ENDED[row.ended_by]
+                : null,
           also: decodeAlso(row.also === null ? [] : JSON.parse(row.also)).map((use) => ({
             account: required(accountById.get(use.account)),
             tool: toolOf(use.tool),

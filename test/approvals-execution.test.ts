@@ -201,7 +201,7 @@ it("leaves a server failure during execution unknown with no pending audit outco
   const id = await ask(f);
   const db = statementFailingDb(/UPDATE accounts AS a SET access_token/);
   expect((await approve(f, id, testEnv({ DB: db }))).state.kind).toBe("unknown");
-  expect((await callRows())[0]!.outcome).toBeNull();
+  expect((await callRows())[0]).toMatchObject({ outcome: null, reason: null });
   expect(await get(f, id)).toEqual({ status: "unknown" });
 });
 it("leaves the outcome unsettled when its persistence fails and later settles unknown", async () => {
@@ -212,7 +212,7 @@ it("leaves the outcome unsettled when its persistence fails and later settles un
   expect(
     (await post(f, id, "approve", { digest: await digest(f, id) }, testEnv({ DB: db }))).status,
   ).toBe(503);
-  expect((await callRows())[0]!.outcome).toBeNull();
+  expect((await callRows())[0]).toMatchObject({ outcome: null, reason: null });
   expect(await row(id)).toMatchObject({ outcome: null, arguments: null });
   vi.spyOn(Date, "now").mockReturnValue(NOW + 30_000);
   expect(await get(f, id)).toEqual({ status: "unknown" });

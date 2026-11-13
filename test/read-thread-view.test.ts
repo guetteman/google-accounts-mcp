@@ -355,12 +355,17 @@ it("a thread that disappears after metadata gives failed not_found through get_a
   expect(
     (await decided(await post(f, f.id, "approve", { digest: shown.state.digest! }))).state.kind,
   ).toBe("failed");
-  expect(await get(f, f.id)).toEqual({
+  const answer = await get(f, f.id);
+  expect(answer).toEqual({
     status: "failed",
     error: {
       code: "not_found",
       message: `No thread "${THREAD}" exists in ${PERSONAL}. A thread ID works only in the account that returned it.`,
     },
+  });
+  expect((await callRows())[0]).toMatchObject({
+    outcome: "refused",
+    reason: (answer.error as { code: string }).code,
   });
 });
 

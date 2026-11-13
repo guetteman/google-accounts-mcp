@@ -44,7 +44,15 @@ it("looks up calls by record ID in every approval audit statement", async () => 
   await approve(f, id, workerEnv);
   operation = "finish";
   await Effect.runPromise(
-    finishApproval(await context(db), await winningClaim(id), NOW, "success", "success", null),
+    finishApproval(
+      await context(db),
+      await winningClaim(id),
+      NOW,
+      "success",
+      "success",
+      null,
+      null,
+    ),
   );
   const rejected = await ask(f);
   operation = "reject";
