@@ -197,6 +197,42 @@ it("keeps a retired tool's stored name readable without hiding the other records
   expect(textOf(html)).toContain("No account");
 });
 
+it.each([
+  ["refused", "tool_not_allowed", "Tool not allowed"],
+  ["failed", "account_needs_reconnect", "Account needs reconnect"],
+  ["failed", "new_failure", "new_failure"],
+  ["refused", "toString", "toString"],
+  ["failed", "constructor", "constructor"],
+  ["refused", null, null],
+  ["failed", null, null],
+])("shows %s reason %s as %s, and omits an absent reason", async (outcome, reason, label) => {
+  const f = await activityFixture();
+  await record(f.connection.id, f.account.id, { outcome, reason });
+  const response = await f.browser.get("/activity");
+  expect(response.status).toBe(200);
+  const html = await response.text();
+  expect(activityProps(html).load.records[0]!.reason).toBe(label);
+  const records = html.split('aria-label="Records"')[1]!.split("</ul>")[0]!;
+  if (label === null) expect(records).not.toMatch(/<p\b/);
+  else expect(records).toMatch(new RegExp(`<p[^>]*>${label}</p>`));
+});
+
+it.each([
+  ["tool", "You set a tool to Not allowed while it waited"],
+  ["connection", "You revoked the connection while it waited"],
+  ["account", "You removed an account while it waited"],
+] as const)("shows the owner change %s even without a stored reason", async (by, label) => {
+  const f = await activityFixture();
+  const call = await record(f.connection.id, f.account.id, { outcome: "refused" });
+  await approval(call, f.connection.id, "refused", NOW + 3600000, by);
+  const html = await (await f.browser.get("/activity")).text();
+  expect(activityProps(html).load.records[0]!.reason).toBe(label);
+  expect(html).toMatch(new RegExp(`<p[^>]*>${label}</p>`));
+  expect(await env.DB.prepare("SELECT reason FROM calls WHERE id = ?").bind(call).first()).toEqual({
+    reason: null,
+  });
+});
+
 it("links only pending records, keeps expired pending links and reads each approval's decision", async () => {
   const f = await activityFixture();
   const outcomes = [

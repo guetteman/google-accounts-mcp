@@ -119,6 +119,7 @@ export async function hydrateAccounts(input: {
       await page.evaluate(() => document.fonts.ready);
       const records = page.getByRole("list", { name: "Records", exact: true });
       const initialRows = await records.locator(":scope > li").count();
+      const reasons = await records.locator("p:visible").allTextContents();
       const details: string[] = [];
       const triggers = records.getByRole("button", { name: /Show details$/ });
       const urls: string[] = [];
@@ -139,6 +140,7 @@ export async function hydrateAccounts(input: {
       return {
         clientLoads,
         initialRows,
+        reasons,
         details,
         urls,
         filteredUrl: page.url(),

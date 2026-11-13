@@ -22,6 +22,42 @@ import {
 } from "./support/permissions";
 import { testEnv } from "./support/worker";
 
+it("records tool_not_allowed for a denied tool on an account the connection sees", async () => {
+  const f = await fixture();
+  await permission(f);
+  await expectError(
+    await toolCall(f.mcp, "delete_messages", { account: PERSONAL, messages: ["message-1"] }),
+    "tool_not_allowed",
+    /has not allowed delete_messages/,
+  );
+  expect(await callRows()).toEqual([
+    expect.objectContaining({
+      account_id: f.personal.id,
+      outcome: "refused",
+      reason: "tool_not_allowed",
+    }),
+  ]);
+});
+
+it.each([NORTHWIND, "nobody@example.com"])(
+  "records account_not_available and resolves only an existing account for %s",
+  async (account) => {
+    const f = await fixture();
+    await expectError(
+      await toolCall(f.mcp, "list_labels", { account }),
+      "account_not_available",
+      refusedMessage(account),
+    );
+    expect(await callRows()).toEqual([
+      expect.objectContaining({
+        account_id: account === NORTHWIND ? f.northwind.id : null,
+        outcome: "refused",
+        reason: "account_not_available",
+      }),
+    ]);
+  },
+);
+
 it.each(["list_labels", "list_accounts"])(
   "fails closed without a record or Google request when recording %s fails",
   async (name) => {
@@ -82,6 +118,7 @@ it("records each known, refused and failed call with only its resolved account a
     account: string | null;
     tool: string | null;
     outcome: string | null;
+    reason?: string;
     answer?: () => Response;
     problem?: boolean;
     serverFailure?: boolean;
@@ -101,6 +138,7 @@ it("records each known, refused and failed call with only its resolved account a
       account: f.northwind.id,
       tool: "list_labels",
       outcome: "refused",
+      reason: "account_not_available",
     },
     ...["removed@example.com", "nobody@example.com", "Personal"].map((account) => ({
       name: "list_labels",
@@ -108,6 +146,7 @@ it("records each known, refused and failed call with only its resolved account a
       account: null,
       tool: "list_labels",
       outcome: "refused",
+      reason: "account_not_available",
     })),
     ...[undefined, { account: 42 }, { account: [] }, { account: null }].map((args) => ({
       name: "list_labels",
@@ -115,6 +154,7 @@ it("records each known, refused and failed call with only its resolved account a
       account: null,
       tool: "list_labels",
       outcome: "refused",
+      reason: "invalid_arguments",
     })),
     { name: "not_a_tool", account: null, tool: null, outcome: "refused" },
     {
@@ -123,6 +163,7 @@ it("records each known, refused and failed call with only its resolved account a
       account: f.personal.id,
       tool: "list_labels",
       outcome: "failed",
+      reason: "google_unavailable",
       answer: () => new HttpResponse(null, { status: 503 }),
     },
     {
@@ -140,6 +181,7 @@ it("records each known, refused and failed call with only its resolved account a
       tool: "list_labels",
       outcome: "failed",
       problem: true,
+      reason: "account_missing_access",
     },
     {
       name: "list_labels",
@@ -148,6 +190,7 @@ it("records each known, refused and failed call with only its resolved account a
       tool: "list_labels",
       outcome: "failed",
       serverFailure: true,
+      reason: "server_unavailable",
     },
     {
       name: "list_labels",
@@ -156,6 +199,7 @@ it("records each known, refused and failed call with only its resolved account a
       tool: "list_labels",
       outcome: "refused",
       removed: true,
+      reason: "account_not_available",
     },
   ];
   const expected: unknown[] = [];
@@ -207,6 +251,7 @@ it("records each known, refused and failed call with only its resolved account a
           tool: "list_labels",
           at: NOW,
           outcome: null,
+          reason: null,
         });
         return row.answer?.() ?? HttpResponse.json(LABELS_RESPONSE);
       });
@@ -220,6 +265,7 @@ it("records each known, refused and failed call with only its resolved account a
       tool: row.tool,
       at: NOW,
       outcome: row.outcome,
+      reason: row.reason ?? null,
     });
     expect(await callRows()).toEqual(expected);
     restore?.();
@@ -264,6 +310,7 @@ it("records both calls in a legacy JSON-RPC batch", async () => {
       tool: "list_accounts",
       at: NOW,
       outcome: "success",
+      reason: null,
     })),
   );
 });
@@ -283,7 +330,7 @@ it("reports server unavailable and retains an unknown outcome if closing the rec
   );
   expect(google.labelRequests).toHaveLength(1);
   expect(await callRows()).toEqual([
-    expect.objectContaining({ account_id: f.personal.id, outcome: null }),
+    expect.objectContaining({ account_id: f.personal.id, outcome: null, reason: null }),
   ]);
 });
 
@@ -309,7 +356,7 @@ it("does not contact Google when D1 commits the record but loses the batch respo
   );
   expect(injected).toBe(true);
   expect(googleTraffic().slice(before)).toEqual([]);
-  expect(await callRows()).toEqual([expect.objectContaining({ outcome: null })]);
+  expect(await callRows()).toEqual([expect.objectContaining({ outcome: null, reason: null })]);
 });
 
 it.each([

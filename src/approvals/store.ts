@@ -13,6 +13,7 @@ import { permittedWhere } from "../permissions/store";
 import type { ConnectionId } from "../connections/model";
 import type { CallContext } from "../mcp/call";
 import type { CallId, Outcome } from "../calls/store";
+import type { FailureCode } from "../mcp/failures";
 import type { Sealed } from "../seal";
 import {
   APPROVAL_LIFETIME,
@@ -282,9 +283,10 @@ const audit = (
   outcome: string,
   values: (string | number | null)[],
   callGuard = "calls.outcome = 'pending'",
+  reason?: string,
 ) =>
   db
-    .prepare(`UPDATE calls SET outcome = ${outcome} WHERE ${callGuard}
+    .prepare(`UPDATE calls SET outcome = ${outcome}${reason ? `, reason = ${reason}` : ""} WHERE ${callGuard}
     AND (calls.id, calls.connection_id) IN (SELECT call_id, connection_id FROM approvals WHERE ${where})`)
     .bind(...values);
 const expireStatements = (
@@ -408,6 +410,7 @@ export const finishApproval = (
   now: number,
   outcome: "success" | "failed" | "unknown",
   auditOutcome: Outcome | null,
+  reason: FailureCode | null,
   result: Sealed | null,
 ) =>
   Effect.tryPromise({
@@ -439,8 +442,10 @@ export const finishApproval = (
             outcome,
             decision.claim,
             decision.at,
+            reason,
           ],
           "calls.outcome IS NULL",
+          "?8",
         ),
       ]),
     catch: () => new WriteUncertain(),

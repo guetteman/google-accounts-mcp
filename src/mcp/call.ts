@@ -12,7 +12,14 @@ import { createApproval, waitingApproval } from "../approvals/store";
 import { APPROVAL_LIFETIME, CALL_DEADLINE, isoSeconds, type ApprovalId } from "../approvals/model";
 import { pendingAnswer } from "../approvals/result";
 import { sealArguments } from "../approvals/text";
-import { classify, failures, ToolFailure, uploadNotAvailable, uploadNotReady } from "./failures";
+import {
+  classify,
+  failures,
+  ToolFailure,
+  uploadNotAvailable,
+  uploadNotReady,
+  type FailureCode,
+} from "./failures";
 import { Effect, Result } from "effect";
 import {
   ProtocolError,
@@ -402,6 +409,7 @@ export async function runCall(
   let unknownTool = false;
   let result: CallToolResult;
   let outcome: Outcome | null = "success";
+  let reason: FailureCode | null = null;
   try {
     // This measure must precede any decoding or parsing of the arguments.
     const oversized =
@@ -650,12 +658,13 @@ export async function runCall(
       },
     );
     outcome = classified.audit;
+    reason = classified.reason;
     if (classified.audit === "failed") console.error("Tool call failed", classified.error?.code);
     result = { isError: true, content: [{ type: "text", text: JSON.stringify(classified.error) }] };
   }
   if (id && outcome) {
     try {
-      await Effect.runPromise(closeCall(ctx, id, outcome));
+      await Effect.runPromise(closeCall(ctx, id, outcome, reason));
     } catch {
       console.error("Tool call failed", "server_unavailable");
       return {

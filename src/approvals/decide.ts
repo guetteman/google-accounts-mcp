@@ -14,7 +14,7 @@ import {
   repeatAnswer,
   type CallContext,
 } from "../mcp/call";
-import { classify, ToolFailure } from "../mcp/failures";
+import { classify, ToolFailure, type FailureCode } from "../mcp/failures";
 import type { Outcome } from "../calls/store";
 import {
   RUN_DEADLINE,
@@ -215,7 +215,7 @@ export const decide = (
         // A late decision response cannot start Google work after the request's deadline.
         if (late()) {
           await Effect.runPromise(
-            finishApproval(deps, decision.won, Date.now(), "unknown", null, await notice()),
+            finishApproval(deps, decision.won, Date.now(), "unknown", null, null, await notice()),
           );
           return readPage();
         }
@@ -228,6 +228,7 @@ export const decide = (
         };
         let outcome: "success" | "failed" | "unknown" = "success";
         let audit: Outcome | null = "success";
+        let reason: FailureCode | null = null;
         let payload: StoredPayload | null = null;
         let retainNotice = false;
         try {
@@ -288,6 +289,7 @@ export const decide = (
             },
           );
           audit = classified.audit;
+          reason = classified.reason;
           retainNotice = Boolean(
             view.tool.create && error instanceof ToolFailure && error.code === "outcome_unknown",
           );
@@ -300,7 +302,7 @@ export const decide = (
             ? null
             : await sealResult(deps.config.tokenKey, id, payload);
         await Effect.runPromise(
-          finishApproval(deps, decision.won, Date.now(), outcome, audit, result),
+          finishApproval(deps, decision.won, Date.now(), outcome, audit, reason, result),
         );
         return readPage();
       };
@@ -318,7 +320,7 @@ export const decide = (
       } catch (error) {
         if (controller.signal.aborted && winner) {
           await Effect.runPromise(
-            finishApproval(deps, winner, Date.now(), "unknown", null, await notice()),
+            finishApproval(deps, winner, Date.now(), "unknown", null, null, await notice()),
           );
           const page = await readPage();
           if (page && page.state.kind !== "waiting") return page;

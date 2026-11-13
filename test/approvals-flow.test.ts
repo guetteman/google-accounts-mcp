@@ -88,7 +88,7 @@ it("answers pending with a link, contacts no Google host, and records pending", 
     message: PENDING_MESSAGE,
   });
   expect(googleTraffic().slice(before)).toEqual([]);
-  expect((await listLabelsRecord()).outcome).toBe("pending");
+  expect(await listLabelsRecord()).toMatchObject({ outcome: "pending", reason: null });
   const row = await approvalRow(pending.approval);
   expect(row).toMatchObject({ state: "waiting", expires_at: NOW + HOUR, result: null });
   expect(String(row!.arguments)).not.toContain(PERSONAL);
@@ -121,7 +121,7 @@ it("runs the call once when the owner approves, and get_approval returns its res
     status: "success",
     result: { account: PERSONAL, labels },
   });
-  expect((await listLabelsRecord()).outcome).toBe("success");
+  expect(await listLabelsRecord()).toMatchObject({ outcome: "success", reason: null });
   expect((await callRows()).filter((row) => row.tool === "get_approval")).toHaveLength(2);
   expect(await approvalRow(approval)).toMatchObject({
     state: "approved",
@@ -139,7 +139,7 @@ it("runs nothing when the owner rejects", async () => {
   expect((await decide(f.mcp.browser, approval, "reject")).state.kind).toBe("rejected");
   expect(await answer(await getApproval(f.mcp, approval))).toEqual({ status: "rejected" });
   expect(googleTraffic().slice(before)).toEqual([]);
-  expect((await listLabelsRecord()).outcome).toBe("rejected");
+  expect(await listLabelsRecord()).toMatchObject({ outcome: "rejected", reason: null });
   expect(await approvalRow(approval)).toMatchObject({ state: "rejected", arguments: null });
 });
 
@@ -159,7 +159,7 @@ it("runs nothing for an Approve that arrives at expires_at", async () => {
   expect(decided.state.kind).toBe("expired");
   expect(await answer(await getApproval(f.mcp, approval))).toEqual({ status: "expired" });
   expect(googleTraffic().slice(before)).toEqual([]);
-  expect((await listLabelsRecord()).outcome).toBe("expired");
+  expect(await listLabelsRecord()).toMatchObject({ outcome: "expired", reason: null });
 });
 
 it("ends a waiting approval when the owner sets the tool to deny, and it stays ended", async () => {

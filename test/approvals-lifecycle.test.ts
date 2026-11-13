@@ -80,8 +80,8 @@ it.each(["tool", "connection", "account"])(
       [completed, "success"],
     ] as const)
       expect(
-        calls.find((call) => call.id === (id === waiting ? 2 : id === expired ? 3 : 1))!.outcome,
-      ).toBe(outcome);
+        calls.find((call) => call.id === (id === waiting ? 2 : id === expired ? 3 : 1)),
+      ).toMatchObject({ outcome, reason: null });
     expect((await page(f, waiting)).state).toEqual({ kind: "ended", by });
     const html = await (await f.mcp.browser.get(`/approvals/${waiting}`)).text();
     expect(html).not.toContain(">Approve</button>");
@@ -192,7 +192,16 @@ it("stores encrypted results with a different purpose and never stores them in t
   const columns = (
     await env.DB.prepare("PRAGMA table_info(calls)").all<{ name: string }>()
   ).results.map((row) => row.name);
-  expect(columns).toEqual(["id", "connection_id", "account_id", "tool", "at", "outcome", "also"]);
+  expect(columns).toEqual([
+    "id",
+    "connection_id",
+    "account_id",
+    "tool",
+    "at",
+    "outcome",
+    "also",
+    "reason",
+  ]);
   expect(JSON.stringify(await callRows())).not.toContain("Receipts");
 });
 it("returns failed as a non-error status with the normal tool error and audit outcome", async () => {
@@ -203,9 +212,14 @@ it("returns failed as a non-error status with the normal tool error and audit ou
   const decided = await approve(f, id);
   const message = `Google could not complete the request for ${f.personal.email}. Try again later.`;
   expect(decided.state).toEqual({ kind: "failed", message });
-  expect(await get(f, id)).toEqual({
+  const answer = await get(f, id);
+  expect(answer).toEqual({
     status: "failed",
     error: { code: "google_unavailable", message },
+  });
+  expect((await callRows())[0]).toMatchObject({
+    outcome: "failed",
+    reason: (answer.error as { code: string }).code,
   });
   expect((await callRows()).map((call) => call.outcome)).toEqual(["failed", "success"]);
   await setting(f, "deny");
@@ -334,6 +348,7 @@ it("limits the outcome batch to thirty seconds even without a settling read", as
       NOW + 30_000,
       "success",
       "success",
+      null,
       null,
     ),
   );

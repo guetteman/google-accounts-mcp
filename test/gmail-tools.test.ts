@@ -132,6 +132,10 @@ it.each([
     const f = await fixture();
     const before = googleTraffic().length;
     await expectError(await toolCall(f.mcp, "list_labels", args), "invalid_arguments", /account/);
+    expect((await callRows())[0]).toMatchObject({
+      outcome: "refused",
+      reason: "invalid_arguments",
+    });
     expect(googleTraffic().slice(before)).toEqual([]);
   },
 );
@@ -173,7 +177,11 @@ it.each(problemCases)(
       message,
     );
     expect(googleTraffic().slice(before)).toEqual([]);
-    expect((await callRows())[0]).toMatchObject({ account_id: f.personal.id, outcome: "failed" });
+    expect((await callRows())[0]).toMatchObject({
+      account_id: f.personal.id,
+      outcome: "failed",
+      reason: `account_${status}`,
+    });
   },
 );
 
@@ -223,7 +231,7 @@ it("reports a token endpoint failure as Google unavailable", async () => {
     unavailableMessage(PERSONAL),
   );
   expect(google.labelRequests).toEqual([]);
-  expect((await callRows())[0]).toMatchObject({ outcome: "failed" });
+  expect((await callRows())[0]).toMatchObject({ outcome: "failed", reason: "google_unavailable" });
 });
 
 it.each([400, 401, 403, 429, 500, 503])(

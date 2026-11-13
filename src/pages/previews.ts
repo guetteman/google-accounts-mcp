@@ -623,6 +623,7 @@ const activityRecord = (
   return {
     id: id as import("../calls/store").CallId,
     outcome,
+    reason: null,
     tool: definition
       ? { name: definition.name, label: definition.label, kind: definition.kind }
       : null,
@@ -645,8 +646,14 @@ const activityRecords: ReadonlyArray<import("../activity/store").ActivityRecord>
       },
     ],
   },
-  activityRecord(98, "refused", "delete_messages", 1),
-  activityRecord(97, "failed", "search_threads", 2),
+  {
+    ...activityRecord(98, "refused", "delete_messages", 1),
+    reason: "Tool not allowed",
+  },
+  {
+    ...activityRecord(97, "failed", "search_threads", 2),
+    reason: "Account needs reconnect",
+  },
   {
     ...activityRecord(96, "rejected", "trash_messages"),
     approval: {
@@ -664,7 +671,11 @@ const activityRecords: ReadonlyArray<import("../activity/store").ActivityRecord>
   activityRecord(89, "success", "get_approval", -1),
   activityRecord(88, "success", "create_upload_link", -1),
   activityRecord(87, "success", "list_labels", 4, 3),
-  activityRecord(86, "refused", "change_labels", 4, 4),
+  {
+    ...activityRecord(86, "refused", "change_labels", 4, 4),
+    reason: "You set a tool to Not allowed while it waited",
+    approval: { id: approvalBase.id, state: "refused", decidedOn: null },
+  },
   ...Array.from({ length: 10 }, (_, i) =>
     activityRecord(85 - i, "success", "read_thread", i % 4, i % 3),
   ),

@@ -150,7 +150,7 @@ it("does not let a different claim or decision time finish the winner's call", a
     { ...winner, claim: crypto.randomUUID() },
     { ...winner, at: NOW + 1 },
   ]) {
-    await Effect.runPromise(finishApproval(ctx, impostor, NOW + 1000, "unknown", null, null));
+    await Effect.runPromise(finishApproval(ctx, impostor, NOW + 1000, "unknown", null, null, null));
     expect((await row(id))!.outcome).toBeNull();
   }
 });
@@ -180,7 +180,7 @@ it.each(["settle", "decide", "finish", "purge", "cron"])(
     } else if (operation === "decide") await post(f, id, "reject");
     else if (operation === "purge") await setting(f, "deny");
     else if (winner)
-      await Effect.runPromise(finishApproval(ctx, winner, NOW, "success", "success", null));
+      await Effect.runPromise(finishApproval(ctx, winner, NOW, "success", "success", null, null));
     expect((await callRows()).find((call) => call.id === stored.call_id)!.outcome).toBe(
       operation === "finish" ? null : "pending",
     );
@@ -253,7 +253,7 @@ it("requires a decision-issued Won to finish an approval at compile time", async
     claim: crypto.randomUUID(),
   };
   // @ts-expect-error Only decideApproval can issue the private Won brand.
-  const write = finishApproval(ctx, handBuilt, NOW, "success", "success", null);
+  const write = finishApproval(ctx, handBuilt, NOW, "success", "success", null, null);
   expect(Effect.isEffect(write)).toBe(true);
 });
 it("keeps the run deadline inside the outcome window", () => {

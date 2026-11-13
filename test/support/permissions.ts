@@ -101,6 +101,7 @@ export interface CallRow {
   tool: string | null;
   at: number;
   outcome: string | null;
+  reason: string | null;
 }
 export const callRows = async () =>
   (await env.DB.prepare("SELECT * FROM calls ORDER BY id").all<CallRow>()).results;

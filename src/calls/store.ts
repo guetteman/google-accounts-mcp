@@ -4,6 +4,7 @@ import { activeWhere } from "../connections/store";
 import type { OwnerEmail } from "../owner/owner";
 import type { CallContext } from "../mcp/call";
 import type { Tool } from "../mcp/tools";
+import type { FailureCode } from "../mcp/failures";
 export type CallId = number & { readonly __callId: unique symbol };
 export type Outcome =
   | "success"
@@ -42,13 +43,18 @@ export const decodeCallId = (result: D1Result): CallId | null => {
   const id = row && typeof row === "object" && "id" in row ? row.id : null;
   return typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? (id as CallId) : null;
 };
-export const closeCall = (ctx: CallContext, id: CallId, outcome: Outcome) =>
+export const closeCall = (
+  ctx: CallContext,
+  id: CallId,
+  outcome: Outcome,
+  reason: FailureCode | null,
+) =>
   Effect.tryPromise({
     // A reset can reuse a numeric call ID, but never a connection ID.
     try: async () => {
       await ctx.db
-        .prepare("UPDATE calls SET outcome = ?1 WHERE id = ?2 AND connection_id = ?3")
-        .bind(outcome, id, ctx.connection.connectionId)
+        .prepare("UPDATE calls SET outcome = ?1, reason = ?4 WHERE id = ?2 AND connection_id = ?3")
+        .bind(outcome, id, ctx.connection.connectionId, reason)
         .run();
     },
     catch: () => new Unavailable(),

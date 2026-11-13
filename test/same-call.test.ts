@@ -56,6 +56,7 @@ it("returns the first result on a repeat and records repeat without another crea
   expect(await answer(await draftCall(f))).toEqual(repeated(at));
   expect(google.draftCreates).toHaveLength(1);
   expect((await callRows()).map((row) => row.outcome)).toEqual(["success", "repeat"]);
+  expect((await callRows()).map((row) => row.reason)).toEqual([null, null]);
 });
 
 it("creates a deliberate second copy once and rejects duplicate 1", async () => {
@@ -203,6 +204,7 @@ it.each([
   expect((await onceRows())[0]).toMatchObject({ state: "unknown", expires_at: at + WINDOW });
   expect(google.draftCreates).toHaveLength(1);
   expect((await callRows()).map((row) => row.outcome)).toEqual([null, "repeat"]);
+  expect((await callRows()).map((row) => row.reason)).toEqual([null, null]);
   expect((await answer(await draftCall(f, { duplicate: 2 }))).draft).toBe("draft-2");
 });
 
