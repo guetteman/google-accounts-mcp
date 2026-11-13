@@ -198,6 +198,7 @@ export const decide = (
         let outcome: "success" | "failed" | "unknown" = "success";
         let audit: Outcome | null = "success";
         let payload: StoredPayload | null = null;
+        let retainNotice = false;
         try {
           const allowed = await decodeAllowedAccount(decision.credentials[0], deps.config.tokenKey);
           const executed = await executeAccount(
@@ -223,7 +224,10 @@ export const decide = (
               payload = {
                 result: repeatAnswer(executed.repeat, allowed.credential.email, view.tool, args),
               };
-            else outcome = "unknown";
+            else {
+              outcome = "unknown";
+              retainNotice = true;
+            }
           }
         } catch (error) {
           const classified = classify(
@@ -238,21 +242,17 @@ export const decide = (
             },
           );
           audit = classified.audit;
-          outcome =
-            (view.tool.create &&
-              error instanceof ToolFailure &&
-              error.code === "outcome_unknown") ||
-            classified.error === null
-              ? "unknown"
-              : "failed";
+          retainNotice = Boolean(
+            view.tool.create && error instanceof ToolFailure && error.code === "outcome_unknown",
+          );
+          outcome = retainNotice || classified.error === null ? "unknown" : "failed";
           payload = classified.error === null ? null : { error: classified.error };
         }
-        const result =
-          outcome === "unknown"
-            ? await notice()
-            : payload === null
-              ? null
-              : await sealResult(deps.config.tokenKey, id, payload);
+        const result = retainNotice
+          ? await notice()
+          : payload === null
+            ? null
+            : await sealResult(deps.config.tokenKey, id, payload);
         await Effect.runPromise(
           finishApproval(deps, decision.won, Date.now(), outcome, audit, result),
         );

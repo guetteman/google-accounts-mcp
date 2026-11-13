@@ -513,35 +513,32 @@ it("preserves the charset and bytes of a text attachment without changing its ap
   expect(file.data).toEqual(new Uint8Array([233, 44, 49, 10]));
 });
 
-it.each([400, 413])(
-  "allows an upload caller to map a refusal with status %s",
-  async (status) => {
-    const { Effect, Result } = await import("effect");
-    const { ToolFailure } = await import("../src/mcp/failures");
-    const { uploadDraft } = await import("../src/google/draft");
-    const refused = vi.fn(
-      (status: number) =>
-        new ToolFailure({ code: "invalid_arguments", said: `Upload refused with ${status}` }),
-    );
-    const result = await Effect.runPromise(
-      Effect.result(
-        uploadDraft(
-          (build) => {
-            build("test-token", new AbortController().signal);
-            return Effect.succeed(new Response(null, { status }));
-          },
-          { message: new Blob(["MIME bytes"]) },
-          refused,
-        ),
+it.each([400, 413])("allows an upload caller to map a refusal with status %s", async (status) => {
+  const { Effect, Result } = await import("effect");
+  const { ToolFailure } = await import("../src/mcp/failures");
+  const { uploadDraft } = await import("../src/google/draft");
+  const refused = vi.fn(
+    (status: number) =>
+      new ToolFailure({ code: "invalid_arguments", said: `Upload refused with ${status}` }),
+  );
+  const result = await Effect.runPromise(
+    Effect.result(
+      uploadDraft(
+        (build) => {
+          build("test-token", new AbortController().signal);
+          return Effect.succeed(new Response(null, { status }));
+        },
+        { message: new Blob(["MIME bytes"]) },
+        refused,
       ),
-    );
-    expect(refused).toHaveBeenCalledExactlyOnceWith(status);
-    expect(Result.isFailure(result) && result.failure).toMatchObject({
-      code: "invalid_arguments",
-      said: `Upload refused with ${status}`,
-    });
-  },
-);
+    ),
+  );
+  expect(refused).toHaveBeenCalledExactlyOnceWith(status);
+  expect(Result.isFailure(result) && result.failure).toMatchObject({
+    code: "invalid_arguments",
+    said: `Upload refused with ${status}`,
+  });
+});
 
 it("the fake returns 404 when deleting a draft it does not hold", async () => {
   await sendFixture();

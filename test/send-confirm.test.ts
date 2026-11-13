@@ -17,7 +17,7 @@ import { answer, decided, digest, get, page, post, row } from "./support/approva
 import { callRows, expectError, PERSONAL, permission } from "./support/permissions";
 import { network } from "./support/network";
 import { onceRows } from "./support/draft";
-import { observeStatements } from "./support/db";
+import { observeStatements, statementFailingDb } from "./support/db";
 import { google, deferred, token } from "./support/google";
 import {
   leftoverMessage,
@@ -829,4 +829,18 @@ it.each([200, 400])("leaves no call or request timer after a send answered %s", 
   if (status === 200) expect((await work).kind).toBe("ran");
   else await expect(work).rejects.toMatchObject({ code: "message_not_sendable", released: true });
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it("keeps an approved failure before the once claim unknown without send recovery advice", async () => {
+  const f = await sendFixture("send_message", "ask");
+  const id = (await answer(await sendCall(f))).approval as string;
+  const shown = await digest(f, id);
+  const db = statementFailingDb(/^INSERT INTO once/);
+  const props = await decided(await post(f, id, "approve", { digest: shown }, testEnv({ DB: db })));
+  expect(props.state).toEqual({ kind: "unknown" });
+  expect(await get(f, id)).toEqual({ status: "unknown" });
+  expect(google.draftCreates).toEqual([]);
+  expect(google.sends).toEqual([]);
+  expect(await onceRows()).toEqual([]);
+  expect((await callRows())[0]!.outcome).toBeNull();
 });
