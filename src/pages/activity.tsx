@@ -39,7 +39,7 @@ import {
 } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
-import { activityHref } from "../activity/query";
+import { activityHref } from "./activity-links";
 import type { ActivityConnection, ActivityFilter, ActivityRecord } from "../activity/store";
 import { OwnerFrame, PageHeader } from "./frame";
 import type { FramePage } from "./page";

@@ -1,4 +1,4 @@
-import { activityHref } from "../activity/query";
+import { activityHref } from "./activity-links";
 import type { Setting } from "../permissions/store";
 import { useRef, useState } from "react";
 import {
