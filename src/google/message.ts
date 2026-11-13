@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { isoSeconds } from "../approvals/model";
-import { boundedRecipients, PAGE_BODY_BYTES, shorten } from "./bounds";
+import { boundedRecipients, MAX_REPLY_HEADER, PAGE_BODY_BYTES, shorten, unfold } from "./bounds";
 
 export const Headers = Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String }));
 export interface RawPart {
@@ -61,6 +61,7 @@ export interface Attachment {
 export interface Message {
   message: string;
   from: string;
+  reply_to?: string;
   to: string[];
   cc: string[];
   bcc?: string[];
@@ -103,7 +104,7 @@ export const addresses = (value: string): string[] => {
   return result;
 };
 /** One listing rule for read_thread and position lookup. Only multipart parts are containers. */
-const attachmentParts = (raw: RawMessage): RawPart[] => {
+export const attachmentParts = (raw: RawMessage): RawPart[] => {
   const parts: RawPart[] = [];
   const collect = (part: RawPart) => {
     if (part.mimeType.startsWith("multipart/")) {
@@ -129,7 +130,7 @@ export const attachmentFields = (part: RawPart): Attachment & { contentId: strin
 export const attachmentPart = (raw: RawMessage, attachment: string): RawPart | null =>
   attachmentParts(raw).find((part) => (part.partId || "0") === attachment) ?? null;
 /** MIME selection stays pure. Bytes are decoded only after the page grants their cost. */
-export const readMessage = (raw: RawMessage): Message => {
+const messageBody = (raw: RawMessage) => {
   const html: BodyPart[] = [];
   const sources = new Map<RawPart, BodyPart>();
   const source = (part: RawPart): BodyPart => {
@@ -185,10 +186,40 @@ export const readMessage = (raw: RawMessage): Message => {
     if (part.mimeType !== "text/plain" && part.mimeType !== "text/html") return [];
     return [source(part)];
   };
-  const body = select(raw.payload);
+  return { body: select(raw.payload), html, sources };
+};
+/** Leaf parts not represented by the selected body, its alternatives, or the file list. */
+export const otherParts = (raw: RawMessage): RawPart[] => {
+  const { body, sources } = messageBody(raw);
+  const selected = new Set<BodyPart>();
+  const collectBody = (body: Body) => {
+    if (body.kind === "alternative") {
+      body.preferred.forEach(collectBody);
+      body.fallback.forEach(collectBody);
+    } else selected.add(body);
+  };
+  body.forEach(collectBody);
+  const files = new Set(attachmentParts(raw));
+  const other: RawPart[] = [];
+  const collect = (part: RawPart) => {
+    if (part.mimeType.startsWith("multipart/")) part.parts?.forEach(collect);
+    else {
+      const source = sources.get(part);
+      if (!files.has(part) && (!source || !selected.has(source))) other.push(part);
+    }
+  };
+  collect(raw.payload);
+  return other;
+};
+
+export const readMessage = (raw: RawMessage): Message => {
+  const { body, html } = messageBody(raw);
   return {
     message: raw.id,
-    from: shorten(header(raw.payload.headers, "From"), 500),
+    from: shorten(header(raw.payload.headers, "From"), MAX_REPLY_HEADER),
+    ...(raw.payload.headers?.some((field) => field.name.toLowerCase() === "reply-to")
+      ? { reply_to: shorten(unfold(header(raw.payload.headers, "Reply-To")), MAX_REPLY_HEADER) }
+      : {}),
     to: boundedRecipients(addresses(header(raw.payload.headers, "To"))),
     cc: boundedRecipients(addresses(header(raw.payload.headers, "Cc"))),
     ...(raw.payload.headers?.some((h) => h.name.toLowerCase() === "bcc")

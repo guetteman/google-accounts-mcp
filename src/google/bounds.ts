@@ -1,9 +1,10 @@
 /** Bounds on fields and text supplied by a mail's sender, before page fitting. */
+export const MAX_REPLY_HEADER = 500;
 export const PAGE_BODY_BYTES = 2_000_000;
 export const MAX_TEXT = 1_000_000;
+export const MAX_BODY_PARTS = 3;
 export const HTML_UNREADABLE = "[The HTML of this message could not be converted to text.]";
-export const BODY_PART_LEFT_OUT =
-  "[A part of this message's body was left out: it has more than 3 parts that Gmail gives apart.]";
+export const BODY_PART_LEFT_OUT = `[A part of this message's body was left out: it has more than ${MAX_BODY_PARTS} parts that Gmail gives apart.]`;
 export const BODY_BYTES_LEFT_OUT =
   "[A part of this message's body was left out: the message is too large to read whole.]";
 const TEXT_LEFT_OUT =
@@ -58,3 +59,7 @@ export const boundedAttachments = <A>(
     ...(count < attachments.length ? { attachments_left_out: attachments.length - count } : {}),
   };
 };
+
+export const unfold = (text: string) =>
+  // oxlint-disable-next-line no-control-regex -- Sender-controlled headers must be unfolded before use.
+  text.replace(/(?:\r\n|\r|\n)([ \t])/g, "$1").replace(/[\u0000-\u001f\u007f]/g, " ");

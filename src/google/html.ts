@@ -332,7 +332,7 @@ const BLOCKS = new Set([
  * Streaming parsing tolerates malformed mail. Output is joined once; each link comparison
  * examines at most its address's length, independent of text emitted before the link.
  */
-export async function htmlToText(html: string): Promise<string> {
+export async function htmlToText(html: string, onCut: () => void = () => {}): Promise<string> {
   const parts: string[] = [];
   const node: string[] = [];
   const visible: Array<{ part: number; offset: number; position: number }> = [];
@@ -354,6 +354,7 @@ export async function htmlToText(html: string): Promise<string> {
     const available = MAX_TEXT + 1 - length;
     if (text.length >= available) {
       cut = true;
+      onCut();
       text = text.slice(0, available);
     }
     const offset = text.search(/\S/);

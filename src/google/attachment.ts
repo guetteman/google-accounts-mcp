@@ -23,7 +23,7 @@ export interface Found extends Attachment {
   date: number;
 }
 /** MIME parameters end at semicolons outside quoted strings; names cannot supply a charset. */
-const charsetOf = (value: string): string | null => {
+export const charsetOf = (value: string): string | null => {
   let start = 0;
   let quoted = false;
   let escaped = false;

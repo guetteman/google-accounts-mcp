@@ -141,11 +141,6 @@ export function deferred() {
 }
 export const google = {
   methods: [] as string[],
-  messageRequests: [] as string[],
-  messageAnswers: new Map<
-    string,
-    (request: Pick<Request, "signal">) => Response | Promise<Response>
-  >(),
   attachmentRequests: [] as string[],
   attachmentAnswers: new Map<
     string,
@@ -163,6 +158,29 @@ export const google = {
   draftCreateAnswers: [] as Array<
     (request: Pick<Request, "signal">) => Response | Promise<Response>
   >,
+  sends: [] as Array<{ url: string; body: { id: string }; redirect: RequestRedirect }>,
+  sendAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
+  deletes: [] as string[],
+  deleteAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
+  fullDraftRequests: [] as string[],
+  fullDraftAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
+  storedDrafts: new Map<string, object>(),
+  uploads: [] as Array<{
+    url: string;
+    contentType: string;
+    redirect: RequestRedirect;
+    metadata: unknown;
+    message: string;
+  }>,
+  uploadAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
+  messageRequests: [] as string[],
+  messageAnswers: new Map<
+    string,
+    (request: Pick<Request, "signal">) => Response | Promise<Response>
+  >(),
   labelRequests: [] as Array<{
     url: string;
     method: string;
@@ -227,13 +245,23 @@ export const google = {
     this.codes.clear();
     this.methods = [];
     this.messageRequests = [];
-    this.messageAnswers.clear();
     this.attachmentRequests = [];
     this.attachmentAnswers.clear();
     this.draftRequests = [];
     this.draftAnswers = [];
     this.draftCreates = [];
     this.draftCreateAnswers = [];
+    this.sends = [];
+    this.sendAnswers = [];
+    this.deletes = [];
+    this.deleteAnswers = [];
+    this.fullDraftRequests = [];
+    this.fullDraftAnswers.clear();
+    this.storedDrafts.clear();
+    this.uploads = [];
+    this.uploadAnswers = [];
+    this.messageRequests = [];
+    this.messageAnswers.clear();
     this.labelRequests = [];
     this.labelAnswers = [];
     this.threadRequests = [];
@@ -480,22 +508,98 @@ export const google = {
       http.all(`${MESSAGES_URL}/:id/untrash`, ({ request, params }) =>
         this.trashAnswer(request, String(params.id)),
       ),
+      http.all(`${MESSAGES_URL}/:message/attachments/:attachment`, async ({ request, params }) => {
+        this.methods.push(request.method);
+        this.attachmentRequests.push(request.url);
+        if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
+        if (!authorized(request)) return new HttpResponse(null, { status: 401 });
+        return (
+          (await this.attachmentAnswers.get(String(params.attachment))?.(request)) ??
+          new HttpResponse(null, { status: 404 })
+        );
+      }),
+      http.post(
+        "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send",
+        async ({ request }) => {
+          this.methods.push(request.method);
+          if (!authorized(request)) return new HttpResponse(null, { status: 401 });
+          const body = (await request.json()) as { id: string };
+          this.sends.push({ url: request.url, body, redirect: request.redirect });
+          const draft = this.storedDrafts.get(body.id) as { threadId?: string } | undefined;
+          const response =
+            (await this.sendAnswers.shift()?.(request)) ??
+            (draft
+              ? HttpResponse.json({
+                  id: `sent-${this.sends.length}`,
+                  threadId: draft.threadId ?? "sent-thread",
+                })
+              : new HttpResponse(null, { status: 404 }));
+          if (response.ok) this.storedDrafts.delete(body.id);
+          return response;
+        },
+      ),
       http.all(
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages/:message/attachments/:attachment",
+        "https://gmail.googleapis.com/gmail/v1/users/me/drafts/:id",
         async ({ request, params }) => {
           this.methods.push(request.method);
-          this.attachmentRequests.push(request.url);
+          const id = String(params.id);
+          if (request.method === "DELETE") {
+            if (!authorized(request)) return new HttpResponse(null, { status: 401 });
+            this.deletes.push(id);
+            const response = await this.deleteAnswers.shift()?.(request);
+            if (response) {
+              if (response.ok) this.storedDrafts.delete(id);
+              return response;
+            }
+            return new HttpResponse(null, { status: this.storedDrafts.delete(id) ? 204 : 404 });
+          }
+          this.fullDraftRequests.push(request.url);
           if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
           if (!authorized(request)) return new HttpResponse(null, { status: 401 });
           return (
-            (await this.attachmentAnswers.get(String(params.attachment))?.(request)) ??
-            new HttpResponse(null, { status: 404 })
+            (await this.fullDraftAnswers.get(id)?.(request)) ??
+            (this.storedDrafts.has(id)
+              ? HttpResponse.json({ id, message: this.storedDrafts.get(id) })
+              : new HttpResponse(null, { status: 404 }))
           );
+        },
+      ),
+      http.post(
+        "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts",
+        async ({ request }) => {
+          this.methods.push(request.method);
+          if (!authorized(request)) return new HttpResponse(null, { status: 401 });
+          const contentType = request.headers.get("Content-Type") ?? "";
+          const boundary = /boundary="?([^";]+)/.exec(contentType)?.[1];
+          if (!boundary) return new HttpResponse(null, { status: 400 });
+          const parts = new TextDecoder()
+            .decode(await request.arrayBuffer())
+            .split(`--${boundary}`);
+          const content = (part: string) =>
+            part.slice(part.indexOf("\r\n\r\n") + 4).replace(/\r\n$/, "");
+          const metadata = JSON.parse(content(parts[1]!)) as { message?: { threadId?: string } };
+          this.uploads.push({
+            url: request.url,
+            contentType,
+            redirect: request.redirect,
+            metadata,
+            message: content(parts[2]!),
+          });
+          const n = this.draftCreates.length + this.uploads.length;
+          const threadId = metadata.message?.threadId ?? `thread-${n}`;
+          this.storedDrafts.set(`draft-${n}`, { threadId });
+          const response =
+            (await this.uploadAnswers.shift()?.(request)) ??
+            HttpResponse.json({ id: `draft-${n}`, message: { id: `message-${n}`, threadId } });
+          if (response.status >= 400 && response.status < 500)
+            this.storedDrafts.delete(`draft-${n}`);
+          return response;
         },
       ),
       http.all("https://gmail.googleapis.com/gmail/v1/users/me/drafts", async ({ request }) => {
         this.methods.push(request.method);
         if (request.method === "POST") {
+          if (!authorized(request)) return new HttpResponse(null, { status: 401 });
           this.draftCreates.push({
             url: request.url,
             method: request.method,
@@ -504,13 +608,16 @@ export const google = {
             body: await request.json(),
           });
           const id = this.draftCreates.length;
-          return (
+          this.storedDrafts.set(`draft-${id}`, { threadId: `thread-${id}` });
+          const response =
             (await this.draftCreateAnswers.shift()?.(request)) ??
             HttpResponse.json({
               id: `draft-${id}`,
               message: { id: `message-${id}`, threadId: `thread-${id}` },
-            })
-          );
+            });
+          if (response.status >= 400 && response.status < 500)
+            this.storedDrafts.delete(`draft-${id}`);
+          return response;
         }
         this.draftRequests.push(request.url);
         if (request.method !== "GET") return new HttpResponse(null, { status: 405 });

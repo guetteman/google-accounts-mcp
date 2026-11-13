@@ -21,6 +21,7 @@ import {
   type Use,
 } from "./model";
 import { parseAccountId } from "../accounts/model";
+import { ToolFailure } from "../mcp/failures";
 import { parseAccountTool } from "../mcp/tools";
 import { parseConnectionId } from "../connections/model";
 import type { Identity } from "../once/identity";
@@ -135,6 +136,23 @@ const usable = (connection: string, generation: string, uses: string, now: strin
      AND ${permittedWhere({ connection, tool: "json_extract(u.value, '$.tool')", now, ownerEmail: email })}))`;
 const rowUsable = (now: string, email: string) =>
   usable("approvals.connection_id", "approvals.generation", "approvals.uses", now, email);
+
+/** Guard every tool with create against the owner's current settings before creating or sending. */
+export const stillApproved = (ctx: ApprovalContext, won: Won): Effect.Effect<void, ToolFailure> =>
+  Effect.tryPromise({
+    try: () =>
+      ctx.db
+        .prepare(`SELECT 1 FROM approvals WHERE approvals.id = ?1
+      AND ${ownerGuard("?2", "?3")} AND state = 'approved' AND claim = ?4 AND decided_at = ?5
+      AND ${rowUsable("?6", "?3")}`)
+        .bind(won.id, ctx.owner.generation, ctx.owner.email, won.claim, won.at, Date.now())
+        .first(),
+    catch: () => new ToolFailure({ code: "server_unavailable" }),
+  }).pipe(
+    Effect.flatMap((row) =>
+      row ? Effect.void : Effect.fail(new ToolFailure({ code: "tool_not_allowed" })),
+    ),
+  );
 
 const waitingStatement = (
   ctx: Pick<CallContext, "db" | "owner" | "connection">,

@@ -1,14 +1,13 @@
 import type { Tool as McpTool } from "@modelcontextprotocol/server";
-import { viewDate, type ViewNote, type ViewValue } from "../approvals/model";
+import { isoSeconds, viewDate, type ViewNote, type ViewValue } from "../approvals/model";
 import { getApproval } from "../approvals/result";
 import { Data, Effect, Result, Schema, SchemaIssue } from "effect";
 import type { Unavailable } from "../db";
 import { accountMessage } from "../accounts/model";
 import { listVisibleAccounts } from "../accounts/store";
 import { findAttachment, partBytes } from "../google/attachment";
-import { shorten } from "../google/bounds";
 import { MAX_ATTACHMENT_BYTES, WithFile, type Takes } from "./file";
-import { LIMIT, placeOf, readThread } from "../google/thread";
+import { BodyBudget, LIMIT, placeOf, readThread, textOf } from "../google/thread";
 import { listLabels, MAX_ITEMS, searchThreads, threadSummary } from "../google/gmail";
 import {
   changeLabels,
@@ -22,22 +21,39 @@ import {
 import { deleteMessages, messageValues, restoreMessages, trashMessages } from "../google/trash";
 import { readListedTools } from "../permissions/store";
 import type { CallContext } from "./call";
-import { creating, notReadable, tooLarge, type ToolFailure } from "./failures";
+import {
+  creating,
+  notSendable,
+  messageTooLarge,
+  notReadable,
+  tooLarge,
+  ToolFailure,
+} from "./failures";
 import type { Group } from "./groups";
 import type { Created } from "../once/store";
-import { createDraft } from "../google/draft";
+import { createDraft, readDraft, uploadDraft } from "../google/draft";
 import {
   MAX_SUBJECT,
   mailboxText,
   messageText,
   parseMailbox,
   rawMessage,
+  mixedMessage,
   type Mailbox,
   type Outgoing,
 } from "../google/mail";
 import { replyPlan, type ReplyPlan } from "../google/reply";
 import { normalizeEmail } from "../owner/owner";
-import { isoSeconds } from "../approvals/model";
+import {
+  MAX_BODY_PARTS,
+  MAX_REPLY_HEADER,
+  MAX_TEXT,
+  PAGE_BODY_BYTES,
+  shorten,
+} from "../google/bounds";
+import { sendExisting, sendStaged } from "../google/send";
+import { forwardFiles, forwardPlan, MAX_FORWARD_FILES, MAX_FORWARD_BYTES } from "../google/forward";
+import { addresses, header, readMessage, attachmentParts, otherParts } from "../google/message";
 type AccountExecution<A> =
   | {
       run: (
@@ -54,6 +70,7 @@ type AccountExecution<A> =
         send: Send,
         account: { email: string },
         args: A,
+        confirm: Confirm,
       ) => Effect.Effect<Created, ToolFailure>;
       defaults: Readonly<Partial<A>>;
       unknown: (email: string, until: number, args: A) => string;
@@ -68,6 +85,8 @@ export type AccountTool = string & { readonly __accountTool: unique symbol };
 export type Send = (
   build: (accessToken: string, signal: AbortSignal) => Request,
 ) => Effect.Effect<Response, ToolFailure>;
+export type Sending = Send & { readonly __sending: unique symbol };
+export type Confirm = { readonly check: Effect.Effect<Sending, ToolFailure>; readonly late: Send };
 /** What tools/list tells a client about a tool. A tool that changes mail says so. */
 export type ToolAnnotations =
   | { readOnlyHint: true }
@@ -106,6 +125,8 @@ export type Tool =
         action: string;
         joiner: string;
         empty: string;
+        /** Only send_draft may disable the digest equality check and send the current Gmail draft. */
+        asItIs?: true;
         /** Sentences that the page says about this call, from its arguments alone. */
         notes?: (args: DecodedArgs) => ReadonlyArray<ViewNote>;
         values: (
@@ -128,6 +149,8 @@ type AccountDefinition<A extends DecodedArgs> = {
     action: string;
     joiner: string;
     empty: string;
+    /** Only send_draft may disable the digest equality check and send the current Gmail draft. */
+    asItIs?: true;
     /** Sentences that the page says about this call, from its arguments alone. */
     notes?: (args: A) => ReadonlyArray<ViewNote>;
     values: (
@@ -193,18 +216,21 @@ const labelChange = (args: {
 const Mailboxes = Schema.Array(
   Schema.String.check(Schema.makeFilter((value) => parseMailbox(value) !== null)),
 );
+const Subject = Schema.String.check(
+  Schema.isMaxLength(MAX_SUBJECT),
+  // oxlint-disable-next-line no-control-regex -- Input subjects cannot contain header controls.
+  Schema.isPattern(/^[^\u0000-\u001f\u007f]*$/),
+);
+const MessageId = Schema.String.check(
+  Schema.isBetweenLength(1, 64),
+  Schema.isPattern(/^[A-Za-z0-9_-]+$/),
+);
 const DraftInput = Schema.Struct({
   account: Schema.String,
   to: Schema.optionalKey(Mailboxes),
   cc: Schema.optionalKey(Mailboxes),
   bcc: Schema.optionalKey(Mailboxes),
-  subject: Schema.optionalKey(
-    Schema.String.check(
-      Schema.isMaxLength(MAX_SUBJECT),
-      // oxlint-disable-next-line no-control-regex -- Input subjects cannot contain header controls.
-      Schema.isPattern(/^[^\u0000-\u001f\u007f]*$/),
-    ),
-  ),
+  subject: Schema.optionalKey(Subject),
   body: Schema.String,
   reply_to: Schema.optionalKey(
     Schema.String.check(Schema.isBetweenLength(1, 64), Schema.isPattern(/^[A-Za-z0-9_-]+$/)),
@@ -224,7 +250,7 @@ const DraftInput = Schema.Struct({
   }),
 );
 type DraftArgs = typeof DraftInput.Type;
-const draftRecipients = (args: DraftArgs) => ({
+const draftRecipients = (args: Pick<DraftArgs, "to" | "cc" | "bcc">) => ({
   to: (args.to ?? []).map((text) => parseMailbox(text)!),
   cc: (args.cc ?? []).map((text) => parseMailbox(text)!),
   bcc: (args.bcc ?? []).map((text) => parseMailbox(text)!),
@@ -232,7 +258,7 @@ const draftRecipients = (args: DraftArgs) => ({
 const givenRecipients = (boxes: { to: Mailbox[]; cc: Mailbox[]; bcc: Mailbox[] }) =>
   boxes.to.length || boxes.cc.length || boxes.bcc.length ? boxes : null;
 const draftMail = (
-  args: DraftArgs,
+  args: Pick<DraftArgs, "body" | "subject">,
   boxes: ReturnType<typeof draftRecipients>,
   plan?: ReplyPlan,
 ): Outgoing => ({
@@ -253,6 +279,135 @@ const messagesExpects = {
   account: "a string",
   messages: `a list of 1 to ${MAX_ITEMS} different message IDs that read_thread returned`,
 };
+
+const draftValues = (
+  args: { body: string; duplicate?: number },
+  mail: Outgoing,
+  boxes: ReturnType<typeof draftRecipients>,
+  plan?: ReplyPlan,
+): ViewValue[] => {
+  const values: ViewValue[] = [];
+  if (plan) {
+    values.push(
+      {
+        name: "Answers a message from",
+        text: shorten(plan.answered.from, 1000),
+        from: "gmail",
+      },
+      { name: "Its subject", text: shorten(plan.answered.subject, 1000), from: "gmail" },
+      { name: "Its date", text: viewDate(plan.answered.date), from: "gmail" },
+    );
+  }
+  for (const [name, recipients] of [
+    ["To", mail.to],
+    ["Cc", mail.cc],
+    ["Bcc", mail.bcc],
+  ] as const)
+    if (recipients.length)
+      values.push({
+        name,
+        text: recipients.map(mailboxText).join(", "),
+        from: plan && !givenRecipients(boxes) ? "gmail" : "agent",
+      });
+  if (mail.subject)
+    values.push({ name: "Subject", text: mail.subject, from: plan ? "gmail" : "agent" });
+  if (args.duplicate !== undefined)
+    values.push({
+      name: "Duplicate",
+      text: `${args.duplicate} (a deliberate copy of an earlier call)`,
+      from: "agent",
+    });
+  values.push({ name: "Body", text: args.body, from: "agent" });
+  return values;
+};
+
+const draftExpects = {
+  account: "a string",
+  to: "a list of mailboxes, empty or absent when reply_all is true",
+  cc: "a list of mailboxes, empty or absent when reply_all is true",
+  bcc: "a list of mailboxes, empty or absent when reply_all is true",
+  subject: `a string of at most ${MAX_SUBJECT} characters without control characters, empty or absent for a reply`,
+  body: "a string",
+  reply_to:
+    "a message ID of 1 to 64 letters, digits, hyphens, or underscores from this account; a reply requires an empty or absent subject",
+  reply_all: "a boolean, true only with reply_to and no given recipients",
+  duplicate: "a whole number from 2 to 100",
+};
+
+const repeatSend =
+  "Repeating: a call with the same arguments as a call of the last 7 days is the same call. It never sends a second message. It returns the first call's result with repeat_of, or its pending approval. So when you get no answer or an error that says to try again, call again with exactly the same arguments. Copy them; do not reword the text, because changed text is a new message. When the answer says that the outcome is unknown, do not try another wording: ask the owner to look in Gmail.";
+const deliberateSend =
+  " To send one more message with the same content on purpose, add duplicate: 2 (then 3).";
+const unknownSend = (email: string, until: number, args: { duplicate?: number }) => {
+  const next = (args.duplicate ?? 1) + 1;
+  return `The server does not know whether this mail went out from ${email}. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until ${isoSeconds(until)}, repeating this call does not send it again.${next <= 100 ? ` Only if the owner says that it is in neither place, call again with duplicate: ${next}.` : ""}`;
+};
+const sendRefused = (status: number) =>
+  status === 400 ? notSendable(null) : new ToolFailure({ code: "google_unavailable" });
+const sendMail = (send: Send, confirm: Confirm, mail: Outgoing, thread?: string) =>
+  sendStaged(
+    confirm,
+    createDraft(
+      send,
+      { raw: rawMessage(messageText(mail)), ...(thread ? { thread } : {}) },
+      sendRefused,
+    ),
+  );
+const replyExpects =
+  "a message whose recipients the server can fill in. For this one, create a draft with create_draft, reply_to, and the recipients, and send it with send_draft";
+const sendReplyPlan = (
+  send: Send,
+  args: { account: string; message: string; reply_all?: boolean },
+) =>
+  replyPlan(send, {
+    account: normalizeEmail(args.account)!,
+    message: args.message,
+    all: args.reply_all ?? false,
+    given: null,
+  }).pipe(
+    Effect.mapError((failure) =>
+      failure.code === "invalid_arguments" && failure.field?.name === "to"
+        ? new ToolFailure({
+            code: "invalid_arguments",
+            field: { name: "message", expects: replyExpects },
+          })
+        : failure,
+    ),
+  );
+/** Every draft attachment is listed on the page; keep that complete list readable. */
+const MAX_DRAFT_FILES = 20;
+const MAX_DRAFT_HEADERS = 20_000;
+const fileValues = (
+  files: ReadonlyArray<{ filename: string; type: string; size: number }>,
+): ViewValue[] => {
+  if (!files.length) return [];
+  const bytes = files.reduce((n, file) => n + file.size, 0);
+  return [
+    {
+      name: "Attachments",
+      text: `${files.length} ${files.length === 1 ? "file" : "files"}, ${bytes.toLocaleString("en-US")} ${bytes === 1 ? "byte" : "bytes"} in all`,
+      from: "gmail",
+    },
+    ...files.map((file, i) => ({
+      name: `Attachment ${i + 1}`,
+      text: `${file.filename || "(no name)"} (${file.type}, ${file.size.toLocaleString("en-US")} ${file.size === 1 ? "byte" : "bytes"})`,
+      from: "gmail" as const,
+    })),
+  ];
+};
+const duplicateValue = (duplicate?: number): ViewValue[] =>
+  duplicate === undefined
+    ? []
+    : [
+        {
+          name: "Duplicate",
+          text: `${duplicate} (a deliberate copy of an earlier call)`,
+          from: "agent",
+        },
+      ];
+const forwardBody = (quoted: string, note?: string) => (note ? `${note}\n\n${quoted}` : quoted);
+const draftNote =
+  "This is the draft as it is in Gmail now. It is sent as it is at the moment you approve, also if it changed after this page loaded.";
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -352,7 +507,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     irreversible: false,
     permissionDescription:
       "Read every message of a thread in full, and see the names of its attachments.",
-    description: `Returns the messages of one thread of one Google account, oldest first, as plain text. \`account\` is the address of an account that list_accounts returns. \`thread\` is a thread ID that search_threads returned for that account; an ID works only in the account that returned it. \`message_count\` is the number of messages in the thread. Each message has its ID, its position in the thread, \`from\`, \`to\`, \`cc\`, its date, its label IDs, its text, and its attachments. \`bcc\` is present when the message has that header, which is normally mail that the account wrote. A message that is a draft has \`draft\`, its draft ID. HTML mail is converted to plain text, and a link keeps its address in parentheses. An attachment has an ID, a file name, a media type, and a size in bytes; the result holds no file. \`inline: true\` marks an image that stands inside the body; converted HTML says \`[image: name]\` where it stood. A very long field is shortened: a list of recipients ends with \`… and N more\`, and \`attachments_left_out\` counts the attachments that are not listed. A result has at most ${LIMIT.toLocaleString("en-US")} characters. When it has \`next_page\`, it stops before the end of the thread: send the same call with \`page\` set to that value to get the rest. A message with \`text_cut\` does not hold its whole text: \`end\` means that the next page continues it, \`start\` that it continues the page before, and \`both\` means both. Reading changes nothing in Gmail: unread mail stays unread. When the owner sets this tool to ask, it returns a pending approval with a link instead of messages; get_approval returns the messages after the owner approves.`,
+    description: `Returns the messages of one thread of one Google account, oldest first, as plain text. \`account\` is the address of an account that list_accounts returns. \`thread\` is a thread ID that search_threads returned for that account; an ID works only in the account that returned it. \`message_count\` is the number of messages in the thread. Each message has its ID, its position in the thread, \`from\`, \`to\`, \`cc\`, its date, its label IDs, its text, and its attachments. When a message has Reply-To, \`reply_to\` is that header, unfolded and shortened to ${MAX_REPLY_HEADER} characters; a reply goes there instead of to \`from\` when it is not empty. A reply to the account's own message goes to that message's To. \`bcc\` is present when the message has that header, which is normally mail that the account wrote. A message that is a draft has \`draft\`, its draft ID. HTML mail is converted to plain text, and a link keeps its address in parentheses. An attachment has an ID, a file name, a media type, and a size in bytes; the result holds no file. \`inline: true\` marks an image that stands inside the body; converted HTML says \`[image: name]\` where it stood. A very long field is shortened: a list of recipients ends with \`… and N more\`, and \`attachments_left_out\` counts the attachments that are not listed. A result has at most ${LIMIT.toLocaleString("en-US")} characters. When it has \`next_page\`, it stops before the end of the thread: send the same call with \`page\` set to that value to get the rest. A message with \`text_cut\` does not hold its whole text: \`end\` means that the next page continues it, \`start\` that it continues the page before, and \`both\` means both. Reading changes nothing in Gmail: unread mail stays unread. When the owner sets this tool to ask, it returns a pending approval with a link instead of messages; get_approval returns the messages after the owner approves.`,
     input: Schema.Struct({
       account: Schema.String,
       thread: ThreadId,
@@ -455,25 +610,14 @@ export const TOOLS: ReadonlyArray<Tool> = [
     permissionDescription: "Write a draft, new or as a reply. Nothing is sent.",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     description:
-      "Creates a draft, new or as a reply, in one Google account. Nothing is sent. `account` is the address of an account that list_accounts returns. `to`, `cc`, and `bcc` are optional lists of mailboxes, each an address or Name <address>. A draft needs no recipients or subject. `subject` is optional for a new draft, at most 998 characters, with no control characters. `body` is required plain text and may be empty. A reply includes no quote of the answered message unless you write one in body. `reply_to` is a message ID from read_thread for this account. A reply takes its recipients from the message's Reply-To when it has one, else from its From, and its subject from the message with Re: added when needed. A reply to the account's own message goes to that message's To. `reply_all: true` also includes the other To and Cc addresses, without the account's own address or repeated addresses. When you give a non-empty to, cc, or bcc, the reply has exactly the recipients you give. Give to when you must be sure where a reply goes. `reply_all: true` requires reply_to and cannot be combined with given recipients; a non-empty subject cannot be combined with reply_to. The result has account, draft, message, and thread. draft is the ID that stays while the draft exists; message and thread are the IDs at creation and can change when it is edited. `duplicate` is an optional whole number from 2 to 100 for a deliberate copy.\n\nRepeating: a call with the same arguments as a call of the last 7 days is the same call. It never creates a second draft. It returns the first call's result with `repeat_of`, or its pending approval. So when you get no answer or an error that says to try again, call again with exactly the same arguments. Copy them; do not reword the text, because changed text is a new draft. When the answer says that the outcome is unknown, do not try another wording: ask the owner to look in Gmail. To create one more draft with the same content on purpose, add `duplicate: 2` (then 3).\n\nWith ask, a reply that cannot be built appears on the owner's page, not in the agent's answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of a draft; get_approval returns the draft after the owner approves.",
+      "Creates a draft, new or as a reply, in one Google account. Nothing is sent. `account` is the address of an account that list_accounts returns. `to`, `cc`, and `bcc` are optional lists of mailboxes, each an address or Name <address>. A draft needs no recipients or subject. `subject` is optional for a new draft, at most 998 characters, with no control characters. `body` is required plain text and may be empty. A reply includes no quote of the answered message unless you write one in body. `reply_to` is a message ID from read_thread for this account. A reply takes its recipients from the message's Reply-To when it has one (the reply_to field of read_thread), else from its From, and its subject from the message with Re: added when needed. A reply to the account's own message goes to that message's To. `reply_all: true` also includes the other To and Cc addresses, without the account's own address or repeated addresses. When you give a non-empty to, cc, or bcc, the reply has exactly the recipients you give. Give to when you must be sure where a reply goes. `reply_all: true` requires reply_to and cannot be combined with given recipients; a non-empty subject cannot be combined with reply_to. The result has account, draft, message, and thread. draft is the ID that stays while the draft exists; message and thread are the IDs at creation and can change when it is edited. `duplicate` is an optional whole number from 2 to 100 for a deliberate copy.\n\nRepeating: a call with the same arguments as a call of the last 7 days is the same call. It never creates a second draft. It returns the first call's result with `repeat_of`, or its pending approval. So when you get no answer or an error that says to try again, call again with exactly the same arguments. Copy them; do not reword the text, because changed text is a new draft. When the answer says that the outcome is unknown, do not try another wording: ask the owner to look in Gmail. To create one more draft with the same content on purpose, add `duplicate: 2` (then 3).\n\nWith ask, a reply that cannot be built appears on the owner's page, not in the agent's answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of a draft; get_approval returns the draft after the owner approves.",
     input: DraftInput,
     defaults: { to: [], cc: [], bcc: [], subject: "", reply_all: false },
     unknown: (email, until, args) => {
       const next = (args.duplicate ?? 1) + 1;
       return `The server does not know whether the draft was created in ${email}. Ask the owner to look in Drafts. Until ${isoSeconds(until)}, repeating this call does not create it again.${next <= 100 ? ` If the owner says that the draft is missing, call again with duplicate: ${next}.` : ""}`;
     },
-    expects: {
-      account: "a string",
-      to: "a list of mailboxes, empty or absent when reply_all is true",
-      cc: "a list of mailboxes, empty or absent when reply_all is true",
-      bcc: "a list of mailboxes, empty or absent when reply_all is true",
-      subject: `a string of at most ${MAX_SUBJECT} characters without control characters, empty or absent for a reply`,
-      body: "a string",
-      reply_to:
-        "a message ID of 1 to 64 letters, digits, hyphens, or underscores from this account; a reply requires an empty or absent subject",
-      reply_all: "a boolean, true only with reply_to and no given recipients",
-      duplicate: "a whole number from 2 to 100",
-    },
+    expects: draftExpects,
     view: {
       action: "create a draft",
       joiner: "in",
@@ -490,50 +634,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
               })
             : undefined;
           const mail = draftMail(args, boxes, plan);
-          const values: ViewValue[] = [];
-          if (plan) {
-            const date = new Intl.DateTimeFormat("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-              timeZone: "UTC",
-            }).format(plan.answered.date);
-            const time = new Intl.DateTimeFormat("en-GB", {
-              hour: "2-digit",
-              minute: "2-digit",
-              timeZone: "UTC",
-            }).format(plan.answered.date);
-            values.push(
-              {
-                name: "Answers a message from",
-                text: shorten(plan.answered.from, 1000),
-                from: "gmail",
-              },
-              { name: "Its subject", text: shorten(plan.answered.subject, 1000), from: "gmail" },
-              { name: "Its date", text: `${date} at ${time} UTC`, from: "gmail" },
-            );
-          }
-          for (const [name, recipients] of [
-            ["To", mail.to],
-            ["Cc", mail.cc],
-            ["Bcc", mail.bcc],
-          ] as const)
-            if (recipients.length)
-              values.push({
-                name,
-                text: recipients.map(mailboxText).join(", "),
-                from: plan && !givenRecipients(boxes) ? "gmail" : "agent",
-              });
-          if (mail.subject)
-            values.push({ name: "Subject", text: mail.subject, from: plan ? "gmail" : "agent" });
-          if (args.duplicate !== undefined)
-            values.push({
-              name: "Duplicate",
-              text: `${args.duplicate} (a deliberate copy of an earlier call)`,
-              from: "agent",
-            });
-          values.push({ name: "Body", text: args.body, from: "agent" });
-          return values;
+          return draftValues(args, mail, boxes, plan);
         }),
     },
     create: (send, account, args) =>
@@ -688,6 +789,258 @@ export const TOOLS: ReadonlyArray<Tool> = [
           { bytes, filename: found.filename, type: found.type, charset: found.charset },
         );
       }),
+  }),
+  accountTool({
+    name: "send_message",
+    label: "Send message",
+    group: "Send",
+    irreversible: true,
+    permissionDescription:
+      "Send a new message from this account. A sent message cannot be taken back.",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    description: `Sends a new plain text message from one Google account. A sent message cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`to\` is a required non-empty list of mailboxes, each an address or Name <address>; \`cc\` and \`bcc\` are optional lists. \`subject\` is required, 1 to 998 characters without control characters. \`body\` is required plain text and may be empty. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    input: Schema.Struct({
+      account: DraftInput.fields.account,
+      to: Mailboxes.check(Schema.isMinLength(1)),
+      cc: DraftInput.fields.cc,
+      bcc: DraftInput.fields.bcc,
+      subject: Subject.check(Schema.isMinLength(1)),
+      body: DraftInput.fields.body,
+      duplicate: DraftInput.fields.duplicate,
+    }),
+    expects: {
+      account: draftExpects.account,
+      to: "a list of at least one mailbox, each an address or Name <address>",
+      cc: "a list of mailboxes, each an address or Name <address>",
+      bcc: "a list of mailboxes, each an address or Name <address>",
+      subject: `a string of 1 to ${MAX_SUBJECT} characters without control characters`,
+      body: draftExpects.body,
+      duplicate: draftExpects.duplicate,
+    },
+    defaults: { cc: [], bcc: [] },
+    unknown: unknownSend,
+    view: {
+      action: "send a message",
+      notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
+      joiner: "from",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      values: (args) => {
+        const boxes = draftRecipients(args);
+        return Effect.succeed(draftValues(args, draftMail(args, boxes), boxes));
+      },
+    },
+    create: (send, _account, args, confirm) =>
+      sendMail(send, confirm, draftMail(args, draftRecipients(args))),
+  }),
+  accountTool({
+    name: "send_reply",
+    label: "Send reply",
+    group: "Send",
+    irreversible: true,
+    permissionDescription:
+      "Reply to a message in its thread: to its reply address or its sender, or to everyone on it. A sent reply cannot be taken back.",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    description: `Sends a plain text reply in a message's thread. A sent reply cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The recipients and subject come from that message, as in create_draft with reply_to and no given recipients: Reply-To (the reply_to field of read_thread) or From, or To for the account's own message, and Re: when needed. \`reply_all: true\` adds the message's other To and Cc recipients, without the account's own address or repeated addresses; it defaults to false. \`body\` is required plain text and may be empty. The body holds no quote unless you write one. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    input: Schema.Struct({
+      account: DraftInput.fields.account,
+      message: MessageId,
+      body: DraftInput.fields.body,
+      reply_all: DraftInput.fields.reply_all,
+      duplicate: DraftInput.fields.duplicate,
+    }),
+    expects: {
+      account: draftExpects.account,
+      message: "a message ID of 1 to 64 letters, digits, hyphens, or underscores from this account",
+      body: draftExpects.body,
+      reply_all: "a boolean",
+      duplicate: draftExpects.duplicate,
+    },
+    defaults: { reply_all: false },
+    unknown: unknownSend,
+    view: {
+      action: "send a reply",
+      notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
+      joiner: "from",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      values: (args, send) =>
+        sendReplyPlan(send, args).pipe(
+          Effect.map((plan) => {
+            const boxes = draftRecipients({});
+            return draftValues(args, draftMail(args, boxes, plan), boxes, plan);
+          }),
+        ),
+    },
+    create: (send, _account, args, confirm) =>
+      sendReplyPlan(send, args).pipe(
+        Effect.flatMap((plan) =>
+          sendMail(send, confirm, draftMail(args, draftRecipients({}), plan), plan.thread),
+        ),
+      ),
+  }),
+  accountTool({
+    name: "forward_message",
+    label: "Forward message",
+    group: "Send",
+    irreversible: true,
+    permissionDescription:
+      "Forward a message, with its text and its attachments, to the addresses the agent gives. It cannot be taken back.",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    description: `Forwards a message's original text and every attachment, including inline images, as plain text with files. A sent message cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. \`to\` is a required non-empty list of mailboxes, each an address or Name <address>; \`cc\` and \`bcc\` are optional lists. \`body\` is an optional plain text note before the forwarded text, empty by default. The forward stays in the original's thread in this account and adds Fwd: to its subject when needed. The limit is ${MAX_FORWARD_BYTES.toLocaleString("en-US")} bytes of attachments and text, and ${MAX_FORWARD_FILES} attachments. The original's text must fit ${PAGE_BODY_BYTES.toLocaleString("en-US")} bytes of body, ${MAX_TEXT.toLocaleString("en-US")} characters, and ${MAX_BODY_PARTS} body parts that Gmail gives apart; if it cannot be forwarded whole, nothing is sent. Parts that are neither plain/HTML text nor attachments are omitted, such as a calendar invitation without a file name or attachment ID. It needs only forward_message's setting. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    input: Schema.Struct({
+      account: DraftInput.fields.account,
+      message: MessageId,
+      to: Mailboxes.check(Schema.isMinLength(1)),
+      cc: DraftInput.fields.cc,
+      bcc: DraftInput.fields.bcc,
+      body: Schema.optionalKey(DraftInput.fields.body),
+      duplicate: DraftInput.fields.duplicate,
+    }),
+    expects: {
+      account: draftExpects.account,
+      message: "a message ID of 1 to 64 letters, digits, hyphens, or underscores from this account",
+      to: "a list of at least one mailbox, each an address or Name <address>",
+      cc: "a list of mailboxes, each an address or Name <address>",
+      bcc: "a list of mailboxes, each an address or Name <address>",
+      body: draftExpects.body,
+      duplicate: draftExpects.duplicate,
+    },
+    defaults: { cc: [], bcc: [], body: "" },
+    unknown: unknownSend,
+    view: {
+      action: "forward a message",
+      notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
+      joiner: "from",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      values: (args, send) =>
+        Effect.gen(function* () {
+          const plan = yield* forwardPlan(send, args.message);
+          if (plan.files.length > MAX_FORWARD_FILES)
+            return yield* Effect.fail(new ViewUnavailable());
+          const bytes =
+            new TextEncoder().encode(forwardBody(plan.quoted, args.body)).byteLength +
+            plan.files.reduce((n, f) => n + f.size, 0);
+          if (bytes > MAX_FORWARD_BYTES)
+            return yield* Effect.fail(messageTooLarge({ bytes, limit: MAX_FORWARD_BYTES }));
+          const mail = draftMail({ body: "", subject: plan.subject }, draftRecipients(args));
+          const recipients = draftValues({ body: "" }, mail, draftRecipients(args)).filter(
+            (v) => v.name !== "Body",
+          );
+          return [
+            { name: "Forwards a message from", text: plan.original.from, from: "gmail" as const },
+            { name: "Its subject", text: plan.original.subject, from: "gmail" as const },
+            { name: "Its date", text: viewDate(plan.original.date), from: "gmail" as const },
+            ...recipients.map((v) => (v.name === "Subject" ? { ...v, from: "gmail" as const } : v)),
+            ...fileValues(plan.files),
+            ...(plan.omitted
+              ? [
+                  {
+                    name: "Not forwarded",
+                    text:
+                      plan.omitted === 1
+                        ? "1 part that is neither text nor a file, such as a calendar invitation"
+                        : `${plan.omitted} parts that are neither text nor files, such as a calendar invitation`,
+                    from: "gmail" as const,
+                  },
+                ]
+              : []),
+            ...duplicateValue(args.duplicate),
+            ...(args.body ? [{ name: "Note", text: args.body, from: "agent" as const }] : []),
+            { name: "Forwarded text", text: plan.quoted, from: "gmail" as const },
+          ];
+        }),
+    },
+    create: (send, _account, args, confirm) =>
+      Effect.gen(function* () {
+        const plan = yield* forwardPlan(send, args.message);
+        const body = forwardBody(plan.quoted, args.body);
+        const files = yield* forwardFiles(
+          send,
+          args.message,
+          plan,
+          new TextEncoder().encode(body).byteLength,
+        );
+        const message = mixedMessage(
+          draftMail({ body, subject: plan.subject }, draftRecipients(args)),
+          files,
+        );
+        return yield* sendStaged(confirm, uploadDraft(send, { message, thread: plan.thread }));
+      }),
+  }),
+  accountTool({
+    name: "send_draft",
+    label: "Send draft",
+    group: "Send",
+    irreversible: true,
+    permissionDescription:
+      "Send a draft that exists in this account, as it is in Gmail at that moment. It cannot be taken back.",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    description: `Sends an existing draft as it is in Gmail at that moment, including changes made there. With ask, a draft that the page cannot show whole cannot be approved: more than ${MAX_DRAFT_FILES} attachments, text that cannot be shown whole (${PAGE_BODY_BYTES.toLocaleString("en-US")} bytes of body, ${MAX_TEXT.toLocaleString("en-US")} characters, or ${MAX_BODY_PARTS} body parts that Gmail gives apart, or HTML that could not be converted), more than ${MAX_DRAFT_HEADERS.toLocaleString("en-US")} characters in its From, To, Cc, Bcc, and Subject, a repeated From, To, Cc, Bcc, Subject or Reply-To header, or a part that is neither text nor a file. A sent message cannot be taken back, and the draft is gone from Drafts afterwards. \`account\` is the address of an account that list_accounts returns. \`draft\` is a draft ID from create_draft or read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    input: Schema.Struct({ account: DraftInput.fields.account, draft: MessageId }),
+    expects: {
+      account: draftExpects.account,
+      draft: "a draft ID of 1 to 64 letters, digits, hyphens, or underscores from this account",
+    },
+    defaults: {},
+    unknown: (email, until, args) =>
+      `The server does not know whether draft "${args.draft}" went out from ${email}. Ask the owner to look in Sent. If the draft is still in Drafts, the owner can send it from Gmail. Until ${isoSeconds(until)}, repeating this call does not send it again.`,
+    view: {
+      action: "send a draft",
+      joiner: "from",
+      empty: "This call has no other values. The sentence above is the whole call.",
+      notes: () => [{ text: draftNote, warning: true }],
+      asItIs: true,
+      values: (args, send) =>
+        Effect.gen(function* () {
+          const raw = yield* readDraft(send, args.draft);
+          const names = ["From", "To", "Cc", "Bcc", "Subject", "Reply-To"];
+          const headers = raw.payload.headers ?? [];
+          if (
+            names.some(
+              (name) =>
+                headers.filter((field) => field.name.toLowerCase() === name.toLowerCase()).length >
+                1,
+            )
+          )
+            return yield* Effect.fail(new ViewUnavailable());
+          const fields = names.map((name) => ({
+            name,
+            text: header(raw.payload.headers, name),
+          }));
+          const files = attachmentParts(raw);
+          if (
+            fields
+              .filter((field) => field.name !== "Reply-To")
+              .reduce((n, f) => n + f.text.length, 0) > MAX_DRAFT_HEADERS ||
+            files.length > MAX_DRAFT_FILES ||
+            otherParts(raw).length > 0
+          )
+            return yield* Effect.fail(new ViewUnavailable());
+          const parsed = yield* Effect.try({
+            try: () => readMessage(raw),
+            catch: () => new ToolFailure({ code: "google_unavailable" }),
+          });
+          const body = yield* textOf(send, parsed, new BodyBudget());
+          if (!body.whole) return yield* Effect.fail(new ViewUnavailable());
+          return [
+            ...fields
+              .filter((f) => f.text)
+              .map((f) => ({
+                ...f,
+                text: ["To", "Cc", "Bcc"].includes(f.name) ? addresses(f.text).join(", ") : f.text,
+                from: "draft" as const,
+              })),
+            ...fileValues(
+              files.map((part) => ({
+                filename: part.filename,
+                type: part.mimeType,
+                size: part.body.size,
+              })),
+            ).map((value) => ({ ...value, from: "draft" as const })),
+            { name: "Body", text: body.text, from: "draft" as const },
+          ];
+        }),
+    },
+    create: (_send, _account, args, confirm) => sendExisting(confirm, args.draft),
   }),
   {
     kind: "plain",

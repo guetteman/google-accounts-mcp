@@ -26,11 +26,21 @@ import {
   type CallId,
   type Outcome,
 } from "../calls/store";
-import { decodeArgs, TOOLS, type DecodedArgs, type Send, type Tool } from "./tools";
+import {
+  decodeArgs,
+  TOOLS,
+  type DecodedArgs,
+  type Send,
+  type Sending,
+  type Confirm,
+  type Tool,
+} from "./tools";
 import { contentOf, takes, type Reader } from "./file";
 import { identityOf } from "../once/identity";
 import { take, settle, release, WINDOW, type Repeat } from "../once/store";
 export const MAX_ARGUMENTS_BYTES = 256 * 1024;
+export const SEND_RESERVE = 5_000;
+const isSend = (request: Request) => new URL(request.url).pathname.endsWith("/send");
 export { CALL_DEADLINE } from "../approvals/model";
 
 export interface CallContext {
@@ -59,7 +69,7 @@ export const repeatAnswer = (
         account,
         ...repeat.result,
         repeat_of: at,
-        note: `This call already ran at ${at}. Nothing was created or sent again. This is its result.${next <= 100 ? ` To make one more on purpose, call again with duplicate: ${next}.` : ""}`,
+        note: `This call already ran at ${at}. Nothing was created or sent again. This is its result.${"duplicate" in tool.expects && next <= 100 ? ` To make one more on purpose, call again with duplicate: ${next}.` : ""}`,
       };
     }
     case "running":
@@ -75,6 +85,10 @@ export const repeatAnswer = (
       });
   }
 };
+const notAllowed = (seen: unknown) =>
+  new ToolFailure({
+    code: seen ? "tool_not_allowed" : "account_not_available",
+  });
 type Allowed = { credential: Credential; status: AccountStatus };
 const tokenFailure = (error: TokenError): ToolFailure => {
   switch (error._tag) {
@@ -98,6 +112,7 @@ export async function executeAccount(
   allowed: Allowed,
   args: DecodedArgs,
   deadline: number,
+  still: Effect.Effect<void, ToolFailure>,
   signal?: AbortSignal,
 ): Promise<Executed> {
   const requests = accountRequests(ctx, allowed, deadline, signal);
@@ -122,9 +137,85 @@ export async function executeAccount(
     if (Result.isFailure(entered)) throw new ToolFailure({ code: "server_unavailable" });
     if (entered.success.kind !== "run") return { kind: "repeat", repeat: entered.success };
     const claim = entered.success.claim;
+    const reserve = deadline - SEND_RESERVE;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(0, reserve - ctx.now()));
+    const unavailable = () => new ToolFailure({ code: "google_unavailable" });
+    const stopped = Effect.callback<never, ToolFailure>((resume) => {
+      const fail = () => resume(Effect.fail(unavailable()));
+      if (controller.signal.aborted) {
+        fail();
+        return;
+      }
+      controller.signal.addEventListener("abort", fail, { once: true });
+      return Effect.sync(() => controller.signal.removeEventListener("abort", fail));
+    });
+    const preparing = (request: Request) => {
+      if (isSend(request)) throw unavailable();
+      return request;
+    };
+    const send: Send = (build) => {
+      let built = false;
+      return requests
+        .send((token, signal) => {
+          if (ctx.now() >= reserve || controller.signal.aborted) throw unavailable();
+          const request = preparing(build(token, AbortSignal.any([signal, controller.signal])));
+          built = true;
+          return request;
+        })
+        .pipe(
+          // Token acquisition can be waiting before a request is built. It shares the reserve.
+          Effect.raceFirst(stopped),
+          Effect.mapError((failure) =>
+            controller.signal.aborted || ctx.now() >= reserve
+              ? new ToolFailure({ code: "google_unavailable", ...(built ? { unknown: true } : {}) })
+              : failure,
+          ),
+        );
+    };
+    const seen: { started: boolean; status: number | null } = { started: false, status: null };
+    const sending = ((build) => {
+      let sends = false;
+      return requests
+        .send((token, signal) => {
+          // A retry here follows a 401, which sent nothing. Start a new call and check again.
+          if (sends) {
+            seen.status = 401;
+            throw unavailable();
+          }
+          const request = build(token, signal);
+          if (isSend(request)) {
+            sends = true;
+            seen.started = true;
+            seen.status = null;
+          }
+          return request;
+        })
+        .pipe(
+          Effect.mapError((failure) => {
+            // A classified token failure after building the send follows its 401 response.
+            if (sends && !failure.unknown) seen.status = 401;
+            return failure;
+          }),
+          Effect.tap((response) =>
+            Effect.sync(() => {
+              if (sends) seen.status = response.status;
+            }),
+          ),
+        );
+    }) as Sending;
+    const late: Send = (build) => requests.send((token, signal) => preparing(build(token, signal)));
+    const confirm: Confirm = {
+      late,
+      check: Effect.gen(function* () {
+        yield* still;
+        if (ctx.now() > reserve) return yield* Effect.fail(unavailable());
+        return sending;
+      }),
+    };
     try {
       const result = await Effect.runPromise(
-        Effect.result(tool.create(requests.send, { email: allowed.credential.email }, args)),
+        Effect.result(tool.create(send, { email: allowed.credential.email }, args, confirm)),
       );
       if (Result.isFailure(result)) throw result.failure;
       await Effect.runPromise(
@@ -132,9 +223,15 @@ export async function executeAccount(
       );
       return { kind: "ran", value: { account: allowed.credential.email, ...result.success } };
     } catch (error) {
-      if (error instanceof ToolFailure && error.code !== "outcome_unknown") {
+      if (
+        error instanceof ToolFailure &&
+        error.code !== "outcome_unknown" &&
+        (!seen.started || (seen.status !== null && seen.status >= 400 && seen.status < 500))
+      ) {
         await Effect.runPromise(Effect.result(release(ctx, claim)));
-        throw error;
+        const data: ConstructorParameters<typeof ToolFailure>[0] = error;
+        const { unknown: _unknown, ...known } = data;
+        throw new ToolFailure({ ...known, released: true });
       }
       const now = ctx.now();
       await Effect.runPromise(Effect.result(settle(ctx, claim, now, { kind: "unknown" })));
@@ -143,6 +240,8 @@ export async function executeAccount(
         unknown: true,
         said: tool.unknown(allowed.credential.email, now + WINDOW, args),
       });
+    } finally {
+      clearTimeout(timer);
     }
   } finally {
     requests.close();
@@ -199,12 +298,17 @@ export async function runCall(
   const tool = TOOLS.find((t) => t.name === name);
   let id: CallId | null = null;
   let email = "";
-  const input = typeof args?.account === "string" ? args.account : "";
+  let input = "";
   let unknownTool = false;
   let result: CallToolResult;
   let outcome: Outcome | null = "success";
   try {
-    const account = tool?.kind === "account" ? normalizeEmail(input) : null;
+    // This measure must precede any decoding or parsing of the arguments.
+    const oversized =
+      tool?.kind === "account" &&
+      new TextEncoder().encode(JSON.stringify(args)).byteLength > MAX_ARGUMENTS_BYTES;
+    if (!oversized) input = typeof args?.account === "string" ? args.account : "";
+    const account = tool?.kind === "account" && !oversized ? normalizeEmail(input) : null;
     const statements = [recordStatement(ctx, tool?.name ?? null, account)];
     if (tool?.kind === "account" && account)
       statements.push(
@@ -214,6 +318,8 @@ export async function runCall(
     const batch = await ctx.db.batch(statements);
     id = decodeCallId(batch[0]!);
     if (!id) throw new ToolFailure({ code: "server_unavailable" });
+    if (oversized)
+      throw new ToolFailure({ code: "invalid_arguments", reason: "arguments_too_large" });
     if (!tool) {
       unknownTool = true;
       outcome = "refused";
@@ -233,15 +339,10 @@ export async function runCall(
             field: { name, expects: decoded.expects ?? tool.expects[name] ?? "valid" },
           });
         }
-        const json = JSON.stringify(decoded.value);
-        if (new TextEncoder().encode(json).byteLength > MAX_ARGUMENTS_BYTES)
-          throw new ToolFailure({ code: "invalid_arguments", reason: "arguments_too_large" });
         const row = batch[1]?.results[0];
         if (!row) {
           email = account ?? "";
-          throw new ToolFailure({
-            code: batch[2]?.results[0] ? "tool_not_allowed" : "account_not_available",
-          });
+          throw notAllowed(batch[2]?.results[0]);
         }
         const allowed: Allowed = await decodeAllowedAccount(row, ctx.config.tokenKey);
         email = allowed.credential.email;
@@ -326,6 +427,22 @@ export async function runCall(
               allowed,
               decoded.value,
               at + CALL_DEADLINE,
+              Effect.tryPromise({
+                try: () =>
+                  ctx.db.batch([
+                    allowedAccountStatement(ctx, tool.name, account!),
+                    seenAccountStatement(ctx, account!),
+                  ]),
+                catch: () => new ToolFailure({ code: "server_unavailable" }),
+              }).pipe(
+                Effect.flatMap((checked) => {
+                  const row = checked[0]!.results[0];
+                  if (!row) return Effect.fail(notAllowed(checked[1]!.results[0]));
+                  return (row as { ask: unknown }).ask === 0
+                    ? Effect.void
+                    : Effect.fail(new ToolFailure({ code: "server_unavailable" }));
+                }),
+              ),
             );
             if (executed.kind === "repeat") {
               outcome = "repeat";
@@ -346,8 +463,8 @@ export async function runCall(
         origin: ctx.origin,
         tool: tool?.name ?? "",
         connection: ctx.connection.connectionId,
-        // A tool with `create` marks its own uncertain request as outcome_unknown, so its other
-        // failures never mean that a change may have happened.
+        // Only run tools use the generic uncertain-change wording. A create tool marks its
+        // creating or sending request and reports a possible leftover draft separately.
         annotations: tool?.kind === "account" && tool.create ? undefined : tool?.annotations,
       },
     );

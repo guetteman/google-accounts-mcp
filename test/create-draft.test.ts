@@ -195,7 +195,7 @@ it("releases a deadline failure before the answered message is read", async () =
   expect(google.draftCreates).toHaveLength(1);
 });
 
-it("fails closed when the deadline passes after reading and before the creating request", async () => {
+it("releases a known deadline failure after reading and before the creating request", async () => {
   const f = await draftFixture();
   const at = Date.now();
   serveMessage();
@@ -207,18 +207,15 @@ it("fails closed when the deadline passes after reading and before the creating 
   });
   await expectError(
     await draftCall(f, { reply_to: SOURCE }),
-    "outcome_unknown",
-    /The server does not know whether the draft was created.*Ask the owner to look in Drafts/,
+    "google_unavailable",
+    /Google could not complete/,
   );
-  expect((await onceRows())[0]!.state).toBe("unknown");
+  expect(await onceRows()).toEqual([]);
   vi.mocked(Date.now).mockReturnValue(at);
-  await expectError(
-    await draftCall(f, { reply_to: SOURCE }),
-    "outcome_unknown",
-    /Ask the owner to look in Drafts/,
-  );
-  expect(google.messageRequests).toHaveLength(1);
-  expect(google.draftCreates).toEqual([]);
+  serveMessage();
+  await answer(await draftCall(f, { reply_to: SOURCE }));
+  expect(google.messageRequests).toHaveLength(2);
+  expect(google.draftCreates).toHaveLength(1);
 });
 
 it.each([
@@ -233,8 +230,14 @@ it.each([
 
 it.each([
   { name: "invalid From", headers: { From: "not a mailbox" } },
-  { name: "long From", headers: { From: "x".repeat(2001) + " <sam@example.com>" } },
-  { name: "long Reply-To", headers: { "Reply-To": "x".repeat(2001) + " <sam@example.com>" } },
+  {
+    name: "long From",
+    headers: { From: "x".repeat(600 - " <sam@example.com>".length) + " <sam@example.com>" },
+  },
+  {
+    name: "long Reply-To",
+    headers: { "Reply-To": "x".repeat(600 - " <sam@example.com>".length) + " <sam@example.com>" },
+  },
 ])("asks for given recipients for $name and keeps no row", async ({ headers }) => {
   const f = await draftFixture();
   serveMessage(headers);
@@ -295,7 +298,7 @@ it("bounds filled recipients after RFC 2047 encoding, even when the source heade
 });
 
 it.each(["b", "<x@example.com>"])(
-  "rejects a 300000-character recipient ending in %s even when denied",
+  "rejects oversized arguments before parsing a recipient ending in %s even when denied",
   async (end) => {
     const f = await draftFixture();
     await setDraft(f, "deny");
@@ -303,7 +306,7 @@ it.each(["b", "<x@example.com>"])(
     await expectError(
       await draftCall(f, { to: [text] }),
       "invalid_arguments",
-      /The to field must be/,
+      "The arguments are too large. The limit is 256 KB.",
     );
     expect(await rows()).toEqual([]);
     expect(await onceRows()).toEqual([]);

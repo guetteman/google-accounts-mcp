@@ -71,6 +71,10 @@ it("renders every tool in its group, in tool-list order, and no empty group", as
     { name: "restore_messages", group: "Trash and delete" },
     { name: "delete_messages", group: "Trash and delete" },
     { name: "get_attachment", group: "Download attachments" },
+    { name: "send_message", group: "Send" },
+    { name: "send_reply", group: "Send" },
+    { name: "forward_message", group: "Send" },
+    { name: "send_draft", group: "Send" },
   ]);
   expect(props.tools.find((tool) => tool.name === "change_labels")).toEqual({
     name: "change_labels",
@@ -91,6 +95,10 @@ it("renders every tool in its group, in tool-list order, and no empty group", as
   );
   expect(first.indexOf('aria-label="Search mail on Personal')).toBeLessThan(
     first.indexOf('aria-label="Read thread on Personal'),
+  );
+  expect(textOf(first)).toContain("Send");
+  expect(first.indexOf('aria-label="Create draft on Personal')).toBeLessThan(
+    first.indexOf('aria-label="Send message on Personal'),
   );
   expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
     first.indexOf('aria-label="Change labels on Personal'),
@@ -241,6 +249,26 @@ it.each(["00000000-0000-4000-8000-000000000000", "not-an-id"])(
       expect(html).not.toContain(value);
   },
 );
+
+it("marks four sends and permanent delete as irreversible", async () => {
+  const f = await fixture();
+  const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
+  const tools = pageProps(html).tools;
+  expect(
+    GROUPS.flatMap((group) =>
+      tools
+        .filter((tool) => tool.group === group && tool.irreversible)
+        .map(({ name, label }) => ({ name, label })),
+    ),
+  ).toEqual([
+    { name: "send_message", label: "Send message" },
+    { name: "send_reply", label: "Send reply" },
+    { name: "forward_message", label: "Forward message" },
+    { name: "send_draft", label: "Send draft" },
+    { name: "delete_messages", label: "Delete permanently" },
+  ]);
+  expect(tools.find((tool) => tool.name === "create_draft")!.irreversible).toBe(false);
+});
 
 it("tells the page which tools cannot be undone, from each tool's own declaration", async () => {
   const f = await fixture();

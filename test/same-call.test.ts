@@ -1,3 +1,4 @@
+import { RUN_DEADLINE } from "../src/approvals/model";
 import { env } from "cloudflare:workers";
 import { Effect, Result } from "effect";
 import { HttpResponse } from "msw";
@@ -15,6 +16,7 @@ import { parseConnectionId } from "../src/connections/model";
 import { scheduled } from "../src/approvals/scheduled";
 import { answer, approve, decided, digest, get, post, row, rows } from "./support/approvals";
 import { draftCall, draftFixture, onceRows, setDraft, decodedMail } from "./support/draft";
+import { never } from "./support/send";
 import { deferred, google } from "./support/google";
 import { callRows, expectError, PERSONAL, permission, toolCall } from "./support/permissions";
 import { observeStatements, statementFailingDb } from "./support/db";
@@ -364,7 +366,15 @@ it.each(["success", "unknown"])(
       google.draftCreateAnswers.push(() => new Response(null, { status: 500 }));
     expect((await approve(f, id)).state.kind).toBe(outcome === "success" ? "succeeded" : "unknown");
     expect(await get(f, id)).toEqual(
-      outcome === "success" ? { status: "success", result: ids } : { status: "unknown" },
+      outcome === "success"
+        ? { status: "success", result: ids }
+        : {
+            status: "unknown",
+            error: {
+              code: "outcome_unknown",
+              message: unknownMessage(Date.now() + WINDOW),
+            },
+          },
     );
     if (outcome === "success")
       expect(await answer(await draftCall(f))).toEqual(repeated(Date.now()));
@@ -446,7 +456,10 @@ it.each(["done", "running", "unknown"])(
       expect(await get(f, id)).toEqual(
         state === "done"
           ? { status: "success", result: repeated(Date.now()) }
-          : { status: "unknown" },
+          : {
+              status: "unknown",
+              error: { code: "outcome_unknown", message: unknownMessage(Date.now() + WINDOW) },
+            },
       );
       const approval = (await row(id))!;
       expect(approval.outcome).toBe(state === "done" ? "success" : "unknown");
@@ -683,7 +696,7 @@ it("executeAccount fails closed on an unclassified exception after the creating 
   };
   const args = { account: PERSONAL, body: "Hello" };
   await expect(
-    executeAccount(ctx, broken, allowed, args, Date.now() + CALL_DEADLINE),
+    executeAccount(ctx, broken, allowed, args, Date.now() + CALL_DEADLINE, Effect.void),
   ).rejects.toMatchObject({
     code: "outcome_unknown",
     unknown: true,
@@ -734,3 +747,38 @@ it.each([
     expect(google.draftCreates).toHaveLength(2);
   },
 );
+
+it("keeps an uncertain creating request cut at the reserve and never creates it again", async () => {
+  const f = await draftFixture();
+  const at = Date.now();
+  const db = observeStatements(
+    env.DB,
+    () => {},
+    (sql) => {
+      if (sql.startsWith("INSERT INTO once")) vi.mocked(Date.now).mockReturnValue(at + 8_000);
+    },
+  );
+  const entered = deferred();
+  google.draftCreateAnswers.push((request) => {
+    entered.resolve();
+    return never(request);
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const work = draftCall(f, {}, testEnv({ DB: db }));
+  await entered.promise;
+  try {
+    await vi.advanceTimersByTimeAsync(7_000);
+    await expectError(await work, "outcome_unknown", /does not know whether the draft was created/);
+    expect((await onceRows())[0]!.state).toBe("unknown");
+    await expectError(await draftCall(f), "outcome_unknown", /does not know/);
+    expect(google.draftCreates).toHaveLength(1);
+  } finally {
+    await vi.advanceTimersByTimeAsync(CALL_DEADLINE);
+    await work;
+  }
+});
+
+it("keeps a running call's stale window beyond both execution deadlines", () => {
+  expect(STALE).toBeGreaterThan(CALL_DEADLINE);
+  expect(STALE).toBeGreaterThan(RUN_DEADLINE);
+});

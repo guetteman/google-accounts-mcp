@@ -20,6 +20,11 @@ export const failures = {
     message: () => "This client cannot read the attachment.",
   },
   not_found: { outcome: "refused", message: () => "The requested item does not exist." },
+  message_too_large: {
+    outcome: "refused",
+    message: () => "Gmail refused this message as too large.",
+  },
+  message_not_sendable: { outcome: "refused", message: () => "Gmail refused this message." },
   invalid_arguments: { outcome: "refused", message: () => "The arguments are not valid." },
   account_not_available: {
     outcome: "refused",
@@ -80,6 +85,15 @@ export const failures = {
 export type Missing = "thread" | "message" | "draft" | "attachment" | "label";
 export const notFound = (kind: Missing, id: string | readonly string[]): ToolFailure =>
   new ToolFailure({ code: "not_found", missing: { kind, id } });
+export const messageTooLarge = (
+  over:
+    | { bytes: number; limit: number }
+    | { attachments: number; limit: number }
+    | { text: true }
+    | null,
+): ToolFailure => new ToolFailure({ code: "message_too_large", over });
+export const notSendable = (draft: string | null): ToolFailure =>
+  new ToolFailure({ code: "message_not_sendable", unsendable: { draft } });
 type FileInfo = { filename: string; type: string; size: number };
 export const tooLarge = (file: FileInfo, limit: number): ToolFailure =>
   new ToolFailure({
@@ -94,6 +108,18 @@ export const notReadable = (file: FileInfo): ToolFailure =>
   });
 type FailureData = {
   unknown?: boolean;
+  /** The once row was released; do not classify this as an unknown call. */
+  released?: true;
+  /** Nothing was sent; a staged draft may remain, with its ID when known. */
+  leftover?: { draft?: string };
+  /** The exceeded local limit, unreadable original text, or null for Gmail's size refusal. */
+  over?:
+    | { bytes: number; limit: number }
+    | { attachments: number; limit: number }
+    | { text: true }
+    | null;
+  /** An existing draft the owner can complete, or null for composed mail. */
+  unsendable?: { draft: string | null };
   said?: string;
   missing?: { kind: Missing; id: string | readonly string[] };
   reason?: "arguments_too_large";
@@ -145,7 +171,8 @@ export function classify(
     error instanceof ToolFailure ? error : new ToolFailure({ code: "server_unavailable" });
   const entry = failures[failure.code];
   const unknown =
-    failure.unknown || when.aborted || (when.approved && failure.code === "server_unavailable");
+    !failure.released &&
+    (failure.unknown || when.aborted || (when.approved && failure.code === "server_unavailable"));
   const filename = failure.file?.filename ? JSON.stringify(failure.file.filename) : "(no name)";
   const fileMessage =
     failure.file &&
@@ -160,6 +187,17 @@ export function classify(
     text.annotations?.readOnlyHint === false
       ? `Google did not confirm the request for ${text.email}. It may have taken effect.${text.annotations.idempotentHint ? " Sending the same call again is safe." : ""}`
       : entry.message(text.input, text.email, text.origin, text.tool, text.connection);
+  const describe = (message: string) => {
+    if (!failure.leftover) return message;
+    const draft =
+      failure.leftover.draft === undefined
+        ? "a draft of this mail"
+        : `draft ${JSON.stringify(failure.leftover.draft)} of this mail`;
+    const advice = `${draft} may be left in Drafts. The owner should delete it there before this call is made again.`;
+    return failure.code === "google_unavailable"
+      ? `Nothing was sent from ${text.email}. Google did not confirm a step before the send, so ${advice}`
+      : `${message} ${advice[0]!.toUpperCase()}${advice.slice(1)}`;
+  };
   return {
     audit: unknown ? null : entry.outcome,
     error:
@@ -167,16 +205,27 @@ export function classify(
         ? null
         : {
             code: failure.code,
-            message:
+            message: describe(
               failure.said ??
-              fileMessage ??
-              (failure.reason === "arguments_too_large"
-                ? "The arguments are too large. The limit is 256 KB."
-                : failure.field
-                  ? `The ${failure.field.name} field must be ${failure.field.expects}.`
-                  : failure.missing
-                    ? missingMessage(failure.missing, text.email)
-                    : message),
+                fileMessage ??
+                (failure.reason === "arguments_too_large"
+                  ? "The arguments are too large. The limit is 256 KB."
+                  : failure.field
+                    ? `The ${failure.field.name} field must be ${failure.field.expects}.`
+                    : failure.missing
+                      ? missingMessage(failure.missing, text.email)
+                      : failure.over
+                        ? "text" in failure.over
+                          ? "The text of the original message cannot be carried whole: it is too large, or its HTML could not be converted."
+                          : "bytes" in failure.over
+                            ? `This message would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is ${failure.over.limit.toLocaleString("en-US")} bytes.`
+                            : `This message would have ${failure.over.attachments} attachments. The limit is ${failure.over.limit}.`
+                        : failure.unsendable
+                          ? failure.unsendable.draft === null
+                            ? `Gmail refused this message from ${text.email}. The usual cause is an address that is not valid.`
+                            : `Gmail refused to send draft "${failure.unsendable.draft}" from ${text.email}. The usual cause is a draft with no recipient or with an address that is not valid. The owner can complete it in Gmail.`
+                          : message),
+            ),
           },
   };
 }

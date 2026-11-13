@@ -90,16 +90,22 @@ function Quoted({ label, text }: { readonly label: string; readonly text: string
 }
 
 const OWN_WORDS = "This page's own words are never shaded.";
-const SOURCES = { agent: "written by the agent", gmail: "read from Gmail" } as const;
+const SOURCES = {
+  agent: "written by the agent",
+  gmail: "read from Gmail",
+  draft: "read from a draft",
+} as const;
 type Values = ApprovalRequest["values"];
 const mixed = (values: Values) => new Set(values.map((value) => value.from)).size > 1;
-/** Whose text the shaded values are. Text read from Gmail was never written by the agent. */
+/** Introduce where the shaded values were read, without guessing who wrote a draft. */
 const whose = (values: Values) =>
   mixed(values)
     ? "The agent wrote part of the shaded text below, and the server read the rest from Gmail. Each caption says which."
-    : values[0]?.from === "gmail"
-      ? "The server read the shaded text below from Gmail. The agent did not write it."
-      : "The agent wrote the shaded text below.";
+    : values[0]?.from === "draft"
+      ? "The server read the shaded text below from a draft in Gmail. The agent or you may have written it."
+      : values[0]?.from === "gmail"
+        ? "The server read the shaded text below from Gmail. The agent did not write it."
+        : "The agent wrote the shaded text below.";
 
 const minutes = (count: number) => (count === 1 ? "1 minute" : `${count} minutes`);
 
@@ -477,9 +483,10 @@ function DecidedView({
       <div className="flex flex-col gap-4" aria-live="polite">
         <h1 className="text-2xl/9 font-semibold tracking-tight text-balance">{outcome.headline}</h1>
         <p className="text-base/7 text-muted-foreground">{outcome.detail}</p>
-        {state.kind === "failed" && state.message !== null && (
-          <Quoted label="The tool's message" text={state.message} />
-        )}
+        {(state.kind === "failed" || state.kind === "unknown") &&
+          typeof state.message === "string" && (
+            <Quoted label="The tool's message" text={state.message} />
+          )}
         <p className="text-base/7">{outcome.next}</p>
         {state.kind === "unconfirmed" && (
           <Button asChild size="lg" className="mt-2 h-11 text-base sm:w-52">

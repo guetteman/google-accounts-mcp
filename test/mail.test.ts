@@ -179,3 +179,152 @@ it("rechecks addresses and encodes header injection even from an unsafe caller",
     envelopeLines(outgoing({ inReplyTo: "<bad\nid>", references: "<ok@example.com>" })),
   ).toEqual(["MIME-Version: 1.0"]);
 });
+
+it("multipart file names round trip while unsafe media types cannot add headers or boundaries", async () => {
+  const { mixedMessage } = await import("../src/google/mail");
+  const { mime } = await import("./support/send");
+  const files = [
+    {
+      filename: 'quote"\r\nBcc: x@example.com ñ',
+      type: "image/png\r\nBcc: x@example.com",
+      bytes: new Uint8Array([0, 255, 254, 0]),
+    },
+    {
+      filename: "space and 'quote'.pdf",
+      type: "application/pdf",
+      bytes: new TextEncoder().encode("file content"),
+    },
+    { filename: "empty", type: "x/" + "a".repeat(99), bytes: new Uint8Array() },
+    {
+      filename: "blocks.bin",
+      type: "application/octet-stream",
+      bytes: Uint8Array.from({ length: 60_001 }, (_, i) => i % 256),
+    },
+  ];
+  const blob = mixedMessage(outgoing({ subject: "Files", body: "Plain text\nunchanged" }), files);
+  expect(blob).toBeInstanceOf(Blob);
+  const text = await blob.text();
+  const parsed = mime(text);
+  expect(new TextDecoder().decode(parsed.parts[0]!.data)).toBe("Plain text\nunchanged");
+  for (const [i, file] of files.entries()) {
+    const sent = parsed.parts[i + 1]!;
+    expect(sent.data).toEqual(file.bytes);
+    expect(decodeURIComponent(sent.headers["Content-Disposition"]!.split("UTF-8''")[1]!)).toBe(
+      file.filename,
+    );
+    expect(Object.keys(sent.headers)).toEqual([
+      "Content-Type",
+      "Content-Disposition",
+      "Content-Transfer-Encoding",
+    ]);
+    expect(sent.headers["Content-Type"]).toBe(
+      i === 1 ? "application/pdf" : "application/octet-stream",
+    );
+  }
+});
+
+it("the multipart root named 0 never hides a file child named 0", async () => {
+  const { attachmentPart, attachmentFields, readMessage } = await import("../src/google/message");
+  const { message, part, tree } = await import("./support/thread");
+  const raw = message();
+  const file = part("application/pdf", "PDF", "0", "report.pdf");
+  const multipart = { ...raw, payload: tree("multipart/mixed", [file]) };
+  expect(attachmentPart(multipart, "0")).toBe(file);
+  expect(attachmentFields(file)).toMatchObject({ filename: "report.pdf", attachment: "0" });
+  const root = { ...raw, payload: { ...file, partId: "" } };
+  expect(attachmentPart(root, "0")).toBe(root.payload);
+  expect(readMessage(multipart).attachments).toHaveLength(1);
+});
+
+it("encodes an attachment filename with a lone surrogate as well-formed UTF-8", async () => {
+  const { mixedMessage } = await import("../src/google/mail");
+  const text = await mixedMessage(outgoing({ body: "Body" }), [
+    { filename: "bad\ud800.txt", type: "text/plain", bytes: new Uint8Array([1]) },
+  ]).text();
+  expect(text).toContain("filename*=UTF-8''bad%EF%BF%BD.txt");
+});
+
+it.each([
+  { filename: "🙂".repeat(100) + ".pdf", expected: "🙂".repeat(70) + ".pdf" },
+  {
+    filename: "a".repeat(1_000) + ".abcdefghijklmnop",
+    expected: "a".repeat(833) + ".abcdefghijklmnop",
+  },
+  { filename: "a".repeat(1_000) + ".abcdefghijklmnopq", expected: "a".repeat(850) },
+])(
+  "bounds the whole encoded filename line to 900 characters and keeps a short extension (%#)",
+  async ({ filename, expected }) => {
+    const { mixedMessage } = await import("../src/google/mail");
+    const text = await mixedMessage(outgoing(), [
+      { filename, type: "application/pdf", bytes: new Uint8Array([1]) },
+    ]).text();
+    const line = text.split("\r\n").find((value) => value.startsWith("Content-Disposition:"))!;
+    expect(line.length).toBeLessThanOrEqual(900);
+    const encoded = line.split("filename*=UTF-8''")[1]!;
+    expect(decodeURIComponent(encoded)).toBe(expected);
+    expect(decodeURIComponent(encoded)).not.toContain("�");
+  },
+);
+
+it.each(["message/rfc822", "message/global", "MESSAGE/RFC822"])(
+  "sends an attached %s as octet-stream with its bytes and filename",
+  async (type) => {
+    const { mixedMessage } = await import("../src/google/mail");
+    const { mime } = await import("./support/send");
+    const parsed = mime(
+      await mixedMessage(outgoing(), [
+        { filename: "attached.eml", type, bytes: new TextEncoder().encode("Attached mail bytes") },
+      ]).text(),
+    );
+    expect(parsed.parts[1]!.headers).toEqual({
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": "attachment; filename*=UTF-8''attached.eml",
+      "Content-Transfer-Encoding": "base64",
+    });
+    expect(new TextDecoder().decode(parsed.parts[1]!.data)).toBe("Attached mail bytes");
+  },
+);
+
+it("escapes every RFC 5987 punctuation character in an attachment filename", async () => {
+  const { mixedMessage } = await import("../src/google/mail");
+  const { mime } = await import("./support/send");
+  const parsed = mime(
+    await mixedMessage(outgoing(), [
+      { filename: "mark!'()*.txt", type: "text/plain", bytes: new Uint8Array([1]) },
+    ]).text(),
+  );
+  expect(parsed.parts[1]!.headers["Content-Disposition"]).toBe(
+    "attachment; filename*=UTF-8''mark%21%27%28%29%2A.txt",
+  );
+});
+
+it.each([
+  { charset: "ISO-8859-1", suffix: "; charset=ISO-8859-1" },
+  { charset: "a._:-9", suffix: "; charset=a._:-9" },
+  { charset: "a".repeat(40), suffix: "; charset=" + "a".repeat(40) },
+  { charset: undefined, suffix: "" },
+  { charset: "", suffix: "" },
+  { charset: "a".repeat(41), suffix: "" },
+  { charset: 'UTF-8"', suffix: "" },
+  { charset: "UTF-8\r\nBcc: other@example.com", suffix: "" },
+])("writes only a bounded token as an attachment charset (%#)", async ({ charset, suffix }) => {
+  const { mixedMessage } = await import("../src/google/mail");
+  const { mime } = await import("./support/send");
+  const bytes = new Uint8Array([233, 44, 49, 10]);
+  const sent = mime(
+    await mixedMessage(outgoing(), [
+      {
+        filename: "rows.csv",
+        type: "text/csv",
+        bytes,
+        ...(charset === undefined ? {} : { charset }),
+      },
+    ]).text(),
+  );
+  expect(sent.parts[1]!.headers).toEqual({
+    "Content-Type": `text/csv${suffix}`,
+    "Content-Disposition": "attachment; filename*=UTF-8''rows.csv",
+    "Content-Transfer-Encoding": "base64",
+  });
+  expect(sent.parts[1]!.data).toEqual(bytes);
+});

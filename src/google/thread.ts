@@ -8,6 +8,7 @@ import {
   BODY_BYTES_LEFT_OUT,
   HTML_UNREADABLE,
   MAX_TEXT,
+  MAX_BODY_PARTS,
   PAGE_BODY_BYTES,
   shorten,
 } from "./bounds";
@@ -21,6 +22,7 @@ import {
   type Attachment,
   type Body,
   type BodyPart,
+  type Message,
 } from "./message";
 
 export const LIMIT = 32_000;
@@ -45,6 +47,7 @@ export interface ThreadMessage {
   message: string;
   position: number;
   from: string;
+  reply_to?: string;
   to: string[];
   cc: string[];
   bcc?: string[];
@@ -75,8 +78,8 @@ const bodyParts = (bodies: readonly Body[], fallbacks: boolean, parts = new Set<
   return parts;
 };
 /** One page budget for both decoded bytes and deferred requests, counting each part once. */
-class BodyBudget {
-  private left = { bytes: PAGE_BODY_BYTES, requests: 3 };
+export class BodyBudget {
+  private left = { bytes: PAGE_BODY_BYTES, requests: MAX_BODY_PARTS };
   private used = new Set<BodyPart>();
   private cost(bodies: readonly Body[], fallbacks: boolean) {
     const cost = { bytes: 0, requests: 0 };
@@ -185,6 +188,104 @@ function fit(
   else append(piece(end), pageOf(message.message, end));
   return false;
 }
+type Decoded = { text: string } | { omitted: string };
+/** The text of one message, under the caller's page budget. */
+export const textOf = (
+  send: Send,
+  message: Message,
+  budget: BodyBudget,
+): Effect.Effect<
+  {
+    text: string;
+    whole: boolean;
+    read: (part: BodyPart) => Effect.Effect<Decoded, ToolFailure>;
+  },
+  ToolFailure
+> =>
+  Effect.gen(function* () {
+    let whole = true;
+    const decoded = new Map<BodyPart, Decoded>();
+    const readPart = (part: BodyPart): Effect.Effect<Decoded, ToolFailure> =>
+      Effect.gen(function* () {
+        const cached = decoded.get(part);
+        if (cached) return cached;
+        const omitted = budget.take(part);
+        if (omitted !== undefined) {
+          whole = false;
+          const value = { omitted };
+          decoded.set(part, value);
+          return value;
+        }
+        const data =
+          "data" in part
+            ? part.data
+            : (yield* get(
+                send,
+                `messages/${encodeURIComponent(message.message)}/attachments/${encodeURIComponent(part.fetch)}`,
+                AttachmentBytes,
+              )).data;
+        const text = yield* Effect.try({
+          try: () => decodeBody(data),
+          catch: () => new ToolFailure({ code: "google_unavailable" }),
+        });
+        const value = { text };
+        decoded.set(part, value);
+        return value;
+      });
+    let htmlFailed = false;
+    const readBodies = (bodies: readonly Body[]): Effect.Effect<string, ToolFailure> =>
+      Effect.gen(function* () {
+        const pieces: string[] = [];
+        let length = 0;
+        for (const body of bodies) {
+          const text = yield* bodyText(body);
+          if (htmlFailed) return HTML_UNREADABLE;
+          const joined = (pieces.length ? "\n\n" : "") + text;
+          pieces.push(joined.slice(0, MAX_TEXT + 1 - length));
+          length += joined.length;
+          if (length > MAX_TEXT) {
+            whole = false;
+            break;
+          }
+        }
+        return boundedText(pieces.join(""));
+      });
+    const bodyText = (body: Body): Effect.Effect<string, ToolFailure> =>
+      Effect.gen(function* () {
+        if (body.kind === "alternative") {
+          if (!budget.bytesFit(body.preferred) && budget.fits(body.fallback, false)) {
+            whole = false;
+            return yield* readBodies(body.fallback);
+          }
+          const text = yield* readBodies(body.preferred);
+          return text.trim() ? text : yield* readBodies(body.fallback);
+        }
+        const value = yield* readPart(body);
+        if ("omitted" in value) return value.omitted;
+        const { text } = value;
+        if (body.kind === "html") {
+          return yield* Effect.promise(() =>
+            htmlToText(text, () => {
+              whole = false;
+            }).catch(() => {
+              htmlFailed = true;
+              whole = false;
+              return HTML_UNREADABLE;
+            }),
+          );
+        }
+        return text;
+      });
+    const text = yield* readBodies(message.body);
+    // The inline-image scan may inspect local HTML and bodies already read, but must
+    // not download an unselected alternative merely to find its content IDs.
+    const read = (part: BodyPart) =>
+      "data" in part || decoded.has(part)
+        ? readPart(part)
+        : Effect.succeed({ omitted: BODY_PART_LEFT_OUT });
+    return { text, whole, read };
+  });
+
 export const readThread = (
   send: Send,
   input: { account: string; thread: string; page: string | undefined },
@@ -223,78 +324,15 @@ export const readThread = (
         result.next_page = pageOf(parsed.message);
         break;
       }
-      type Decoded = { text: string } | { omitted: string };
-      const decoded = new Map<BodyPart, Decoded>();
-      const readPart = (part: BodyPart): Effect.Effect<Decoded, ToolFailure> =>
-        Effect.gen(function* () {
-          const cached = decoded.get(part);
-          if (cached) return cached;
-          const omitted = budget.take(part);
-          if (omitted !== undefined) {
-            const value = { omitted };
-            decoded.set(part, value);
-            return value;
-          }
-          const data =
-            "data" in part
-              ? part.data
-              : (yield* get(
-                  send,
-                  `messages/${encodeURIComponent(parsed.message)}/attachments/${encodeURIComponent(part.fetch)}`,
-                  AttachmentBytes,
-                )).data;
-          const text = yield* Effect.try({
-            try: () => decodeBody(data),
-            catch: () => new ToolFailure({ code: "google_unavailable" }),
-          });
-          const value = { text };
-          decoded.set(part, value);
-          return value;
-        });
-      let htmlFailed = false;
-      const readBodies = (bodies: readonly Body[]): Effect.Effect<string, ToolFailure> =>
-        Effect.gen(function* () {
-          const pieces: string[] = [];
-          let length = 0;
-          for (const body of bodies) {
-            const text = yield* bodyText(body);
-            if (htmlFailed) return HTML_UNREADABLE;
-            const joined = (pieces.length ? "\n\n" : "") + text;
-            pieces.push(joined.slice(0, MAX_TEXT + 1 - length));
-            length += joined.length;
-            if (length > MAX_TEXT) break;
-          }
-          return boundedText(pieces.join(""));
-        });
-      const bodyText = (body: Body): Effect.Effect<string, ToolFailure> =>
-        Effect.gen(function* () {
-          if (body.kind === "alternative") {
-            if (!budget.bytesFit(body.preferred) && budget.fits(body.fallback, false))
-              return yield* readBodies(body.fallback);
-            const text = yield* readBodies(body.preferred);
-            return text.trim() ? text : yield* readBodies(body.fallback);
-          }
-          const value = yield* readPart(body);
-          if ("omitted" in value) return value.omitted;
-          const { text } = value;
-          if (body.kind === "html") {
-            return yield* Effect.promise(() =>
-              htmlToText(text).catch(() => {
-                htmlFailed = true;
-                return HTML_UNREADABLE;
-              }),
-            );
-          }
-          return text;
-        });
-      const text = yield* readBodies(parsed.body);
+      const body = yield* textOf(send, parsed, budget);
+      const { text, read: readPart } = body;
       const offset = index === start ? (place?.offset ?? 0) : 0;
       if (offset > text.length || safeEnd(text, offset) !== offset)
         return yield* Effect.fail(invalidPage());
       const { body: _body, html: _html, attachments, ...fields } = parsed;
       const heldHtml: string[] = [];
       if (attachments.some((a) => a.contentId)) {
-        for (const part of new Set([...scanHtml, ...decoded.keys()])) {
+        for (const part of new Set([...scanHtml, ...bodyParts(parsed.body, true)])) {
           if (part.kind !== "html") continue;
           const value = yield* readPart(part);
           if ("text" in value) heldHtml.push(value.text);

@@ -274,6 +274,123 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
       ],
     },
   },
+  "approval-waiting-send": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Send message",
+        action: "send a message",
+        joiner: "from",
+      },
+      notes: [{ text: "A sent message cannot be taken back.", warning: true }],
+      values: [
+        { name: "To", text: "Sam Lee <sam@example.com>", from: "agent" },
+        { name: "Cc", text: "Kim <kim@northwind.example>", from: "agent" },
+        { name: "Bcc", text: "Lee <lee@example.com>", from: "agent" },
+        { name: "Subject", text: "Notes for Thursday's meeting", from: "agent" },
+        {
+          name: "Body",
+          text: "Hi Sam,\n\nHere are the notes for Thursday. Please review the budget before we meet.\n\nThanks,\nAlex",
+          from: "agent",
+        },
+      ],
+    },
+  },
+  "approval-waiting-send-reply": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Send reply",
+        action: "send a reply",
+        joiner: "from",
+      },
+      notes: [{ text: "A sent message cannot be taken back.", warning: true }],
+      values: [
+        { name: "Answers a message from", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
+        { name: "Its subject", text: "Invoice for October", from: "gmail" },
+        { name: "Its date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+        { name: "To", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
+        { name: "Subject", text: "Re: Invoice for October", from: "gmail" },
+        {
+          name: "Body",
+          text: "Hi Kim,\n\nThe invoice looks correct. I'll arrange payment on Friday.\n\nThanks,\nAlex",
+          from: "agent",
+        },
+      ],
+    },
+  },
+  "approval-waiting-forward": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Forward message",
+        action: "forward a message",
+        joiner: "from",
+      },
+      notes: [{ text: "A sent message cannot be taken back.", warning: true }],
+      values: [
+        { name: "Forwards a message from", text: "Kim Lee <kim@northwind.example>", from: "gmail" },
+        { name: "Its subject", text: "Invoice for October", from: "gmail" },
+        { name: "Its date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+        { name: "To", text: "Sam Lee <sam@example.com>", from: "agent" },
+        { name: "Subject", text: "Fwd: Invoice for October", from: "gmail" },
+        { name: "Attachments", text: "2 files, 128,456 bytes in all", from: "gmail" },
+        {
+          name: "Attachment 1",
+          text: "October invoice.pdf (application/pdf, 125,000 bytes)",
+          from: "gmail",
+        },
+        { name: "Attachment 2", text: "logo.png (image/png, 3,456 bytes)", from: "gmail" },
+        {
+          name: "Not forwarded",
+          text: "1 part that is neither text nor a file, such as a calendar invitation",
+          from: "gmail",
+        },
+        { name: "Note", text: "Please arrange payment on Friday.", from: "agent" },
+        {
+          name: "Forwarded text",
+          text: "---------- Forwarded message ---------\nFrom: Kim Lee <kim@northwind.example>\nDate: 2026-11-11T09:41:36Z\nSubject: Invoice for October\nTo: Alex <alex.personal@example.com>\n\nThe invoice for October is attached. Thank you!",
+          from: "gmail",
+        },
+      ],
+    },
+  },
+  "approval-waiting-send-draft": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Send draft",
+        action: "send a draft",
+        joiner: "from",
+      },
+      notes: [
+        {
+          text: "This is the draft as it is in Gmail now. It is sent as it is at the moment you approve, also if it changed after this page loaded.",
+          warning: true,
+        },
+      ],
+      values: [
+        { name: "From", text: "Alex <alex.personal@example.com>", from: "draft" },
+        { name: "To", text: "Sam Lee <sam@example.com>", from: "draft" },
+        { name: "Subject", text: "Notes for Thursday's meeting", from: "draft" },
+        { name: "Attachments", text: "1 file, 1 byte in all", from: "draft" },
+        { name: "Attachment 1", text: "ack.txt (text/plain, 1 byte)", from: "draft" },
+        {
+          name: "Body",
+          text: "Hi Sam,\n\nHere are the notes for Thursday. Please review the budget before we meet.\n\nThanks,\nAlex",
+          from: "draft",
+        },
+      ],
+    },
+  },
   "approval-waiting-delete": {
     ...approvalBase,
     request: {
@@ -331,6 +448,23 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
       { ...approvalBase, state: { kind } },
     ]),
   ),
+  "approval-unknown-send": {
+    ...approvalBase,
+    request: {
+      ...approvalBase.request,
+      tool: {
+        ...approvalBase.request.tool,
+        label: "Send message",
+        action: "send a message",
+        joiner: "from",
+      },
+    },
+    state: {
+      kind: "unknown",
+      message:
+        "The server does not know whether this mail went out from alex.personal@example.com. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until 2026-11-17T19:19:00Z, repeating this call does not send it again. Only if the owner says that it is in neither place, call again with duplicate: 2.",
+    },
+  },
   "approval-failed": {
     ...approvalBase,
     state: {

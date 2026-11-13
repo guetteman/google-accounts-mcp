@@ -5,6 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { chromium, type Browser, type Locator, type Page, type Route } from "playwright-core";
 import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
+import { GROUPS } from "../../src/mcp/groups";
 import { TOOLS } from "../../src/mcp/tools";
 
 let browser: Browser;
@@ -1076,10 +1077,14 @@ const realTools = TOOLS.flatMap((tool) =>
 );
 const withRealTools = `tools=${encodeURIComponent(JSON.stringify(realTools))}` as const;
 
-it("names Delete permanently, of the server's real tools, when all tools go to Allowed", async () => {
-  expect(realTools.filter((tool) => tool.irreversible).map((tool) => tool.label)).toEqual([
-    "Delete permanently",
-  ]);
+it("names all five irreversible tools, of the server's real tools, when all tools go to Allowed", async () => {
+  expect(
+    GROUPS.flatMap((group) =>
+      realTools
+        .filter((tool) => tool.group === group && tool.irreversible)
+        .map((tool) => tool.label),
+    ),
+  ).toEqual(["Send message", "Send reply", "Forward message", "Send draft", "Delete permanently"]);
   const page = await open(390, withRealTools);
   try {
     const routes = await pending(page);
@@ -1091,7 +1096,7 @@ it("names Delete permanently, of the server's real tools, when all tools go to A
     await dialog.waitFor();
     // List labels is already Allowed on Personal, so every other tool changes.
     expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
-      `Claude will be able to use every tool on Personal without asking you, including Delete permanently, which cannot be undone. This changes ${realTools.length - 1} tools.`,
+      `Claude will be able to use every tool on Personal without asking you, including these, which cannot be undone: Send message, Send reply, Forward message, Send draft, and Delete permanently. This changes ${realTools.length - 1} tools.`,
     );
     expect(routes).toEqual([]);
     const sent = page.waitForRequest((request) => request.method() === "POST");
@@ -1107,18 +1112,21 @@ it("names Delete permanently, of the server's real tools, when all tools go to A
   }
 });
 
-it("asks before delete_messages alone goes to Allowed, and not before trash_messages", async () => {
+it.each([
+  { name: "delete_messages", label: "Delete permanently" },
+  { name: "send_message", label: "Send message" },
+])("asks before $name alone goes to Allowed, and not before trash_messages", async ({ label }) => {
   const page = await open(390, withRealTools);
   try {
     const routes = await pending(page);
-    await segment(toolControl(page, "Delete permanently"), "Allowed").click();
+    await segment(toolControl(page, label), "Allowed").click();
     const dialog = page.getByRole("alertdialog", {
-      name: "Set Delete permanently on Personal to Allowed?",
+      name: `Set ${label} on Personal to Allowed?`,
       exact: true,
     });
     await dialog.waitFor();
     expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
-      "Claude will be able to use Delete permanently on Personal without asking you. What this tool does cannot be undone.",
+      `Claude will be able to use ${label} on Personal without asking you. What this tool does cannot be undone.`,
     );
     expect(routes).toEqual([]);
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();

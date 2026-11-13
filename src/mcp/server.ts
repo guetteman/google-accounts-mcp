@@ -29,7 +29,10 @@ export function createMcpServer(ctx: CallContext): Server {
         inputSchema:
           tool.kind === "plain"
             ? (tool.inputSchema ?? { type: "object", properties: {} })
-            : (Schema.toJsonSchemaDocument(tool.input).schema as McpTool["inputSchema"]),
+            : ({
+                ...Schema.toJsonSchemaDocument(tool.input).schema,
+                ...(tool.create ? { additionalProperties: false } : {}),
+              } as McpTool["inputSchema"]),
       })),
     };
   });

@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import { notFound, ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
 import { get } from "./gmail";
+import { MAX_REPLY_HEADER, unfold } from "./bounds";
 import { Headers, InternalDate, header } from "./message";
 import { MAX_SUBJECT, envelopeLines, messageIds, parseAddressList, type Mailbox } from "./mail";
 
@@ -19,9 +20,6 @@ const Message = Schema.Struct({
   internalDate: InternalDate,
   payload: Schema.Struct({ headers: Headers }),
 });
-const unfold = (text: string) =>
-  // oxlint-disable-next-line no-control-regex -- Sender-controlled headers must be unfolded before use.
-  text.replace(/(?:\r\n|\r|\n)([ \t])/g, "$1").replace(/[\u0000-\u001f\u007f]/g, " ");
 const recipientsFailure = () =>
   new ToolFailure({
     code: "invalid_arguments",
@@ -62,8 +60,10 @@ export const replyPlan = (
     try {
       if (input.given) ({ to, cc } = input.given);
       else {
+        if (source("From").length > MAX_REPLY_HEADER || value("Reply-To").length > MAX_REPLY_HEADER)
+          throw recipientsFailure();
         // A self-sent message is answered to its recipients, even when it has Reply-To.
-        const from = source("From").length <= 2000 ? parseAddressList(value("From")) : null;
+        const from = parseAddressList(value("From"));
         const self =
           from?.length === 1 && from[0]!.address.toLowerCase() === input.account.toLowerCase();
         to = self ? parse("To") : parse(source("Reply-To") ? "Reply-To" : "From");

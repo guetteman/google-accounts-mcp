@@ -171,3 +171,79 @@ export const messageText = (mail: Outgoing): string => {
   const part = textPart(mail.body);
   return [...envelopeLines(mail), ...part.headers, "", part.content, ""].join("\r\n");
 };
+
+export interface FilePart {
+  charset?: string;
+  filename: string;
+  type: string;
+  bytes: Uint8Array;
+}
+const DISPOSITION = "Content-Disposition: attachment; filename*=UTF-8''";
+const encodeFilename = (text: string) =>
+  encodeURIComponent(text).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+/** Keep the encoded header within 900 ASCII characters, preserving a short extension. */
+const boundedFilename = (value: string): string => {
+  const name = value.toWellFormed();
+  const dot = name.lastIndexOf(".");
+  const extension = dot > 0 && /^.{1,16}$/su.test(name.slice(dot + 1)) ? name.slice(dot) : "";
+  const budget = 900 - DISPOSITION.length - encodeFilename(extension).length;
+  let size = 0;
+  let kept = "";
+  for (const character of name.slice(0, name.length - extension.length)) {
+    const cost = encodeFilename(character).length;
+    if (size + cost > budget) break;
+    kept += character;
+    size += cost;
+  }
+  return kept + extension;
+};
+/** The file metadata the recipient gets, shared by composition and its approval view. */
+export const fileFields = (file: Pick<FilePart, "filename" | "type">) => ({
+  filename: boundedFilename(file.filename),
+  type:
+    file.type.length <= 100 &&
+    !/^message\//i.test(file.type) &&
+    /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(file.type)
+      ? file.type
+      : "application/octet-stream",
+});
+
+/** Encode in multiples of 57 bytes, so chunks end on both a base64 and a MIME line boundary. */
+export const mixedMessage = (mail: Outgoing, files: ReadonlyArray<FilePart>): Blob => {
+  const boundary = `mixed-${crypto.randomUUID()}`;
+  const text = textPart(mail.body);
+  const parts: BlobPart[] = [
+    [
+      ...envelopeLines(mail),
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      ...text.headers,
+      "",
+      text.content,
+      "",
+    ].join("\r\n"),
+  ];
+  for (const file of files) {
+    const fields = fileFields(file);
+    const charset =
+      file.charset && /^[A-Za-z0-9._:-]{1,40}$/.test(file.charset)
+        ? `; charset=${file.charset}`
+        : "";
+    const type = fields.type + charset;
+    const filename = encodeFilename(fields.filename);
+    parts.push(
+      `--${boundary}\r\nContent-Type: ${type}\r\n${DISPOSITION}${filename}\r\nContent-Transfer-Encoding: base64\r\n\r\n`,
+    );
+    for (let at = 0; at < file.bytes.length; at += 57 * 512) {
+      const encoded = btoa(String.fromCharCode(...file.bytes.subarray(at, at + 57 * 512)));
+      parts.push(new Blob([encoded.match(/.{1,76}/g)!.join("\r\n") + "\r\n"]));
+    }
+    if (!file.bytes.length) parts.push("\r\n");
+  }
+  parts.push(`--${boundary}--\r\n`);
+  return new Blob(parts);
+};
