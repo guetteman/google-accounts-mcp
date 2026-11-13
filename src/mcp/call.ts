@@ -324,7 +324,7 @@ export async function executeAccount(
         (!seen.started || (seen.status !== null && seen.status >= 400 && seen.status < 500))
       ) {
         await Effect.runPromise(Effect.result(release(ctx, claim)));
-        if (held === null && ids.length)
+        if (held === null && ids.length && !error.leftover)
           await Effect.runPromise(Effect.result(releaseUploads(ctx, ids, identity)));
         const data: ConstructorParameters<typeof ToolFailure>[0] = error;
         const { unknown: _unknown, ...known } = data;
@@ -521,8 +521,8 @@ export async function runCall(
               })
             : null;
           const refs = await Effect.runPromise(readApprovalUploads(ctx, ids, identity));
-          const found = ids.every((id) => refs.has(id));
-          if (found) {
+          const missing = ids.find((id) => !refs.has(id)) ?? null;
+          if (missing === null) {
             const body = (decoded.value as DecodedArgs & { body?: string }).body ?? "";
             await Effect.runPromise(
               checkAttachedSize(
@@ -548,7 +548,7 @@ export async function runCall(
                   account: value.credential.id,
                   tool: pairs[i]!.tool as typeof tool.name,
                 })),
-                uploads: { ids, found },
+                uploads: { ids, missing },
                 arguments: argumentsSealed,
                 at,
                 ...(identity ? { identity } : {}),

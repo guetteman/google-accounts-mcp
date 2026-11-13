@@ -80,6 +80,14 @@ it.each(["500", "400"])(
     );
     expect(await onceRows()).toEqual([]);
     expect(await uploads()).toHaveLength(1);
+    if (status === "500") {
+      expect(google.storedDrafts.has("draft-1")).toBe(true);
+      await expectError(
+        await attachCall(f, [{ upload: file.upload }], { body: "Changed" }),
+        "upload_not_available",
+        missingText(file.upload),
+      );
+    }
     await answer(
       await attachCall(
         f,
@@ -485,13 +493,13 @@ it("keeps the upload when a setting changes before the approval insert", async (
 it("keeps a failed release reserved for the same identity only", async () => {
   const f = await attaching();
   const file = await upload(f);
-  google.uploadAnswers.push(() => new Response(null, { status: 500 }));
+  google.uploadAnswers.push(() => new Response(null, { status: 400 }));
   const { statementFailingDb } = await import("./support/db");
   const db = statementFailingDb(/^UPDATE uploads SET identity = NULL/);
   await expectError(
     await attachCall(f, [{ upload: file.upload }], {}, "send_message", testEnv({ DB: db })),
-    "google_unavailable",
-    /Nothing was sent/,
+    "message_not_sendable",
+    /Gmail refused/,
   );
   expect(await onceRows()).toEqual([]);
   await expectError(
@@ -518,3 +526,147 @@ it("keeps a finished upload reserved if deleting its row fails", async () => {
   );
   expect(google.sends).toHaveLength(1);
 });
+
+it("refuses an approval when a direct call reserves its upload just before the insert", async () => {
+  const f = await attaching();
+  await setTool(f, "create_draft", "ask");
+  const file = await upload(f);
+  const held = hold(google.uploadAnswers, created());
+  let direct: Promise<Response> | undefined;
+  const db = observeStatements(env.DB, async (sql) => {
+    if (!direct && sql.startsWith("INSERT INTO approvals")) {
+      direct = attachCall(f, [{ upload: file.upload }]);
+      await held.entered;
+    }
+  });
+  try {
+    await expectError(
+      await attachCall(f, [{ upload: file.upload }], {}, "create_draft", testEnv({ DB: db })),
+      "upload_not_available",
+      missingText(file.upload),
+    );
+    expect(direct).toBeDefined();
+    expect(await rows()).toEqual([]);
+    expect(await uploads()).toHaveLength(1);
+  } finally {
+    held.release();
+    if (direct) await answer(await direct);
+  }
+  expect(google.sends).toHaveLength(1);
+  expect(google.uploads).toHaveLength(1);
+  expect(await uploads()).toEqual([]);
+});
+it("names the upload missed by the approval read even if it becomes free before the insert", async () => {
+  const f = await attaching();
+  await setTool(f, "create_draft", "ask");
+  const free = await upload(f);
+  const reserved = await upload(f);
+  const held = hold(google.uploadAnswers, new Response(null, { status: 400 }));
+  const direct = attachCall(f, [{ upload: reserved.upload }]);
+  await held.entered;
+  let released = false;
+  const db = observeStatements(env.DB, async (sql) => {
+    if (!released && sql.startsWith("INSERT INTO approvals")) {
+      released = true;
+      held.release();
+      await expectError(await direct, "message_not_sendable", /Gmail refused/);
+    }
+  });
+  try {
+    await expectError(
+      await attachCall(
+        f,
+        [{ upload: free.upload }, { upload: reserved.upload }],
+        {},
+        "create_draft",
+        testEnv({ DB: db }),
+      ),
+      "upload_not_available",
+      missingText(reserved.upload),
+    );
+    expect(released).toBe(true);
+    expect(await rows()).toEqual([]);
+    expect(await env.DB.prepare("SELECT identity FROM uploads").all()).toMatchObject({
+      results: [{ identity: null }, { identity: null }],
+    });
+  } finally {
+    held.release();
+    await direct;
+  }
+  await answer(
+    await attachCall(f, [{ upload: free.upload }, { upload: reserved.upload }], {
+      body: "Corrected",
+    }),
+  );
+  expect(google.sends).toHaveLength(1);
+});
+it("reserves none of a set containing a held upload even when releasing marks fails", async () => {
+  const f = await attaching();
+  const free = await upload(f, new Uint8Array([1]), "free.pdf");
+  const reserved = await upload(f);
+  const held = hold(google.uploadAnswers, created());
+  const direct = attachCall(f, [{ upload: reserved.upload }]);
+  await held.entered;
+  const { statementFailingDb } = await import("./support/db");
+  const db = statementFailingDb(/^UPDATE uploads SET identity = NULL/);
+  try {
+    await expectError(
+      await attachCall(
+        f,
+        [{ upload: free.upload }, { upload: reserved.upload }],
+        { body: "Both files" },
+        "send_message",
+        testEnv({ DB: db }),
+      ),
+      "upload_not_available",
+      missingText(reserved.upload),
+    );
+    expect(
+      await env.DB.prepare("SELECT identity FROM uploads WHERE id = ?").bind(free.upload).first(),
+    ).toEqual({ identity: null });
+    await answer(await attachCall(f, [{ upload: free.upload }], { body: "Use the free file" }));
+    expectMail({
+      text: "Use the free file",
+      files: [{ filename: "free.pdf", type: "application/pdf", bytes: new Uint8Array([1]) }],
+    });
+    expect(google.sends).toHaveLength(1);
+  } finally {
+    held.release();
+    await answer(await direct);
+  }
+  expect(google.sends).toHaveLength(2);
+});
+it.each(["deleted", "leftover"])(
+  "keeps uploads usable after a refused send whose staged draft is %s",
+  async (cleanup) => {
+    const f = await attaching();
+    const file = await upload(f);
+    google.sendAnswers.push(() => new Response(null, { status: 400 }));
+    if (cleanup === "leftover")
+      google.deleteAnswers.push(() => new Response(null, { status: 500 }));
+    const { leftoverNote } = await import("./support/send");
+    await expectError(
+      await attachCall(f, [{ upload: file.upload }]),
+      "message_not_sendable",
+      `Gmail refused this message from ${f.personal.email}. The usual cause is an address that is not valid.${cleanup === "leftover" ? leftoverNote : ""}`,
+    );
+    expect(await onceRows()).toEqual([]);
+    expect(google.storedDrafts.has("draft-1")).toBe(cleanup === "leftover");
+    if (cleanup === "leftover") {
+      await expectError(
+        await attachCall(f, [{ upload: file.upload }], { to: ["correct@example.com"] }),
+        "upload_not_available",
+        missingText(file.upload),
+      );
+    }
+    await answer(
+      await attachCall(
+        f,
+        [{ upload: file.upload }],
+        cleanup === "leftover" ? {} : { to: ["correct@example.com"] },
+      ),
+    );
+    expect(google.sends).toHaveLength(2);
+    expect(await uploads()).toEqual([]);
+  },
+);

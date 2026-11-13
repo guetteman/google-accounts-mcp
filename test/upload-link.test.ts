@@ -82,6 +82,7 @@ it.each([undefined, "text/plain; charset=utf-8", "bad media", "Application/PDF"]
       upload: expect.stringMatching(/^[0-9a-f-]{36}$/),
       filename: "informe año 2026 (v2).pdf",
       type: media,
+      ...(type?.startsWith("text/plain") ? { charset: "utf-8" } : {}),
       size: 301,
       expires_at: made.expires_at,
     });
@@ -287,6 +288,7 @@ it("stores and returns the outgoing fields and preserves a valid charset", async
     filename: "ñ".repeat(141) + ".eml",
     type: "application/octet-stream",
     size: 1,
+    charset: "iso-8859-1",
   });
   const ref = JSON.parse(
     await fixtureOpen(`${stored.upload}:upload`, (await uploads())[0]!.file!),

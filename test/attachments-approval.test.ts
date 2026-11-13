@@ -620,3 +620,19 @@ it("keeps the sending account out of a page's undeclared sources", async () => {
   expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: false });
   expect(accountTraffic).toEqual([]);
 });
+
+it("uses singular byte units for one uploaded byte", async () => {
+  const size = 1;
+  const unit = "byte";
+  const f = await attaching("send_message", "ask");
+  const file = await upload(f, new Uint8Array(size));
+  const id = (await answer(await attachCall(f, [{ upload: file.upload }]))).approval as string;
+  expect((await page(f, id)).request.values.slice(4, -1)).toEqual([
+    { name: "Attachments", text: `1 file, ${size} ${unit} in all`, from: "agent" },
+    {
+      name: "Attachment 1 (sent to a link of this connection)",
+      text: `local.pdf (application/pdf, ${size} ${unit})`,
+      from: "agent",
+    },
+  ]);
+});

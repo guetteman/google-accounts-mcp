@@ -118,6 +118,7 @@ export const withUploadLink =
             {
               upload: stored.upload,
               ...fields,
+              ...(charset ? { charset } : {}),
               size,
               expires_at: isoSeconds(stored.expiresAt),
             },

@@ -252,6 +252,12 @@ it.each(["send_message", "create_draft"] as const)(
     );
     expect(google.sends).toEqual([]);
     if (name === "create_draft") expect(await uploads()).toEqual([]);
+    else
+      await expectError(
+        await attachCall(f, [{ upload: file.upload }], { body: "Changed" }, name),
+        "upload_not_available",
+        `No upload "${file.upload}" is available to this connection. An upload works once, in the connection that asked for its link, before it expires. Call create_upload_link and send the file again.`,
+      );
     const repeat = await attachCall(f, [{ upload: file.upload }], {}, name);
     if (name === "create_draft") {
       await expectError(repeat, "outcome_unknown", /new upload of each file/);

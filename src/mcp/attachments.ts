@@ -135,10 +135,11 @@ export const attachmentValues = (items: readonly Item[], sources: Sources) =>
   Effect.gen(function* () {
     if (!items.length) return [];
     const files = yield* plan(items, sources);
+    const bytes = files.reduce((sum, file) => sum + file.size, 0);
     const values: ViewValue[] = [
       {
         name: "Attachments",
-        text: `${files.length} ${files.length === 1 ? "file" : "files"}, ${files.reduce((sum, file) => sum + file.size, 0).toLocaleString("en-US")} bytes in all`,
+        text: `${files.length} ${files.length === 1 ? "file" : "files"}, ${bytes.toLocaleString("en-US")} ${bytes === 1 ? "byte" : "bytes"} in all`,
         from: files.some((file) => file.source.kind === "upload") ? "agent" : "gmail",
       },
     ];
@@ -147,7 +148,7 @@ export const attachmentValues = (items: readonly Item[], sources: Sources) =>
       const copied = file.source.kind === "copy";
       values.push({
         name: `${prefix} (${copied ? "copied" : "sent to a link of this connection"})`,
-        text: `${file.filename || "(no name)"} (${file.type}, ${file.size.toLocaleString("en-US")} bytes)`,
+        text: `${file.filename || "(no name)"} (${file.type}, ${file.size.toLocaleString("en-US")} ${file.size === 1 ? "byte" : "bytes"})`,
         from: copied ? "gmail" : "agent",
       });
       if (file.source.kind === "copy")

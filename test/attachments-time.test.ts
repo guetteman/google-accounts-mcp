@@ -344,3 +344,23 @@ it("keeps approval arguments when uploaded bytes arrive after its reserve", asyn
   expect(await row(id)).toMatchObject({ state: "waiting", arguments: expect.any(String) });
   noWrites();
 });
+
+it("keeps a send_draft approval waiting when its view reaches the decision after the reserve", async () => {
+  const { sendFixture, sendCall } = await import("./support/send");
+  const { row } = await import("./support/approvals");
+  const { onceRows } = await import("./support/draft");
+  const f = await sendFixture("send_draft", "ask");
+  const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
+  const shown = await digest(f, id);
+  google.fullDraftAnswers.set("existing-draft", () => {
+    vi.mocked(Date.now).mockReturnValue(NOW + 21_000);
+    return Response.json({
+      id: "existing-draft",
+      message: google.storedDrafts.get("existing-draft"),
+    });
+  });
+  expect((await post(f, id, "approve", { digest: shown })).status).toBe(503);
+  expect(await row(id)).toMatchObject({ state: "waiting", arguments: expect.any(String) });
+  expect(await onceRows()).toEqual([]);
+  expect(google.sends).toEqual([]);
+});

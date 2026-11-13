@@ -198,7 +198,7 @@ export const createApproval = (
     arguments: Sealed;
     at: number;
     identity?: Identity;
-    uploads?: { ids: readonly UploadId[]; found: boolean };
+    uploads?: { ids: readonly UploadId[]; missing: UploadId | null };
   },
 ): Effect.Effect<
   | "created"
@@ -234,7 +234,7 @@ export const createApproval = (
             ctx.owner.email,
             input.identity ?? null,
             JSON.stringify(input.uploads?.ids ?? []),
-            input.uploads?.found === false ? 0 : 1,
+            input.uploads?.missing ? 0 : 1,
             ctx.now(),
           ),
         ctx.db
@@ -265,7 +265,8 @@ export const createApproval = (
       }
       if (input.uploads?.ids.length) {
         const missing = results[input.identity ? 5 : 3]!.results[0] as { id: UploadId } | undefined;
-        if (missing) return { upload: missing.id };
+        const unavailable = missing?.id ?? input.uploads.missing;
+        if (unavailable) return { upload: unavailable };
       }
       return Number((results[2]!.results[0] as { count: number }).count) >= WAITING_LIMIT
         ? ("limit" as const)
