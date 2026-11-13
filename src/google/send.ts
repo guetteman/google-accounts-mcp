@@ -37,7 +37,7 @@ export const sendStaged = (
       Effect.mapError((failure) => {
         if (!failure.unknown) return failure;
         const data: ConstructorParameters<typeof ToolFailure>[0] = failure;
-        return new ToolFailure({ ...data, leftover: true });
+        return new ToolFailure({ ...data, leftover: {} });
       }),
     );
     return yield* sendOne(confirm, staged.draft, (status) =>
@@ -61,7 +61,9 @@ export const sendStaged = (
             );
             if (Result.isFailure(cleanup)) {
               const data: ConstructorParameters<typeof ToolFailure>[0] = failure;
-              return yield* Effect.fail(new ToolFailure({ ...data, leftover: true }));
+              return yield* Effect.fail(
+                new ToolFailure({ ...data, leftover: { draft: staged.draft } }),
+              );
             }
           }
           return yield* Effect.fail(failure);

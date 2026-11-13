@@ -1,3 +1,5 @@
+import { decodedMail } from "./support/draft";
+import { fullMessage, serveFull, sendCall, setSend } from "./support/send";
 import { expect, it } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
@@ -1209,3 +1211,17 @@ it.each([
     else expect(item).toHaveProperty("reply_to", expected);
   },
 );
+
+it("reads and replies to the first Reply-To header when it appears twice", async () => {
+  const f = await allowed();
+  await setSend(f, "send_reply", "allow");
+  const raw = fullMessage({ "Reply-To": "First <first@example.com>" });
+  raw.payload.headers.push({ name: "rEpLy-To", value: "Second <second@example.com>" });
+  serveThread([raw]);
+  serveFull(raw);
+  const found = await result(await read(f));
+  expect(found.messages[0]!.reply_to).toBe("First <first@example.com>");
+  await answer(await sendCall(f, "send_reply"));
+  expect(decodedMail().headers.To).toBe("First <first@example.com>");
+  expect(google.sends).toHaveLength(1);
+});

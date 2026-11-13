@@ -1,3 +1,4 @@
+import { RUN_DEADLINE } from "../src/approvals/model";
 import { env } from "cloudflare:workers";
 import { Effect, Result } from "effect";
 import { HttpResponse } from "msw";
@@ -455,7 +456,10 @@ it.each(["done", "running", "unknown"])(
       expect(await get(f, id)).toEqual(
         state === "done"
           ? { status: "success", result: repeated(Date.now()) }
-          : { status: "unknown" },
+          : {
+              status: "unknown",
+              error: { code: "outcome_unknown", message: unknownMessage(Date.now() + WINDOW) },
+            },
       );
       const approval = (await row(id))!;
       expect(approval.outcome).toBe(state === "done" ? "success" : "unknown");
@@ -772,4 +776,9 @@ it("keeps an uncertain creating request cut at the reserve and never creates it 
     await vi.advanceTimersByTimeAsync(CALL_DEADLINE);
     await work;
   }
+});
+
+it("keeps a running call's stale window beyond both execution deadlines", () => {
+  expect(STALE).toBeGreaterThan(CALL_DEADLINE);
+  expect(STALE).toBeGreaterThan(RUN_DEADLINE);
 });

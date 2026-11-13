@@ -108,13 +108,17 @@ export const notReadable = (file: FileInfo): ToolFailure =>
   });
 type FailureData = {
   unknown?: boolean;
+  /** The once row was released; do not classify this as an unknown call. */
   released?: true;
-  leftover?: true;
+  /** Nothing was sent; a staged draft may remain, with its ID when known. */
+  leftover?: { draft?: string };
+  /** The exceeded local limit, unreadable original text, or null for Gmail's size refusal. */
   over?:
     | { bytes: number; limit: number }
     | { attachments: number; limit: number }
     | { text: true }
     | null;
+  /** An existing draft the owner can complete, or null for composed mail. */
   unsendable?: { draft: string | null };
   said?: string;
   missing?: { kind: Missing; id: string | readonly string[] };
@@ -183,12 +187,17 @@ export function classify(
     text.annotations?.readOnlyHint === false
       ? `Google did not confirm the request for ${text.email}. It may have taken effect.${text.annotations.idempotentHint ? " Sending the same call again is safe." : ""}`
       : entry.message(text.input, text.email, text.origin, text.tool, text.connection);
-  const describe = (message: string) =>
-    !failure.leftover
-      ? message
-      : failure.code === "google_unavailable"
-        ? `Nothing was sent from ${text.email}. Google did not confirm a step before the send, so a draft of this mail may be left in Drafts. Delete it there before this call is made again.`
-        : `${message} A draft of this mail may be left in Drafts. Delete it there before this call is made again.`;
+  const describe = (message: string) => {
+    if (!failure.leftover) return message;
+    const draft =
+      failure.leftover.draft === undefined
+        ? "a draft of this mail"
+        : `draft ${JSON.stringify(failure.leftover.draft)} of this mail`;
+    const advice = `${draft} may be left in Drafts. The owner should delete it there before this call is made again.`;
+    return failure.code === "google_unavailable"
+      ? `Nothing was sent from ${text.email}. Google did not confirm a step before the send, so ${advice}`
+      : `${message} ${advice[0]!.toUpperCase()}${advice.slice(1)}`;
+  };
   return {
     audit: unknown ? null : entry.outcome,
     error:
@@ -207,10 +216,10 @@ export function classify(
                       ? missingMessage(failure.missing, text.email)
                       : failure.over
                         ? "text" in failure.over
-                          ? "The text of this message cannot be forwarded whole: it is too large, or its HTML could not be converted."
+                          ? "The text of the original message cannot be carried whole: it is too large, or its HTML could not be converted."
                           : "bytes" in failure.over
-                            ? `This forward would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is ${failure.over.limit.toLocaleString("en-US")} bytes.`
-                            : `This forward would have ${failure.over.attachments} attachments. The limit is ${failure.over.limit}.`
+                            ? `This message would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is ${failure.over.limit.toLocaleString("en-US")} bytes.`
+                            : `This message would have ${failure.over.attachments} attachments. The limit is ${failure.over.limit}.`
                         : failure.unsendable
                           ? failure.unsendable.draft === null
                             ? `Gmail refused this message from ${text.email}. The usual cause is an address that is not valid.`

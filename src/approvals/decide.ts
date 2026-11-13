@@ -31,10 +31,25 @@ import {
   type ApprovalContext,
 } from "./store";
 import { openResult, sealResult } from "./text";
-import type { Send } from "../mcp/tools";
+import type { Send, Tool, DecodedArgs } from "../mcp/tools";
+import { WINDOW } from "../once/store";
 import { approvalView } from "./view";
 
 type Dependencies = ApprovalContext & { config: Config; origin: string; files: KVNamespace };
+/** Every unknown create outcome retains the tool's own recovery instructions. */
+async function unknownNotice(
+  deps: Dependencies,
+  id: ApprovalId,
+  tool: Extract<Tool, { kind: "account" }>,
+  email: string,
+  args: DecodedArgs,
+) {
+  return tool.create
+    ? sealResult(deps.config.tokenKey, id, {
+        error: { code: "outcome_unknown", message: tool.unknown(email, Date.now() + WINDOW, args) },
+      })
+    : null;
+}
 async function viewOf(
   approval: Approval,
   deps: ApprovalContext & { config: Config },
@@ -110,6 +125,7 @@ export const decide = (
       const deadline = input.arrivedAt + RUN_DEADLINE;
       const controller = new AbortController();
       let winner: Won | null = null;
+      let notice: () => ReturnType<typeof unknownNotice> = async () => null;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const late = () => controller.signal.aborted || Date.now() >= deadline;
       const readPage = async (changed = false) => {
@@ -162,15 +178,16 @@ export const decide = (
         if (!decision.won) return readPage(true);
         if (action === "reject") return readPage();
         winner = decision.won;
+        const args = view.decoded;
+        if (!args) throw new WriteUncertain();
+        notice = () => unknownNotice(deps, id, view.tool, view.page.request.account.email, args);
         // A late decision response cannot start Google work after the request's deadline.
         if (late()) {
           await Effect.runPromise(
-            finishApproval(deps, decision.won, Date.now(), "unknown", null, null),
+            finishApproval(deps, decision.won, Date.now(), "unknown", null, await notice()),
           );
           return readPage();
         }
-        const args = view.decoded;
-        if (!args) throw new WriteUncertain();
         const call: CallContext = {
           ...deps,
           connection: { connectionId: approval.connection.id, app: approval.connection.app },
@@ -221,22 +238,21 @@ export const decide = (
             },
           );
           audit = classified.audit;
-          const notice =
-            view.tool.create &&
-            error instanceof ToolFailure &&
-            error.code === "outcome_unknown" &&
-            error.said !== undefined
-              ? { code: error.code, message: error.said }
-              : null;
-          outcome = notice || classified.error === null ? "unknown" : "failed";
-          payload = notice
-            ? { error: notice }
-            : classified.error === null
-              ? null
-              : { error: classified.error };
+          outcome =
+            (view.tool.create &&
+              error instanceof ToolFailure &&
+              error.code === "outcome_unknown") ||
+            classified.error === null
+              ? "unknown"
+              : "failed";
+          payload = classified.error === null ? null : { error: classified.error };
         }
         const result =
-          payload === null ? null : await sealResult(deps.config.tokenKey, id, payload);
+          outcome === "unknown"
+            ? await notice()
+            : payload === null
+              ? null
+              : await sealResult(deps.config.tokenKey, id, payload);
         await Effect.runPromise(
           finishApproval(deps, decision.won, Date.now(), outcome, audit, result),
         );
@@ -255,7 +271,9 @@ export const decide = (
         return await Promise.race([work(), timedOut]);
       } catch (error) {
         if (controller.signal.aborted && winner) {
-          await Effect.runPromise(finishApproval(deps, winner, Date.now(), "unknown", null, null));
+          await Effect.runPromise(
+            finishApproval(deps, winner, Date.now(), "unknown", null, await notice()),
+          );
           const page = await readPage();
           if (page && page.state.kind !== "waiting") return page;
         }

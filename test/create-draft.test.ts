@@ -230,8 +230,14 @@ it.each([
 
 it.each([
   { name: "invalid From", headers: { From: "not a mailbox" } },
-  { name: "long From", headers: { From: "x".repeat(2001) + " <sam@example.com>" } },
-  { name: "long Reply-To", headers: { "Reply-To": "x".repeat(2001) + " <sam@example.com>" } },
+  {
+    name: "long From",
+    headers: { From: "x".repeat(600 - " <sam@example.com>".length) + " <sam@example.com>" },
+  },
+  {
+    name: "long Reply-To",
+    headers: { "Reply-To": "x".repeat(600 - " <sam@example.com>".length) + " <sam@example.com>" },
+  },
 ])("asks for given recipients for $name and keeps no row", async ({ headers }) => {
   const f = await draftFixture();
   serveMessage(headers);

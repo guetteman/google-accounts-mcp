@@ -1,3 +1,6 @@
+import { RUN_DEADLINE, isoSeconds } from "../src/approvals/model";
+import { WINDOW } from "../src/once/store";
+import { renderPage } from "../src/pages/render";
 import { env } from "cloudflare:workers";
 import { http, HttpResponse } from "msw";
 import { Effect, Result } from "effect";
@@ -10,7 +13,7 @@ import { executeAccount, CALL_DEADLINE, SEND_RESERVE, type CallContext } from ".
 import { notReadable, tooLarge, ToolFailure } from "../src/mcp/failures";
 import { TOOLS } from "../src/mcp/tools";
 import { normalizeEmail, readOwner } from "../src/owner/owner";
-import { answer, decided, digest, page, post, row } from "./support/approvals";
+import { answer, decided, digest, get, page, post, row } from "./support/approvals";
 import { callRows, expectError, PERSONAL, permission } from "./support/permissions";
 import { network } from "./support/network";
 import { onceRows } from "./support/draft";
@@ -18,6 +21,7 @@ import { observeStatements } from "./support/db";
 import { google, deferred, token } from "./support/google";
 import {
   leftoverMessage,
+  leftoverDraftMessage,
   created,
   hold,
   never,
@@ -27,7 +31,7 @@ import {
   sent,
   setSend,
 } from "./support/send";
-import { ORIGIN, testEnv } from "./support/worker";
+import { ORIGIN, testEnv, textOf } from "./support/worker";
 
 it.each(sendCases)("a denied $name cannot reach the sending request", async ({ name }) => {
   const f = await sendFixture(name);
@@ -199,7 +203,7 @@ it.each([16_000, CALL_DEADLINE])(
     await expectError(
       await sendCall(f, "send_message", {}, testEnv({ DB: db })),
       "google_unavailable",
-      elapsed === CALL_DEADLINE ? leftoverMessage : /Google could not complete/,
+      elapsed === CALL_DEADLINE ? leftoverDraftMessage : /Google could not complete/,
     );
     expect(google.sends).toEqual([]);
     expect(google.deletes).toEqual(elapsed === CALL_DEADLINE ? [] : ["draft-1"]);
@@ -743,4 +747,86 @@ it("starts no preparing request after the reserve even before its timer fires", 
   ).rejects.toMatchObject({ code: "google_unavailable", released: true });
   expect(google.labelRequests).toEqual([]);
   expect(await onceRows()).toEqual([]);
+});
+
+it.each(["deadline", "late decision"])(
+  "stores recovery advice for an approved send (%s)",
+  async (path) => {
+    const f = await sendFixture("send_message", "ask");
+    const id = (await answer(await sendCall(f))).approval as string;
+    const shown = await digest(f, id);
+    const at = Date.now();
+    const checking = deferred(),
+      resume = deferred(),
+      sending = deferred();
+    let staged = false;
+    google.draftCreateAnswers.push(() => {
+      staged = true;
+      return created();
+    });
+    google.sendAnswers.push((request) => {
+      sending.resolve();
+      return never(request);
+    });
+    const db = observeStatements(
+      env.DB,
+      async (sql) => {
+        if (path === "deadline" && staged && sql.startsWith("SELECT 1 FROM approvals")) {
+          checking.resolve();
+          await resume.promise;
+        }
+      },
+      (sql) => {
+        if (path === "late decision" && sql.startsWith("UPDATE approvals SET state = 'approved'"))
+          vi.mocked(Date.now).mockReturnValue(at + RUN_DEADLINE);
+      },
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const work = post(f, id, "approve", { digest: shown }, testEnv({ DB: db })).then(decided);
+    if (path === "deadline") {
+      await checking.promise;
+      vi.mocked(Date.now).mockReturnValue(at + 18_000);
+      await vi.advanceTimersByTimeAsync(18_000);
+      resume.resolve();
+      await sending.promise;
+      vi.mocked(Date.now).mockReturnValue(at + RUN_DEADLINE);
+      await vi.advanceTimersByTimeAsync(RUN_DEADLINE - 18_000);
+    }
+    const message = `The server does not know whether this mail went out from ${PERSONAL}. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until ${isoSeconds(at + RUN_DEADLINE + WINDOW)}, repeating this call does not send it again. Only if the owner says that it is in neither place, call again with duplicate: 2.`;
+    const props = await work;
+    expect(props.state).toEqual({ kind: "unknown", message });
+    expect(await get(f, id)).toEqual({
+      status: "unknown",
+      error: { code: "outcome_unknown", message },
+    });
+    expect((await page(f, id)).state).toEqual({ kind: "unknown", message });
+    expect(textOf(await renderPage(props).text())).toContain(message);
+    expect((await callRows())[0]!.outcome).toBeNull();
+    expect(google.sends).toHaveLength(path === "deadline" ? 1 : 0);
+  },
+);
+
+it.each([200, 400])("leaves no call or request timer after a send answered %s", async (status) => {
+  const f = await sendFixture();
+  const ctx = await context(f);
+  const tool = TOOLS.find((tool) => tool.name === "send_message")!;
+  if (tool.kind !== "account") throw new Error("Missing send tool");
+  const allowed = await decodeAllowedAccount(
+    await allowedAccountStatement(ctx, tool.name, normalizeEmail(PERSONAL)!).first(),
+    ctx.config.tokenKey,
+  );
+  if (status === 400) google.sendAnswers.push(() => new Response(null, { status }));
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  expect(vi.getTimerCount()).toBe(0);
+  const work = executeAccount(
+    ctx,
+    tool,
+    allowed,
+    { account: PERSONAL, ...sendCases[0].args },
+    Date.now() + CALL_DEADLINE,
+    Effect.void,
+  );
+  if (status === 200) expect((await work).kind).toBe("ran");
+  else await expect(work).rejects.toMatchObject({ code: "message_not_sendable", released: true });
+  expect(vi.getTimerCount()).toBe(0);
 });

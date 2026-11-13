@@ -1,14 +1,16 @@
+import { env } from "cloudflare:workers";
+import { observeStatements } from "./support/db";
 import { leftoverNote } from "./support/send";
 import { renderPage } from "../src/pages/render";
 import { draftFixture, draftCall } from "./support/draft";
-import { textOf } from "./support/worker";
+import { testEnv, textOf } from "./support/worker";
 import { expect, it, vi } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
 import { TOOLS } from "../src/mcp/tools";
 import { WINDOW } from "../src/once/store";
 import { isoSeconds } from "../src/approvals/model";
-import { answer, approve, decided, get, page, post, rows } from "./support/approvals";
+import { answer, approve, decided, digest, get, page, post, row, rows } from "./support/approvals";
 import {
   callRows,
   expectError,
@@ -437,9 +439,10 @@ it("ask deduplicates pending calls, Approve sends once, get_approval returns the
   expect(google.sends).toHaveLength(1);
 });
 
-it("tools/list exposes send warnings, annotations, actions and repeat instructions", async () => {
+it("lists send warnings and repeats and declares their page actions and permission controls", async () => {
   const f = await sendFixture();
   for (const c of sendCases) await setSend(f, c.name, "allow");
+  await permission(f, f.personal, true, "read_thread");
   const tools = (await rpcResult(await f.mcp.call())).tools as Array<{
     name: string;
     annotations: unknown;
@@ -471,7 +474,7 @@ it("tools/list exposes send warnings, annotations, actions and repeat instructio
       send_reply: {
         action: "send a reply",
         permissionDescription:
-          "Reply to a message in its thread, to its sender or to everyone on it. A sent reply cannot be taken back.",
+          "Reply to a message in its thread: to its reply address or its sender, or to everyone on it. A sent reply cannot be taken back.",
       },
       forward_message: {
         action: "forward a message",
@@ -507,7 +510,14 @@ it("tools/list exposes send warnings, annotations, actions and repeat instructio
   }
   expect(forwardDescription).toContain("without a file name or attachment ID");
   expect(draftDescription).toContain("cannot show whole cannot be approved");
-  expect(draftDescription).toContain("20,000 characters of sender, recipient and subject headers");
+  expect(draftDescription).toContain("20,000 characters in its From, To, Cc, Bcc, and Subject");
+  expect(draftDescription).toContain("a repeated From, To, Cc, Bcc, Subject or Reply-To header");
+  expect(draftDescription).toContain("a part that is neither text nor a file");
+  const readDescription = tools.find((tool) => tool.name === "read_thread")!.description;
+  expect(readDescription).toContain("when it is not empty");
+  expect(readDescription).toContain(
+    "A reply to the account's own message goes to that message's To",
+  );
   await permission(f);
 });
 
@@ -616,3 +626,70 @@ it.each(sendCases)("$name releases a send refused as too large and can retry", a
   await answer(await sendCall(f, name));
   expect(google.sends).toHaveLength(2);
 });
+
+it.each(["running", "unknown"])(
+  "keeps recovery advice when Approve finds a send that is %s",
+  async (state) => {
+    const f = await sendFixture();
+    const taking = deferred(),
+      resume = deferred();
+    const db = observeStatements(env.DB, async (sql) => {
+      if (sql.startsWith("INSERT INTO once")) {
+        taking.resolve();
+        await resume.promise;
+      }
+    });
+    const held =
+      state === "running"
+        ? hold(google.sendAnswers, Response.json({ id: "sent-1", threadId: "thread-1" }))
+        : null;
+    if (state === "unknown") google.sendAnswers.push(() => HttpResponse.error());
+    const first = sendCall(f, "send_message", {}, testEnv({ DB: db }));
+    try {
+      await taking.promise;
+      await setSend(f, "send_message", "ask");
+      const id = (await answer(await sendCall(f))).approval as string;
+      const shown = await digest(f, id);
+      await setSend(f, "send_message", "allow");
+      resume.resolve();
+      if (held) await held.entered;
+      else await expectError(await first, "outcome_unknown", /Ask the owner to look in Sent/);
+      const message = `The server does not know whether this mail went out from ${PERSONAL}. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until ${isoSeconds(Date.now() + WINDOW)}, repeating this call does not send it again. Only if the owner says that it is in neither place, call again with duplicate: 2.`;
+      const props = await decided(await post(f, id, "approve", { digest: shown }));
+      expect(props.state).toEqual({ kind: "unknown", message });
+      expect(await get(f, id)).toEqual({
+        status: "unknown",
+        error: { code: "outcome_unknown", message },
+      });
+      expect((await page(f, id)).state).toEqual({ kind: "unknown", message });
+      expect(textOf(await renderPage(props).text())).toContain(message);
+      const approval = (await row(id))!;
+      expect((await callRows()).find((call) => call.id === approval.call_id)!.outcome).toBe(
+        "repeat",
+      );
+      expect(google.sends).toHaveLength(1);
+    } finally {
+      resume.resolve();
+      held?.release();
+      if (held) await answer(await first);
+    }
+  },
+);
+
+it.each(["From", "Reply-To"])(
+  "refuses a reply whose %s address was not shown whole",
+  async (name) => {
+    const f = await sendFixture("send_reply");
+    serveFull(
+      fullMessage({ [name]: "x".repeat(600 - " <sam@example.com>".length) + " <sam@example.com>" }),
+    );
+    await expectError(
+      await sendCall(f, "send_reply"),
+      "invalid_arguments",
+      "The message field must be a message whose recipients the server can fill in. For this one, create a draft with create_draft, reply_to, and the recipients, and send it with send_draft.",
+    );
+    expect(google.draftCreates).toEqual([]);
+    expect(google.sends).toEqual([]);
+    expect(await onceRows()).toEqual([]);
+  },
+);

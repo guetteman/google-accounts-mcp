@@ -173,6 +173,7 @@ export const messageText = (mail: Outgoing): string => {
 };
 
 export interface FilePart {
+  charset?: string;
   filename: string;
   type: string;
   bytes: Uint8Array;
@@ -228,7 +229,11 @@ export const mixedMessage = (mail: Outgoing, files: ReadonlyArray<FilePart>): Bl
   ];
   for (const file of files) {
     const fields = fileFields(file);
-    const type = fields.type;
+    const charset =
+      file.charset && /^[A-Za-z0-9._:-]{1,40}$/.test(file.charset)
+        ? `; charset=${file.charset}`
+        : "";
+    const type = fields.type + charset;
     const filename = encodeFilename(fields.filename);
     parts.push(
       `--${boundary}\r\nContent-Type: ${type}\r\n${DISPOSITION}${filename}\r\nContent-Transfer-Encoding: base64\r\n\r\n`,

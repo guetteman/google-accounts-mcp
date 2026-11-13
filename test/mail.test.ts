@@ -297,3 +297,34 @@ it("escapes every RFC 5987 punctuation character in an attachment filename", asy
     "attachment; filename*=UTF-8''mark%21%27%28%29%2A.txt",
   );
 });
+
+it.each([
+  { charset: "ISO-8859-1", suffix: "; charset=ISO-8859-1" },
+  { charset: "a._:-9", suffix: "; charset=a._:-9" },
+  { charset: "a".repeat(40), suffix: "; charset=" + "a".repeat(40) },
+  { charset: undefined, suffix: "" },
+  { charset: "", suffix: "" },
+  { charset: "a".repeat(41), suffix: "" },
+  { charset: 'UTF-8"', suffix: "" },
+  { charset: "UTF-8\r\nBcc: other@example.com", suffix: "" },
+])("writes only a bounded token as an attachment charset (%#)", async ({ charset, suffix }) => {
+  const { mixedMessage } = await import("../src/google/mail");
+  const { mime } = await import("./support/send");
+  const bytes = new Uint8Array([233, 44, 49, 10]);
+  const sent = mime(
+    await mixedMessage(outgoing(), [
+      {
+        filename: "rows.csv",
+        type: "text/csv",
+        bytes,
+        ...(charset === undefined ? {} : { charset }),
+      },
+    ]).text(),
+  );
+  expect(sent.parts[1]!.headers).toEqual({
+    "Content-Type": `text/csv${suffix}`,
+    "Content-Disposition": "attachment; filename*=UTF-8''rows.csv",
+    "Content-Transfer-Encoding": "base64",
+  });
+  expect(sent.parts[1]!.data).toEqual(bytes);
+});

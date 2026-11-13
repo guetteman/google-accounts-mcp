@@ -137,7 +137,7 @@ const usable = (connection: string, generation: string, uses: string, now: strin
 const rowUsable = (now: string, email: string) =>
   usable("approvals.connection_id", "approvals.generation", "approvals.uses", now, email);
 
-/** Recheck the winning approval against the owner's current settings immediately before send. */
+/** Guard every tool with create against the owner's current settings before creating or sending. */
 export const stillApproved = (ctx: ApprovalContext, won: Won): Effect.Effect<void, ToolFailure> =>
   Effect.tryPromise({
     try: () =>

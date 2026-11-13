@@ -7,7 +7,7 @@ import { callRows, expectError, permission } from "./support/permissions";
 import { onceRows, SOURCE, THREAD } from "./support/draft";
 import { bytes, part, tree, serveThread, read } from "./support/thread";
 import { decodeWords } from "./support/draft";
-import { google, deferred } from "./support/google";
+import { google, deferred, token } from "./support/google";
 import {
   leftoverMessage,
   fullMessage,
@@ -188,10 +188,10 @@ it.each(["size", "count", "actual", "413"])(
       await sendCall(f, "forward_message"),
       "message_too_large",
       kind === "count"
-        ? `This forward would have ${MAX_FORWARD_FILES + 1} attachments. The limit is ${MAX_FORWARD_FILES}.`
+        ? `This message would have ${MAX_FORWARD_FILES + 1} attachments. The limit is ${MAX_FORWARD_FILES}.`
         : kind === "413"
           ? "Gmail refused this message as too large."
-          : `This forward would have ${total.toLocaleString("en-US")} bytes of attachments and text. The limit is ${MAX_FORWARD_BYTES.toLocaleString("en-US")} bytes.`,
+          : `This message would have ${total.toLocaleString("en-US")} bytes of attachments and text. The limit is ${MAX_FORWARD_BYTES.toLocaleString("en-US")} bytes.`,
     );
     expect(google.sends).toEqual([]);
     expect(await onceRows()).toEqual([]);
@@ -400,7 +400,7 @@ it.each(["cut", "omitted"])(
     await expectError(
       await sendCall(f, "forward_message"),
       "message_too_large",
-      "The text of this message cannot be forwarded whole: it is too large, or its HTML could not be converted.",
+      "The text of the original message cannot be carried whole: it is too large, or its HTML could not be converted.",
     );
     expect(google.uploads).toEqual([]);
     expect(google.sends).toEqual([]);
@@ -448,7 +448,7 @@ it("refuses an alternative that replaces preferred text which did not fit the bo
   await expectError(
     await sendCall(f, "forward_message"),
     "message_too_large",
-    "The text of this message cannot be forwarded whole: it is too large, or its HTML could not be converted.",
+    "The text of the original message cannot be carried whole: it is too large, or its HTML could not be converted.",
   );
   expect(google.uploads).toEqual([]);
   expect(google.sends).toEqual([]);
@@ -483,3 +483,76 @@ it.each(["drafts", "upload", "send", "delete"])(
     await permission(f);
   },
 );
+
+it("preserves the charset and bytes of a text attachment without changing its approval line", async () => {
+  const f = await sendFixture("forward_message", "ask");
+  const raw = fullMessage();
+  raw.payload = {
+    ...tree("multipart/mixed", [
+      part("text/plain", "Body", "0"),
+      {
+        ...part("text/csv", "", "1", "rows.csv"),
+        headers: [
+          { name: "Content-Type", value: 'text/csv; name="rows.csv"; CHARSET="ISO-8859-1"' },
+        ],
+        body: { size: 4, data: "6SwxCg" },
+      },
+    ]),
+    headers: raw.payload.headers,
+  };
+  serveFull(raw);
+  const id = (await answer(await sendCall(f, "forward_message"))).approval as string;
+  expect((await page(f, id)).request.values).toContainEqual({
+    name: "Attachment 1",
+    text: "rows.csv (text/csv, 4 bytes)",
+    from: "gmail",
+  });
+  expect((await approve(f, id)).state.kind).toBe("succeeded");
+  const file = mime(google.uploads[0]!.message).parts[1]!;
+  expect(file.headers["Content-Type"]).toBe("text/csv; charset=ISO-8859-1");
+  expect(file.data).toEqual(new Uint8Array([233, 44, 49, 10]));
+});
+
+it.each([400, 413])(
+  "allows an upload caller to map a refusal with status %s",
+  async (status) => {
+    const { Effect, Result } = await import("effect");
+    const { ToolFailure } = await import("../src/mcp/failures");
+    const { uploadDraft } = await import("../src/google/draft");
+    const refused = vi.fn(
+      (status: number) =>
+        new ToolFailure({ code: "invalid_arguments", said: `Upload refused with ${status}` }),
+    );
+    const result = await Effect.runPromise(
+      Effect.result(
+        uploadDraft(
+          (build) => {
+            build("test-token", new AbortController().signal);
+            return Effect.succeed(new Response(null, { status }));
+          },
+          { message: new Blob(["MIME bytes"]) },
+          refused,
+        ),
+      ),
+    );
+    expect(refused).toHaveBeenCalledExactlyOnceWith(status);
+    expect(Result.isFailure(result) && result.failure).toMatchObject({
+      code: "invalid_arguments",
+      said: `Upload refused with ${status}`,
+    });
+  },
+);
+
+it("the fake returns 404 when deleting a draft it does not hold", async () => {
+  await sendFixture();
+  const headers = { Authorization: `Bearer ${token()}` };
+  const remove = (id: string) =>
+    fetch(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${id}`, {
+      method: "DELETE",
+      headers,
+    });
+  expect((await remove("existing-draft")).status).toBe(204);
+  expect(google.storedDrafts.has("existing-draft")).toBe(false);
+  expect((await remove("existing-draft")).status).toBe(404);
+  expect((await remove("never-held")).status).toBe(404);
+});

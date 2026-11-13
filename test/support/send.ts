@@ -132,6 +132,7 @@ export const mime = (text: string): Mime => {
   return { headers, entries, parts, data };
 };
 
-export const leftoverMessage = `Nothing was sent from ${PERSONAL}. Google did not confirm a step before the send, so a draft of this mail may be left in Drafts. Delete it there before this call is made again.`;
+export const leftoverMessage = `Nothing was sent from ${PERSONAL}. Google did not confirm a step before the send, so a draft of this mail may be left in Drafts. The owner should delete it there before this call is made again.`;
+export const leftoverDraftMessage = `Nothing was sent from ${PERSONAL}. Google did not confirm a step before the send, so draft "draft-1" of this mail may be left in Drafts. The owner should delete it there before this call is made again.`;
 export const leftoverNote =
-  " A draft of this mail may be left in Drafts. Delete it there before this call is made again.";
+  ' Draft "draft-1" of this mail may be left in Drafts. The owner should delete it there before this call is made again.';

@@ -1,4 +1,5 @@
 /** Bounds on fields and text supplied by a mail's sender, before page fitting. */
+export const MAX_REPLY_HEADER = 500;
 export const PAGE_BODY_BYTES = 2_000_000;
 export const MAX_TEXT = 1_000_000;
 export const MAX_BODY_PARTS = 3;

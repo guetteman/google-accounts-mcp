@@ -347,6 +347,11 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
           from: "gmail",
         },
         { name: "Attachment 2", text: "logo.png (image/png, 3,456 bytes)", from: "gmail" },
+        {
+          name: "Not forwarded",
+          text: "1 part that is neither text nor a file, such as a calendar invitation",
+          from: "gmail",
+        },
         { name: "Note", text: "Please arrange payment on Friday.", from: "agent" },
         {
           name: "Forwarded text",
@@ -376,6 +381,8 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
         { name: "From", text: "Alex <alex.personal@example.com>", from: "draft" },
         { name: "To", text: "Sam Lee <sam@example.com>", from: "draft" },
         { name: "Subject", text: "Notes for Thursday's meeting", from: "draft" },
+        { name: "Attachments", text: "1 file, 1 byte in all", from: "draft" },
+        { name: "Attachment 1", text: "ack.txt (text/plain, 1 byte)", from: "draft" },
         {
           name: "Body",
           text: "Hi Sam,\n\nHere are the notes for Thursday. Please review the budget before we meet.\n\nThanks,\nAlex",
@@ -441,7 +448,7 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
       { ...approvalBase, state: { kind } },
     ]),
   ),
-  "approval-unknown": {
+  "approval-unknown-send": {
     ...approvalBase,
     request: {
       ...approvalBase.request,

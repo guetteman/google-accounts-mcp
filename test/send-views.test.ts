@@ -29,6 +29,7 @@ const originalForApproval = () => {
         ...part("message/rfc822", "", "2", "🙂".repeat(100) + ".eml"),
         body: { size: 5, attachmentId: "image" },
       },
+      part("text/calendar", "BEGIN:VCALENDAR\nEND:VCALENDAR", "3"),
     ]),
     headers: raw.payload.headers,
   };
@@ -199,6 +200,11 @@ it("the forward lists every file before its exact quoted block without downloadi
       text: `${"🙂".repeat(70)}.eml (application/octet-stream, 5 bytes)`,
       from: "gmail",
     },
+    {
+      name: "Not forwarded",
+      text: "1 part that is neither text nor a file, such as a calendar invitation",
+      from: "gmail",
+    },
     { name: "Duplicate", text: "2 (a deliberate copy of an earlier call)", from: "agent" },
     { name: "Note", text: "See below.", from: "agent" },
     {
@@ -311,7 +317,7 @@ it("the draft view shows all 200 recipients and whole raw headers with its warni
   ]);
 });
 
-it.each(["headers", "text", "html", "parts", "bytes", "files"])(
+it.each(["headers", "text", "html", "parts", "bytes", "files", "calendar", "unknown part"])(
   "incomplete draft %s never offers Approve or sends",
   async (kind) => {
     const f = await sendFixture("send_draft", "ask");
@@ -343,10 +349,16 @@ it.each(["headers", "text", "html", "parts", "bytes", "files"])(
       raw.payload = {
         ...tree(
           "multipart/mixed",
-          Array.from({ length: MAX_FORWARD_FILES + 1 }, (_, i) =>
-            part("image/png", "x", String(i), `f${i}`),
-          ),
+          Array.from({ length: 21 }, (_, i) => part("image/png", "x", String(i), `f${i}`)),
         ),
+        headers: raw.payload.headers,
+      };
+    if (kind === "calendar" || kind === "unknown part")
+      raw.payload = {
+        ...tree("multipart/mixed", [
+          part("text/plain", "Visible body", "0"),
+          part(kind === "calendar" ? "text/calendar" : "application/x-inline", "Hidden part", "1"),
+        ]),
         headers: raw.payload.headers,
       };
     for (let i = 0; i < 4; i++)
@@ -544,4 +556,72 @@ it("sends a shown draft as it is at approval even when the posted digest differs
   const props = await decided(await post(f, id, "approve", { digest: "wrong" }));
   expect(props.state.kind).toBe("succeeded");
   expect(google.sends).toHaveLength(1);
+});
+
+it.each([
+  { sizes: [1], summary: "1 file, 1 byte in all", line: "1 byte" },
+  { sizes: [0], summary: "1 file, 0 bytes in all", line: "0 bytes" },
+  { sizes: [1, 1], summary: "2 files, 2 bytes in all", line: "1 byte" },
+  { sizes: [0, 1], summary: "2 files, 1 byte in all", line: "0 bytes" },
+])(
+  "uses singular file and byte counts on the draft page (%#)",
+  async ({ sizes, summary, line }) => {
+    const f = await sendFixture("send_draft", "ask");
+    const raw = fullMessage();
+    raw.payload = {
+      ...tree("multipart/mixed", [
+        part("text/plain", "Body", "body"),
+        ...sizes.map((size, i) => part("text/plain", "x".repeat(size), String(i), `f${i}.txt`)),
+      ]),
+      headers: raw.payload.headers,
+    };
+    google.storedDrafts.set("existing-draft", raw);
+    const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
+    const values = (await page(f, id)).request.values;
+    expect(values).toContainEqual({ name: "Attachments", text: summary, from: "draft" });
+    expect(values).toContainEqual({
+      name: "Attachment 1",
+      text: `f0.txt (text/plain, ${line})`,
+      from: "draft",
+    });
+  },
+);
+
+it("keeps unknown previews with and without recovery advice", () => {
+  const bare = previews["approval-unknown"];
+  const withAdvice = previews["approval-unknown-send"];
+  if (bare?._tag !== "Approval" || withAdvice?._tag !== "Approval")
+    throw new Error("Missing unknown approval previews");
+  expect(bare.state).toEqual({ kind: "unknown" });
+  expect(withAdvice.state).toMatchObject({
+    kind: "unknown",
+    message: expect.stringContaining("Ask the owner to look in Sent."),
+  });
+});
+
+it("counts only omitted leaves, keeping body alternatives and attached mail out of that count", async () => {
+  const f = await sendFixture("forward_message", "ask");
+  const raw = fullMessage();
+  raw.payload = {
+    ...tree("multipart/mixed", [
+      tree("multipart/alternative", [
+        part("text/plain", "Visible body", "0"),
+        part("text/html", "<p>Visible body</p>", "1"),
+      ]),
+      {
+        ...part("message/rfc822", "Attached", "2", "attached.eml"),
+        parts: [part("text/calendar", "Inside attached mail", "2.1")],
+      },
+      part("text/calendar", "Invitation", "3"),
+      part("application/x-inline", "Other hidden content", "4"),
+    ]),
+    headers: raw.payload.headers,
+  };
+  serveFull(raw);
+  const id = (await answer(await sendCall(f, "forward_message"))).approval as string;
+  expect((await page(f, id)).request.values).toContainEqual({
+    name: "Not forwarded",
+    text: "2 parts that are neither text nor files, such as a calendar invitation",
+    from: "gmail",
+  });
 });

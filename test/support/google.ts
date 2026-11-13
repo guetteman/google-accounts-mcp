@@ -547,8 +547,11 @@ export const google = {
             if (!authorized(request)) return new HttpResponse(null, { status: 401 });
             this.deletes.push(id);
             const response = await this.deleteAnswers.shift()?.(request);
-            if (!response || response.ok) this.storedDrafts.delete(id);
-            return response ?? new HttpResponse(null, { status: 204 });
+            if (response) {
+              if (response.ok) this.storedDrafts.delete(id);
+              return response;
+            }
+            return new HttpResponse(null, { status: this.storedDrafts.delete(id) ? 204 : 404 });
           }
           this.fullDraftRequests.push(request.url);
           if (request.method !== "GET") return new HttpResponse(null, { status: 405 });

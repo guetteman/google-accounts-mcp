@@ -250,7 +250,7 @@ it.each(["00000000-0000-4000-8000-000000000000", "not-an-id"])(
   },
 );
 
-it("names all five irreversible tools in page order", async () => {
+it("marks four sends and permanent delete as irreversible", async () => {
   const f = await fixture();
   const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
   const tools = pageProps(html).tools;

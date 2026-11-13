@@ -3,9 +3,16 @@ import { messageTooLarge, notFound, ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
 import { shorten, unfold } from "./bounds";
 import { get } from "./gmail";
-import { attachmentParts, header, RawMessage, readMessage, type RawPart } from "./message";
+import {
+  attachmentParts,
+  header,
+  RawMessage,
+  readMessage,
+  otherParts,
+  type RawPart,
+} from "./message";
 import { BodyBudget, textOf } from "./thread";
-import { partBytes } from "./attachment";
+import { charsetOf, partBytes } from "./attachment";
 import { fileFields, type FilePart } from "./mail";
 
 export const MAX_FORWARD_BYTES = 25_000_000;
@@ -19,6 +26,7 @@ export type ForwardPlan = {
   subject: string;
   quoted: string;
   files: ReadonlyArray<{ part: RawPart; filename: string; type: string; size: number }>;
+  omitted: number;
   original: { from: string; subject: string; date: number };
 };
 export const forwardPlan = (send: Send, message: string): Effect.Effect<ForwardPlan, ToolFailure> =>
@@ -58,6 +66,7 @@ export const forwardPlan = (send: Send, message: string): Effect.Effect<ForwardP
         ...fileFields({ filename: part.filename, type: part.mimeType }),
         size: part.body.size,
       })),
+      omitted: otherParts(raw).length,
       original: {
         from: unfold(parsed.from),
         subject: shorten(subject, 500),
@@ -88,7 +97,13 @@ export const forwardFiles = (
       size += bytes.byteLength;
       if (size > MAX_FORWARD_BYTES)
         return yield* Effect.fail(messageTooLarge({ bytes: size, limit: MAX_FORWARD_BYTES }));
-      files.push({ filename: file.filename, type: file.type, bytes });
+      const charset = charsetOf(header(file.part.headers, "Content-Type"));
+      files.push({
+        filename: file.filename,
+        type: file.type,
+        bytes,
+        ...(charset === null ? {} : { charset }),
+      });
     }
     return files;
   });
