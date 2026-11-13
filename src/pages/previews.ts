@@ -587,12 +587,37 @@ const activityAccounts: ReadonlyArray<import("../activity/store").ActivityAccoun
     removedOn: "Oct 20",
   },
 ];
+const activityTime = (at: number): import("../activity/store").ActivityRecord["time"] => {
+  const iso = new Date(at).toISOString();
+  const clock = iso.slice(11, 16);
+  const today = iso.startsWith("2026-11-13");
+  const date = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(new Date(at).getUTCFullYear() === 2026 ? {} : { year: "numeric" }),
+    timeZone: "UTC",
+  }).format(at);
+  const fullDate = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(at);
+  return {
+    iso,
+    short: today ? clock : `${date}, ${clock}`,
+    full: `${fullDate} at ${clock} UTC`,
+    today,
+  };
+};
 const activityRecord = (
   id: number,
   outcome: import("../activity/store").ActivityRecord["outcome"],
   tool: string | null = "read_thread",
   account = 0,
   connection = 0,
+  at = Date.UTC(2026, 10, 13, 14, 21) - (100 - id) * 43 * 60_000,
 ): import("../activity/store").ActivityRecord => {
   const definition = TOOLS.find((t) => t.name === tool);
   return {
@@ -604,20 +629,7 @@ const activityRecord = (
     account: account < 0 ? null : activityAccounts[account]!,
     connection: activityConnections[connection]!,
     also: [],
-    time:
-      id > 75
-        ? {
-            iso: "2026-11-13T14:02:00.000Z",
-            short: "14:02",
-            full: "Fri, Nov 13, 2026 at 14:02 UTC",
-            today: true,
-          }
-        : {
-            iso: "2026-11-12T09:41:00.000Z",
-            short: "Nov 12, 09:41",
-            full: "Thu, Nov 12, 2026 at 09:41 UTC",
-            today: false,
-          },
+    time: activityTime(at),
     approval:
       outcome === "pending" ? { id: approvalBase.id, state: "waiting", decidedOn: null } : null,
   };
@@ -640,7 +652,7 @@ const activityRecords: ReadonlyArray<import("../activity/store").ActivityRecord>
     approval: {
       id: approvalBase.id,
       state: "rejected",
-      decidedOn: "Fri, Nov 13, 2026 at 13:56 UTC",
+      decidedOn: "Fri, Nov 13, 2026 at 11:34 UTC",
     },
   },
   activityRecord(95, "expired", "send_reply", 1, 2),
@@ -657,6 +669,26 @@ const activityRecords: ReadonlyArray<import("../activity/store").ActivityRecord>
     activityRecord(85 - i, "success", "read_thread", i % 4, i % 3),
   ),
 ];
+const activityOlderRecords = Array.from({ length: 25 }, (_, i) => {
+  const [outcome, tool] = (
+    [
+      ["success", "search_threads"],
+      ["refused", "change_labels"],
+      ["failed", "create_draft"],
+      ["expired", "send_message"],
+      ["repeat", "send_reply"],
+      ["unknown", "read_thread"],
+    ] as const
+  )[i % 6]!;
+  return activityRecord(
+    75 - i,
+    outcome,
+    tool,
+    i % 5,
+    i % activityConnections.length,
+    i === 24 ? Date.UTC(2025, 11, 31, 16, 38) : Date.UTC(2026, 10, 12, 18, 7) - i * 7 * 3_600_000,
+  );
+});
 const activityPreview = (scenario: string): Page => {
   const filter: import("../activity/store").ActivityFilter | null =
     scenario === "pending"
@@ -672,9 +704,7 @@ const activityPreview = (scenario: string): Page => {
     scenario === "empty" || scenario === "no-match"
       ? []
       : scenario === "older"
-        ? Array.from({ length: 25 }, (_, i) =>
-            activityRecord(75 - i, "success", "read_thread", i % 4, i % 3),
-          )
+        ? activityOlderRecords
         : scenario === "pending"
           ? activityRecords.filter((r) => r.outcome === "pending")
           : scenario === "account"
