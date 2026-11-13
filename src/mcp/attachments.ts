@@ -3,15 +3,16 @@ import { viewDate, type ViewValue } from "../approvals/model";
 import { findAttachment, partBytes } from "../google/attachment";
 import { shorten } from "../google/bounds";
 import { MAX_FORWARD_BYTES } from "../google/forward";
+import { REQUESTS_AT_ONCE } from "../google/gmail";
 import { fileFields, type FilePart } from "../google/mail";
 import { normalizeEmail } from "../owner/owner";
 import { parseUploadId } from "../uploads/store";
 import { messageTooLarge, ToolFailure, uploadNotAvailable } from "./failures";
 import { TOOLS, type Sources } from "./tools";
 
-// An approved reply with 10 copies uses at most 48 requests: 3 reads per copy,
-// 2 reply reads, upload/send, 2 refreshes, and at most 12 D1 operations (contract T3).
-export const MAX_ATTACHMENTS = 10;
+// An approved reply with six refreshed source accounts uses 46 requests:
+// 29 outside requests, 17 D1 operations, and no KV reads or writes.
+export const MAX_ATTACHMENTS = 6;
 const Id = Schema.String.check(Schema.isBetweenLength(1, 64), Schema.isPattern(/^[A-Za-z0-9_-]+$/));
 const Copy = Schema.Struct({
   account: Schema.String,
@@ -48,10 +49,6 @@ export const uploadsOf = (items: readonly Item[] | undefined): readonly string[]
   (items ?? []).flatMap((item) => ("upload" in item ? [item.upload] : []));
 export const attachingTools = () =>
   TOOLS.filter((tool) => tool.kind === "account" && tool.uploads).map((tool) => tool.name);
-export const withUploadAdvice = (text: string, uploads: readonly string[]) =>
-  uploads.length
-    ? text.replace(/(call again with duplicate: \d+)\./g, "$1 and a new upload of each file.")
-    : text;
 export const checkAttachedSize = (sizes: Iterable<number>, textBytes: number) => {
   let bytes = textBytes;
   for (const size of sizes) bytes += size;
@@ -69,10 +66,38 @@ type Planned = {
     | { kind: "copy"; account: string; from: string; subject: string; date: number };
   bytes: Effect.Effect<Uint8Array<ArrayBuffer>, ToolFailure>;
 };
+/** Warm each account's session alone, then read in bounded parallel waves. */
+const inAccounts = <A, B>(
+  items: readonly A[],
+  account: (item: A, index: number) => string,
+  read: (item: A) => Effect.Effect<B, ToolFailure>,
+) =>
+  Effect.gen(function* () {
+    const seen = new Set<string>();
+    const first: { item: A; index: number }[] = [];
+    const rest: typeof first = [];
+    items.forEach((item, index) => {
+      const key = account(item, index);
+      (seen.has(key) ? rest : first).push({ item, index });
+      seen.add(key);
+    });
+    const wave = (entries: typeof first) =>
+      Effect.forEach(
+        entries,
+        ({ item, index }) => read(item).pipe(Effect.map((value) => ({ index, value }))),
+        { concurrency: REQUESTS_AT_ONCE },
+      );
+    // The session acquires (or refreshes after a 401) once before its account's other reads.
+    const warmed = yield* wave(first);
+    const remaining = yield* wave(rest);
+    return [...warmed, ...remaining].sort((a, b) => a.index - b.index).map(({ value }) => value);
+  });
 /** One plan gives both the approval's facts and the MIME part's fields. */
 const plan = (items: readonly Item[], sources: Sources): Effect.Effect<Planned[], ToolFailure> =>
-  Effect.forEach(
+  inAccounts(
     items,
+    (item, index) =>
+      "upload" in item ? `upload:${index}` : (normalizeEmail(item.account) ?? item.account),
     (item) =>
       Effect.gen(function* () {
         if ("upload" in item) {
@@ -97,7 +122,7 @@ const plan = (items: readonly Item[], sources: Sources): Effect.Effect<Planned[]
           charset: found.charset,
           source: {
             kind: "copy" as const,
-            account: item.account,
+            account: about.email,
             from: found.from,
             subject: found.subject,
             date: found.date,
@@ -105,7 +130,6 @@ const plan = (items: readonly Item[], sources: Sources): Effect.Effect<Planned[]
           bytes: partBytes(send, item.message, found.part).pipe(Effect.mapError(stamp)),
         };
       }),
-    { concurrency: "unbounded" },
   );
 export const attachmentValues = (items: readonly Item[], sources: Sources) =>
   Effect.gen(function* () {
@@ -114,7 +138,7 @@ export const attachmentValues = (items: readonly Item[], sources: Sources) =>
     const values: ViewValue[] = [
       {
         name: "Attachments",
-        text: `${files.length} files, ${files.reduce((sum, file) => sum + file.size, 0).toLocaleString("en-US")} bytes in all`,
+        text: `${files.length} ${files.length === 1 ? "file" : "files"}, ${files.reduce((sum, file) => sum + file.size, 0).toLocaleString("en-US")} bytes in all`,
         from: files.some((file) => file.source.kind === "upload") ? "agent" : "gmail",
       },
     ];
@@ -151,8 +175,9 @@ export const attachedFiles = (
       files.map((file) => file.size),
       textBytes,
     );
-    const parts = yield* Effect.forEach(
+    const parts = yield* inAccounts(
       files,
+      (file, index) => (file.source.kind === "copy" ? file.source.account : `upload:${index}`),
       (file) =>
         file.bytes.pipe(
           Effect.map((bytes) => ({
@@ -162,32 +187,14 @@ export const attachedFiles = (
             bytes,
           })),
         ),
-      { concurrency: "unbounded" },
     );
     yield* checkAttachedSize(
       parts.map((file) => file.bytes.byteLength),
       textBytes,
     );
-    for (const [i, file] of files.entries()) {
-      if (parts[i]!.bytes.byteLength !== file.size)
-        return yield* Effect.fail(
-          new ToolFailure({
-            code: "google_unavailable",
-            ...(file.source.kind === "copy"
-              ? {
-                  about: {
-                    input: file.source.account,
-                    email: normalizeEmail(file.source.account) ?? file.source.account,
-                    tool: "get_attachment",
-                  },
-                }
-              : {}),
-          }),
-        );
-    }
     return parts;
   });
 export const attachmentsDescription =
-  "`attachments` is an optional list of at most 10 files. An item is `{ account, message, attachment }`, which copies an attachment that read_thread listed for a message, from any account you can use; the file goes from Gmail into this mail and never appears in a result. It needs the owner's setting for get_attachment on that account. Or an item is `{ upload }`, which names a local file by the `upload` ID that the link of create_upload_link answered. An upload goes into one message: repeating this call with the same arguments is safe, and once the mail exists any other call needs a new upload. The attachments and the text together can have at most 25 MB.";
+  "`attachments` is an optional list of at most 6 files. An item is `{ account, message, attachment }`, which copies an attachment that read_thread listed for a message, from any account you can use; the file goes from Gmail into this mail and never appears in a result. It needs the owner's setting for get_attachment on that account. Or an item is `{ upload }`, which names a local file by the `upload` ID that the link of create_upload_link answered. An upload goes into one message: repeating this call with the same arguments is safe, and once the mail exists any other call needs a new upload. The attachments and the text together can have at most 25 MB.";
 export const attachmentsExpect =
-  "a list of at most 10 files, each { account, message, attachment } or { upload }, with no repeated upload";
+  "a list of at most 6 files, each { account, message, attachment } or { upload }, with no repeated upload";

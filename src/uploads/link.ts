@@ -3,7 +3,9 @@ import { readConfig } from "../config";
 import type { GatedEnv } from "../owner/gate";
 import { isoSeconds } from "../approvals/model";
 import { MAX_FORWARD_BYTES } from "../google/forward";
-import { liveLink, parseUploadId, storeFile } from "./store";
+import { charsetOf } from "../google/attachment";
+import { fileFields } from "../google/mail";
+import { liveLink, isUuid, storeFile } from "./store";
 
 export const UPLOAD_PATH = "/uploads/";
 const json = (status: number, code: string, message: string) =>
@@ -54,7 +56,7 @@ export const withUploadLink =
     const url = new URL(request.url);
     if (!url.pathname.startsWith(UPLOAD_PATH)) return inner(request, env, execution);
     const [link, ...rest] = url.pathname.slice(UPLOAD_PATH.length).split("/");
-    if (request.method !== "PUT" || !parseUploadId(link)) return missing();
+    if (request.method !== "PUT" || !isUuid(link)) return missing();
     const config = readConfig(env);
     if (Result.isFailure(config)) return unavailable();
     const ctx = {
@@ -85,38 +87,37 @@ export const withUploadLink =
           "invalid_upload",
           `Send the file's bytes as the body of the PUT request, not as a form. With curl: curl -T <path> '${request.url}'.`,
         );
-      if (Number(request.headers.get("Content-Length")) > MAX_FORWARD_BYTES) return tooLarge();
-      const chunks: Uint8Array[] = [];
+      const length = request.headers.get("Content-Length");
+      const capacity = length === null ? MAX_FORWARD_BYTES : Number(length);
+      if (!Number.isSafeInteger(capacity) || capacity < 0 || capacity > MAX_FORWARD_BYTES)
+        return tooLarge();
+      const buffer = new Uint8Array(capacity);
       let size = 0;
       const reader = request.body?.getReader();
       if (reader) {
         while (true) {
           const next = await reader.read();
           if (next.done) break;
-          size += next.value.byteLength;
-          if (size > MAX_FORWARD_BYTES) {
+          if (next.value.byteLength > capacity - size) {
             await reader.cancel();
             return tooLarge();
           }
-          chunks.push(next.value);
+          buffer.set(next.value, size);
+          size += next.value.byteLength;
         }
       }
-      const bytes = new Uint8Array(size);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      const type = mediaType(request.headers.get("Content-Type"));
+      reader?.releaseLock();
+      const bytes = buffer.subarray(0, size);
+      const fields = fileFields({ filename, type: mediaType(request.headers.get("Content-Type")) });
+      const charset = charsetOf(request.headers.get("Content-Type") ?? "");
       const stored = await Effect.runPromise(
-        storeFile(ctx, link!, { filename, type, bytes, charset: null }, Date.now()),
+        storeFile(ctx, link!, { ...fields, bytes, charset }, Date.now()),
       );
       return stored
         ? Response.json(
             {
               upload: stored.upload,
-              filename,
-              type,
+              ...fields,
               size,
               expires_at: isoSeconds(stored.expiresAt),
             },

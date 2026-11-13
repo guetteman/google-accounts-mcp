@@ -1,4 +1,9 @@
-import { usableUploadsWhere, moveUploadsStatement, type UploadId } from "../uploads/store";
+import {
+  usableUploadsWhere,
+  deleteApprovalUploadsStatement,
+  missingUploadStatement,
+  type UploadId,
+} from "../uploads/store";
 import { Effect, Schema } from "effect";
 import { Unavailable, WriteUncertain } from "../db";
 import type { Owner } from "../owner/owner";
@@ -199,7 +204,7 @@ export const createApproval = (
   | "created"
   | "limit"
   | "unavailable"
-  | "upload"
+  | { upload: UploadId }
   | { waiting: { id: ApprovalId; expiresAt: number } }
   | { repeat: Repeat },
   WriteUncertain
@@ -212,7 +217,7 @@ export const createApproval = (
           .prepare(`INSERT INTO approvals (id,generation,connection_id,call_id,tool,uses,created_at,expires_at,state,arguments,identity)
           SELECT ?1,?2,?3,?4,?5,?6,?7,?8,'waiting',?9,?11
           WHERE ${usable("?3", "?2", "?6", "?7", "?10")}
-          AND (?13 = 1 AND ${usableUploadsWhere({ ids: "?12", count: "json_array_length(?12)", connection: "?3", generation: "?2", now: "?14", email: "?10" })})
+          AND (?13 = 1 AND ${usableUploadsWhere({ ids: "?12", count: "json_array_length(?12)", connection: "?3", generation: "?2", now: "?14", email: "?10", identity: "?11" })})
           AND (?11 IS NULL OR (NOT ${liveRowWhere("?11", "?7")}
             AND NOT EXISTS (SELECT 1 FROM approvals WHERE connection_id = ?3 AND identity = ?11 AND state = 'waiting' AND expires_at > ?7)))
           AND (SELECT count(*) FROM approvals WHERE connection_id = ?3 AND generation = ?2 AND state = 'waiting' AND expires_at > ?7) < ${WAITING_LIMIT} RETURNING id`)
@@ -244,7 +249,12 @@ export const createApproval = (
         ...(input.identity
           ? [rowStatement(ctx.db, input.identity), waitingStatement(ctx, input.identity, at)]
           : []),
-        ...(input.uploads?.ids.length ? [moveUploadsStatement(ctx, input.uploads.ids, id)] : []),
+        ...(input.uploads?.ids.length
+          ? [
+              missingUploadStatement(ctx, input.uploads.ids, input.identity ?? null),
+              deleteApprovalUploadsStatement(ctx, input.uploads.ids, id),
+            ]
+          : []),
       ]);
       if (results[0]!.results.length) return "created";
       if (input.identity) {
@@ -253,7 +263,10 @@ export const createApproval = (
         const waiting = decodeWaiting(results[4]!.results[0]);
         if (waiting) return { waiting };
       }
-      if (input.uploads?.ids.length) return "upload";
+      if (input.uploads?.ids.length) {
+        const missing = results[input.identity ? 5 : 3]!.results[0] as { id: UploadId } | undefined;
+        if (missing) return { upload: missing.id };
+      }
       return Number((results[2]!.results[0] as { count: number }).count) >= WAITING_LIMIT
         ? ("limit" as const)
         : ("unavailable" as const);

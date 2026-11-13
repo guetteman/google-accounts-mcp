@@ -1,6 +1,13 @@
-import { readUploads, dropUploads, parseUploadId, type UploadRef } from "../uploads/store";
+import {
+  readApprovalUploads,
+  holdUploads,
+  releaseUploads,
+  dropUploads,
+  parseUploadId,
+  type UploadRef,
+} from "../uploads/store";
 import { getFile, type FileData } from "../files/store";
-import { checkAttachedSize, withUploadAdvice } from "./attachments";
+import { checkAttachedSize } from "./attachments";
 import { createApproval, waitingApproval } from "../approvals/store";
 import { APPROVAL_LIFETIME, CALL_DEADLINE, isoSeconds, type ApprovalId } from "../approvals/model";
 import { pendingAnswer } from "../approvals/result";
@@ -74,10 +81,7 @@ export const repeatAnswer = (
         account,
         ...repeat.result,
         repeat_of: at,
-        note: withUploadAdvice(
-          `This call already ran at ${at}. Nothing was created or sent again. This is its result.${"duplicate" in tool.expects && next <= 100 ? ` To make one more on purpose, call again with duplicate: ${next}.` : ""}`,
-          tool.uploads?.(args) ?? [],
-        ),
+        note: `This call already ran at ${at}. Nothing was created or sent again. This is its result.${"duplicate" in tool.expects && next <= 100 ? ` To make one more on purpose, call again with duplicate: ${next}${tool.uploads?.(args).length ? " and a new upload of each file" : ""}.` : ""}`,
       };
     }
     case "running":
@@ -161,7 +165,16 @@ export function preparation(now: () => number, reserve: number) {
         ),
       );
     };
-  return { wrap: reserved, close: () => clearTimeout(timer) };
+  const bound = <A, E>(effect: Effect.Effect<A, E>) =>
+    effect.pipe(
+      Effect.raceFirst(stopped),
+      Effect.flatMap((value) =>
+        now() >= reserve || controller.signal.aborted
+          ? Effect.fail(unavailable())
+          : Effect.succeed(value),
+      ),
+    );
+  return { wrap: reserved, bound, close: () => clearTimeout(timer) };
 }
 const preparing = (request: Request) => {
   if (isSend(request)) throw new ToolFailure({ code: "google_unavailable" });
@@ -245,17 +258,17 @@ export async function executeAccount(
         return sending;
       }),
     };
+    const ids = (tool.uploads?.(args) ?? []).map((id) => parseUploadId(id)!);
     try {
-      const ids = (tool.uploads?.(args) ?? []).map((id) => parseUploadId(id)!);
-      const refs =
+      const uploads =
         held === null
           ? await Effect.runPromise(
-              readUploads(ctx, ids).pipe(
+              holdUploads(ctx, ids, identity).pipe(
                 Effect.mapError(() => new ToolFailure({ code: "server_unavailable" })),
               ),
             )
-          : new Map<string, UploadRef>();
-      if (refs === null) throw uploadNotAvailable(ids[0]!);
+          : { refs: new Map<string, UploadRef>(), missing: null };
+      if (uploads.missing) throw uploadNotAvailable(uploads.missing);
       const sources: Sources = {
         from: (input) => {
           const email = normalizeEmail(input);
@@ -274,11 +287,12 @@ export async function executeAccount(
         },
         uploads: new Map<string, Uploaded>(
           held === null
-            ? Array.from(refs, ([id, ref]) => [
+            ? Array.from(uploads.refs, ([id, ref]) => [
                 id,
                 {
                   ...ref,
-                  bytes: getFile(ctx.files, ref).pipe(
+                  bytes: preparingRequests.bound(getFile(ctx.files, ref)).pipe(
+                    Effect.mapError(() => uploadNotReady()),
                     Effect.flatMap((file) =>
                       file ? Effect.succeed(file.bytes) : Effect.fail(uploadNotReady()),
                     ),
@@ -301,7 +315,7 @@ export async function executeAccount(
         Effect.result(settle(ctx, claim, ctx.now(), { kind: "done", result: result.success })),
       );
       if (held === null && ids.length)
-        await Effect.runPromise(Effect.result(dropUploads(ctx, ids)));
+        await Effect.runPromise(Effect.result(dropUploads(ctx, ids, identity)));
       return { kind: "ran", value: { account: allowed.credential.email, ...result.success } };
     } catch (error) {
       if (
@@ -310,15 +324,16 @@ export async function executeAccount(
         (!seen.started || (seen.status !== null && seen.status >= 400 && seen.status < 500))
       ) {
         await Effect.runPromise(Effect.result(release(ctx, claim)));
+        if (held === null && ids.length)
+          await Effect.runPromise(Effect.result(releaseUploads(ctx, ids, identity)));
         const data: ConstructorParameters<typeof ToolFailure>[0] = error;
         const { unknown: _unknown, ...known } = data;
         throw new ToolFailure({ ...known, released: true });
       }
       const now = ctx.now();
       await Effect.runPromise(Effect.result(settle(ctx, claim, now, { kind: "unknown" })));
-      const ids = (tool.uploads?.(args) ?? []).map((id) => parseUploadId(id)!);
       if (held === null && ids.length)
-        await Effect.runPromise(Effect.result(dropUploads(ctx, ids)));
+        await Effect.runPromise(Effect.result(dropUploads(ctx, ids, identity)));
       throw new ToolFailure({
         code: "outcome_unknown",
         unknown: true,
@@ -456,7 +471,10 @@ export async function runCall(
           });
         }
         const checked: Allowed[] = [];
-        let ask = false;
+        const ask = pairs.some((_, i) => {
+          const row = batch[1 + i * 2]?.results[0] as { ask: unknown } | undefined;
+          return row && row.ask !== 0;
+        });
         for (const [i, pair] of pairs.entries()) {
           const row = batch[1 + i * 2]?.results[0];
           const about = i
@@ -473,9 +491,8 @@ export async function runCall(
           const allowed = await decodeAllowedAccount(row, ctx.config.tokenKey);
           checked.push(allowed);
           if (!i) email = allowed.credential.email;
-          ask ||= (row as { ask: unknown }).ask !== 0;
           if (
-            (i || (row as { ask: unknown }).ask !== 0) &&
+            (i || ask) &&
             ["needs_reconnect", "missing_access", "unreadable"].includes(allowed.status.kind)
           )
             throw new ToolFailure({
@@ -494,8 +511,18 @@ export async function runCall(
         if (ask) {
           const approval = crypto.randomUUID() as ApprovalId;
           const ids = (tool.uploads?.(decoded.value) ?? []).map((id) => parseUploadId(id)!);
-          const refs = await Effect.runPromise(readUploads(ctx, ids));
-          if (refs) {
+          const identity = tool.create
+            ? await identityOf(ctx.config.tokenKey, {
+                connection: ctx.connection.connectionId,
+                account: allowed.credential.id,
+                tool: tool.name,
+                args: { ...decoded.value },
+                defaults: tool.defaults,
+              })
+            : null;
+          const refs = await Effect.runPromise(readApprovalUploads(ctx, ids, identity));
+          const found = ids.every((id) => refs.has(id));
+          if (found) {
             const body = (decoded.value as DecodedArgs & { body?: string }).body ?? "";
             await Effect.runPromise(
               checkAttachedSize(
@@ -508,7 +535,7 @@ export async function runCall(
             ctx.config.tokenKey,
             approval,
             decoded.value,
-            refs ? Object.fromEntries(refs) : {},
+            Object.fromEntries(refs),
           );
           // Once the batch starts, its lost response must never close the audit record.
           const created = await Effect.runPromise(
@@ -521,26 +548,17 @@ export async function runCall(
                   account: value.credential.id,
                   tool: pairs[i]!.tool as typeof tool.name,
                 })),
-                uploads: { ids, found: refs !== null },
+                uploads: { ids, found },
                 arguments: argumentsSealed,
                 at,
-                ...(tool.create
-                  ? {
-                      identity: await identityOf(ctx.config.tokenKey, {
-                        connection: ctx.connection.connectionId,
-                        account: allowed.credential.id,
-                        tool: tool.name,
-                        args: { ...decoded.value },
-                        defaults: tool.defaults,
-                      }),
-                    }
-                  : {}),
+                ...(identity ? { identity } : {}),
               }),
             ),
           );
           if (Result.isFailure(created))
             throw new ToolFailure({ code: "server_unavailable", unknown: true });
           if (typeof created.success === "object") {
+            if ("upload" in created.success) throw uploadNotAvailable(created.success.upload);
             outcome = "repeat";
             value =
               "repeat" in created.success
@@ -550,8 +568,6 @@ export async function runCall(
                     created.success.waiting.id,
                     created.success.waiting.expiresAt,
                   );
-          } else if (created.success === "upload") {
-            throw uploadNotAvailable(ids[0]!);
           } else if (created.success !== "created") {
             throw new ToolFailure({
               code:

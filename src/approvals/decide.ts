@@ -67,8 +67,9 @@ async function viewOf(
       : null;
   const preparing = reads ? preparation(Date.now, reads.deadline - SEND_RESERVE) : null;
   const requests = new Map<string, ReturnType<typeof accountRequests>>();
+  const sourceIds = new Set(approval.uses.slice(1).map((use) => use.account));
   let loading: Promise<Awaited<ReturnType<typeof decodeAllowedAccount>>[]> | undefined;
-  const from = (account: string): Send =>
+  const from = (account: string, source = false): Send =>
     sourceRead((build) =>
       Effect.gen(function* () {
         loading ??= Effect.runPromise(viewCredential(deps, approval.id, Date.now())).then((rows) =>
@@ -78,7 +79,10 @@ async function viewOf(
           try: () => loading!,
           catch: () => new ToolFailure({ code: "server_unavailable" }),
         });
-        const allowed = all.find((value) => value.credential.email === account);
+        const allowed = all.find(
+          (value) =>
+            value.credential.email === account && (!source || sourceIds.has(value.credential.id)),
+        );
         if (!allowed) return yield* Effect.fail(new ToolFailure({ code: "account_not_available" }));
         let request = requests.get(account);
         if (!request) {
@@ -104,7 +108,7 @@ async function viewOf(
       reads && own
         ? {
             send: from(own.email),
-            from: (account) => preparing!.wrap(from(account.trim().toLowerCase())),
+            from: (account) => preparing!.wrap(from(account.trim().toLowerCase(), true)),
           }
         : undefined,
     );
@@ -194,7 +198,11 @@ export const decide = (
             }),
           );
         }
-        if (late()) throw new WriteUncertain();
+        if (
+          late() ||
+          (action === "approve" && view.tool.create && Date.now() >= deadline - SEND_RESERVE)
+        )
+          throw new WriteUncertain();
         const decision = await Effect.runPromise(
           decideApproval(deps, { id, at: input.arrivedAt, action }),
         );
@@ -230,7 +238,13 @@ export const decide = (
           if (!allowed) throw new WriteUncertain();
           const accounts = {
             own: allowed,
-            others: new Map(all.map((value) => [value.credential.email, value])),
+            others: new Map(
+              all
+                .filter((value) =>
+                  approval.uses.slice(1).some((use) => use.account === value.credential.id),
+                )
+                .map((value) => [value.credential.email, value]),
+            ),
           };
           const executed = await executeAccount(
             call,

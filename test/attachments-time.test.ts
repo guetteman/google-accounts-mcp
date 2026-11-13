@@ -1,4 +1,5 @@
 import { mime } from "./support/send";
+import { MAX_ATTACHMENTS } from "../src/mcp/attachments";
 import "./support/account-checks";
 import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vite-plus/test";
@@ -62,122 +63,6 @@ it("stops a copy at the send reserve before its bytes arrive at sixteen seconds"
   expect(google.uploads).toEqual([]);
   expect(google.sends).toEqual([]);
 });
-it("starts ten copies together in the page and run and stays below fifty subrequests at Approve", async () => {
-  const f = await attaching("send_reply", "ask");
-  await setTool(f, "get_attachment", "allow", f.northwind);
-  serveMessage();
-  const copies = Array.from({ length: 10 }, (_, i) => ({
-    ...copy,
-    message: `copy-${i}`,
-    attachment: "1",
-  }));
-  const started: number[] = [];
-  const bytesStarted: number[] = [];
-  for (const [i, item] of copies.entries()) {
-    const raw = {
-      ...message(item.message),
-      payload: {
-        ...tree("multipart/mixed", [
-          {
-            ...part("application/pdf", "", "1", `file-${i}.pdf`),
-            body: { size: 1, attachmentId: `bytes-${i}` },
-          },
-        ]),
-        headers: message().payload.headers,
-      },
-    };
-    google.messageAnswers.set(item.message, async () => {
-      started.push(Date.now());
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-      return Response.json(raw);
-    });
-    google.attachmentAnswers.set(`bytes-${i}`, async () => {
-      bytesStarted.push(Date.now());
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-      return Response.json({ data: "AA" });
-    });
-  }
-  const id = (await answer(await attachCall(f, copies, { message: SOURCE }, "send_reply")))
-    .approval as string;
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const first = digest(f, id);
-  await vi.waitFor(() => expect(started).toHaveLength(10));
-  expect(new Set(started).size).toBe(1);
-  vi.mocked(Date.now).mockReturnValue(Date.now() + 1_000);
-  await vi.advanceTimersByTimeAsync(1_000);
-  const shown = await first;
-  // Both accounts need a refresh in the measured POST. Its view and run share no credentials.
-  await env.DB.prepare("UPDATE accounts SET access_expires_at = 1").run();
-  started.length = 0;
-  let d1 = 0;
-  const { observeStatements } = await import("./support/db");
-  let statements = 0;
-  const observed = observeStatements(env.DB, () => {
-    statements++;
-  });
-  const batchDb = new Proxy(observed, {
-    get(target, key) {
-      if (key === "batch")
-        return (batch: D1PreparedStatement[]) => {
-          d1++;
-          return target.batch(batch);
-        };
-      const value: unknown = Reflect.get(target, key);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  // Standalone reads/writes are counted by the observer; batch statements are subtracted below.
-  let batchStatements = 0;
-  const measuredDb = new Proxy(batchDb, {
-    get(target, key) {
-      if (key === "batch")
-        return (batch: D1PreparedStatement[]) => {
-          batchStatements += batch.length;
-          return target.batch(batch);
-        };
-      const value: unknown = Reflect.get(target, key);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  const watched = watchedFiles();
-  const beforeRequests = requests.length;
-  const beforeRefresh = google.refreshTokens.length;
-  const work = post(
-    f,
-    id,
-    "approve",
-    { digest: shown },
-    testEnv({ DB: measuredDb, FILES_KV: watched.files }),
-  );
-  await vi.waitFor(() => expect(started).toHaveLength(10));
-  expect(new Set(started).size).toBe(1);
-  vi.mocked(Date.now).mockReturnValue(Date.now() + 1_000);
-  await vi.advanceTimersByTimeAsync(1_000);
-  await vi.waitFor(() => expect(started).toHaveLength(20));
-  expect(new Set(started.slice(10)).size).toBe(1);
-  vi.mocked(Date.now).mockReturnValue(Date.now() + 1_000);
-  await vi.advanceTimersByTimeAsync(1_000);
-  await vi.waitFor(() => expect(bytesStarted).toHaveLength(10));
-  expect(new Set(bytesStarted).size).toBe(1);
-  vi.mocked(Date.now).mockReturnValue(Date.now() + 1_000);
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect((await decided(await work)).state.kind).toBe("succeeded");
-  const count =
-    d1 + statements - batchStatements + requests.length - beforeRequests + watched.reads.length;
-  expect(google.refreshTokens.length - beforeRefresh).toBe(2);
-  expect(count).toBeLessThanOrEqual(50);
-  expect(google.sends).toHaveLength(1);
-  const mail = mime(google.uploads[0]!.message);
-  expect(mail.parts).toHaveLength(11);
-  expect(mail.parts.slice(1).map(fileOf)).toEqual(
-    Array.from({ length: 10 }, (_, i) => ({
-      filename: `file-${i}.pdf`,
-      type: "application/pdf",
-      bytes: new Uint8Array([0]),
-    })),
-  );
-});
-
 it("ends approval source reads at the reserve including time spent reading the reply", async () => {
   const f = await attaching("send_reply", "ask");
   await setTool(f, "get_attachment", "allow", f.northwind);
@@ -210,4 +95,252 @@ it("ends approval source reads at the reserve including time spent reading the r
   expect((await work).state).toMatchObject({ kind: "waiting", shown: false });
   expect(google.uploads).toEqual([]);
   expect(google.sends).toEqual([]);
+});
+
+it.each(["expired token", "first read 401"])(
+  "bounds six concurrent copies and refreshes once per account with %s",
+  async (refresh) => {
+    const f = await attaching("send_message", "ask");
+    await setTool(f, "get_attachment", "allow", f.northwind);
+    const copies = Array.from({ length: 6 }, (_, i) => ({
+      ...copy,
+      message: `copy-${i}`,
+      attachment: "1",
+    }));
+    let active = 0;
+    let peak = 0;
+    let completed = 0;
+    let unauthorized = refresh === "first read 401";
+    const delayed = async (response: Response) => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      active--;
+      completed++;
+      return response;
+    };
+    for (const [i, item] of copies.entries()) {
+      const raw = {
+        ...message(item.message),
+        payload: {
+          ...tree("multipart/mixed", [
+            {
+              ...part("application/pdf", "", "1", `file-${i}.pdf`),
+              body: { size: 1, attachmentId: `bytes-${i}` },
+            },
+          ]),
+          headers: message().payload.headers,
+        },
+      };
+      google.messageAnswers.set(item.message, () => {
+        if (unauthorized) {
+          unauthorized = false;
+          return delayed(new Response(null, { status: 401 }));
+        }
+        return delayed(Response.json(raw));
+      });
+      google.attachmentAnswers.set(`bytes-${i}`, () => delayed(Response.json({ data: "AA" })));
+    }
+    const id = (await answer(await attachCall(f, copies))).approval as string;
+    if (refresh === "expired token")
+      await env.DB.prepare("UPDATE accounts SET access_expires_at = 1 WHERE id = ?")
+        .bind(f.northwind.id)
+        .run();
+    const { page } = await import("./support/approvals");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const drive = async <A>(work: Promise<A>, expected: number) => {
+      let settled = false;
+      const result = work.finally(() => {
+        settled = true;
+      });
+      let elapsed = 0;
+      while (!settled && elapsed < 14_000) {
+        await vi.waitFor(() => expect(active > 0 || settled).toBe(true));
+        vi.mocked(Date.now).mockReturnValue(NOW + elapsed + 1_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        elapsed += 1_000;
+      }
+      expect(completed).toBe(expected);
+      expect(elapsed).toBeLessThan(10_000);
+      return result;
+    };
+    const before = google.refreshTokens.length;
+    expect((await drive(page(f, id), refresh === "expired token" ? 6 : 7)).state).toMatchObject({
+      kind: "waiting",
+      shown: true,
+    });
+    expect(google.refreshTokens.length - before).toBe(1);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(5);
+    expect(vi.getTimerCount()).toBe(0);
+    await setTool(f, "send_message", "allow");
+    // A different body runs directly rather than repeating the waiting approval.
+    if (refresh === "expired token")
+      await env.DB.prepare("UPDATE accounts SET access_expires_at = 1 WHERE id = ?")
+        .bind(f.northwind.id)
+        .run();
+    unauthorized = refresh === "first read 401";
+    completed = 0;
+    peak = 0;
+    vi.mocked(Date.now).mockReturnValue(NOW);
+    const again = google.refreshTokens.length;
+    await answer(
+      await drive(
+        attachCall(f, copies, { body: "Direct copies" }),
+        refresh === "expired token" ? 12 : 13,
+      ),
+    );
+    expect(google.refreshTokens.length - again).toBe(1);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(5);
+    expect(google.sends).toHaveLength(1);
+    expect(mime(google.uploads[0]!.message).parts).toHaveLength(7);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+it("keeps an approved reply at the attachment limit with refreshed source accounts within fifty total requests", async () => {
+  const f = await attaching("send_reply", "ask");
+  serveMessage();
+  const { seedAccount } = await import("./support/accounts");
+  const { observeStatements } = await import("./support/db");
+  const copies = [];
+  for (let i = 0; i < MAX_ATTACHMENTS; i++) {
+    const account = i === 0 ? f.northwind : await seedAccount({ email: `source-${i}@example.com` });
+    await setTool(f, "get_attachment", "allow", account);
+    const item = { account: account.email, message: `copy-${i}`, attachment: "1" };
+    copies.push(item);
+    const raw = {
+      ...message(item.message),
+      payload: {
+        ...tree("multipart/mixed", [
+          {
+            ...part("application/pdf", "", "1", `file-${i}.pdf`),
+            body: { size: 1, attachmentId: `bytes-${i}` },
+          },
+        ]),
+        headers: message().payload.headers,
+      },
+    };
+    google.messageAnswers.set(item.message, () => Response.json(raw));
+    google.attachmentAnswers.set(`bytes-${i}`, () => Response.json({ data: "AA" }));
+  }
+  const id = (await answer(await attachCall(f, copies, { message: SOURCE }, "send_reply")))
+    .approval as string;
+  const shown = await digest(f, id);
+  await env.DB.prepare("UPDATE accounts SET access_expires_at = 1").run();
+  let statements = 0;
+  let batches = 0;
+  let batchStatements = 0;
+  const observed = observeStatements(env.DB, () => {
+    statements++;
+  });
+  const db = new Proxy(observed, {
+    get(target, key) {
+      if (key === "batch")
+        return (batch: D1PreparedStatement[]) => {
+          batches++;
+          batchStatements += batch.length;
+          return target.batch(batch);
+        };
+      const value: unknown = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const watched = watchedFiles();
+  const beforeRequests = requests.length;
+  const beforeRefresh = google.refreshTokens.length;
+  const done = await decided(
+    await post(f, id, "approve", { digest: shown }, testEnv({ DB: db, FILES_KV: watched.files })),
+  );
+  expect(done.state.kind).toBe("succeeded");
+  const d1 = batches + statements - batchStatements;
+  const outside = requests.length - beforeRequests;
+  const kv = watched.reads.length;
+  expect(d1 + outside + kv).toBeLessThanOrEqual(50);
+  expect(google.refreshTokens.length - beforeRefresh).toBe(7);
+  expect({ d1, outside, kv, total: d1 + outside + kv }).toEqual({
+    d1: 17,
+    outside: 29,
+    kv: 0,
+    total: 46,
+  });
+  const mail = mime(google.uploads[0]!.message);
+  expect(mail.parts).toHaveLength(7);
+  expect(mail.parts.slice(1).map(fileOf)).toEqual(
+    Array.from({ length: 6 }, (_, i) => ({
+      filename: `file-${i}.pdf`,
+      type: "application/pdf",
+      bytes: new Uint8Array([0]),
+    })),
+  );
+});
+it("bounds uploaded byte reads by the direct call's reserve and releases its identity", async () => {
+  const f = await attaching();
+  const { upload, uploads, noWrites } = await import("./support/uploads");
+  const { onceRows } = await import("./support/draft");
+  const local = await upload(f);
+  const reading = deferred();
+  const files = new Proxy(env.FILES_KV, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key);
+      if (key === "get")
+        return async (...args: unknown[]) => {
+          reading.resolve();
+          await new Promise((resolve) => setTimeout(resolve, 40_000));
+          return Reflect.apply(value as (...args: unknown[]) => unknown, target, args);
+        };
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const work = attachCall(
+    f,
+    [{ upload: local.upload }],
+    {},
+    "send_message",
+    testEnv({ FILES_KV: files }),
+  );
+  await reading.promise;
+  vi.mocked(Date.now).mockReturnValue(NOW + 15_000);
+  await vi.advanceTimersByTimeAsync(15_000);
+  await expectError(
+    await work,
+    "upload_not_ready",
+    "The server cannot read the uploaded file yet. Call again with the same arguments in one minute.",
+  );
+  expect(await onceRows()).toEqual([]);
+  expect(await uploads()).toHaveLength(1);
+  expect(await env.DB.prepare("SELECT identity FROM uploads").first()).toEqual({ identity: null });
+  noWrites();
+  vi.mocked(Date.now).mockReturnValue(NOW + 40_000);
+  await vi.advanceTimersByTimeAsync(25_000);
+});
+it("keeps approval arguments when uploaded bytes arrive after its reserve", async () => {
+  const f = await attaching("send_message", "ask");
+  const { upload, noWrites } = await import("./support/uploads");
+  const { row } = await import("./support/approvals");
+  const local = await upload(f);
+  const id = (await answer(await attachCall(f, [{ upload: local.upload }]))).approval as string;
+  const shown = await digest(f, id);
+  const reading = deferred();
+  const files = new Proxy(env.FILES_KV, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key);
+      if (key === "get")
+        return async (...args: unknown[]) => {
+          reading.resolve();
+          await new Promise((resolve) => setTimeout(resolve, 21_000));
+          return Reflect.apply(value as (...args: unknown[]) => unknown, target, args);
+        };
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const work = post(f, id, "approve", { digest: shown }, testEnv({ FILES_KV: files }));
+  await reading.promise;
+  vi.mocked(Date.now).mockReturnValue(NOW + 21_000);
+  await vi.advanceTimersByTimeAsync(21_000);
+  expect((await work).status).toBe(503);
+  expect(await row(id)).toMatchObject({ state: "waiting", arguments: expect.any(String) });
+  noWrites();
 });

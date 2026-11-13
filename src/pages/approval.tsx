@@ -531,6 +531,13 @@ function DecidedView({
           <Value>{connection.name}</Value> asked to {tool.action} {tool.joiner}{" "}
           <Value>{account.name}</Value>.
         </p>
+        {(request.also ?? []).map((use, index) => (
+          <p key={index}>
+            It also asked to <strong className="font-medium text-foreground">{use.action}</strong>{" "}
+            {use.joiner} <Value>{use.email}</Value>
+            {use.workspace && ", a Workspace account"}.
+          </p>
+        ))}
         <Facts request={request}>The agent asked on {times.askedOn}.</Facts>
       </section>
     </>

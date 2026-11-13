@@ -62,8 +62,15 @@ it("shows the complete attachment plan and every account before approving exactl
   const sourceToken = await fixtureOpen(`${f.northwind.id}:access`, f.northwind.access_token!);
   const raw = serveAttachment();
   google.accountMessages.set(`Bearer ${sourceToken}:${MESSAGE}`, raw);
-  const id = (await answer(await attachCall(f, [copy, { upload: local.upload }], { duplicate: 2 })))
-    .approval as string;
+  const id = (
+    await answer(
+      await attachCall(
+        f,
+        [{ ...copy, account: ` ${NORTHWIND.toUpperCase()} ` }, { upload: local.upload }],
+        { duplicate: 2 },
+      ),
+    )
+  ).approval as string;
   const watched = watchedFiles();
   const shown = await page(f, id, testEnv({ FILES_KV: watched.files }));
   expect(shown.request.values).toEqual(values);
@@ -442,7 +449,7 @@ it("bounds copied message facts and labels an unnamed file without reading its b
   const id = (await answer(await attachCall(f, [copy]))).approval as string;
   const shown = await page(f, id);
   expect(shown.request.values.slice(4, -1)).toEqual([
-    { name: "Attachments", text: "1 files, 8 bytes in all", from: "gmail" },
+    { name: "Attachments", text: "1 file, 8 bytes in all", from: "gmail" },
     { name: "Attachment 1 (copied)", text: "(no name) (application/pdf, 8 bytes)", from: "gmail" },
     { name: "Attachment 1 is copied from", text: NORTHWIND, from: "agent" },
     { name: "Attachment 1 message from", text: "F".repeat(499) + "…", from: "gmail" },
@@ -450,4 +457,166 @@ it("bounds copied message facts and labels an unnamed file without reading its b
     { name: "Attachment 1 message date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
   ]);
   expect(google.attachmentRequests).toEqual([]);
+});
+
+it("names the source account with Workspace context in every decided page", async () => {
+  const f = await attaching("send_message", "ask");
+  await setTool(f, "get_attachment", "allow", f.northwind);
+  await env.DB.prepare("UPDATE accounts SET hd = 'northwind.example' WHERE id = ?")
+    .bind(f.northwind.id)
+    .run();
+  const id = (await answer(await attachCall(f, [copy]))).approval as string;
+  const waiting = await page(f, id);
+  const states: Array<(typeof waiting)["state"]> = [
+    { kind: "running" },
+    { kind: "succeeded" },
+    { kind: "failed", message: null },
+    { kind: "unknown" },
+    { kind: "rejected" },
+    { kind: "expired" },
+    { kind: "ended", by: "connection" },
+  ];
+  for (const state of states) {
+    const html = await renderPage({ ...waiting, state }).text();
+    expect(textOf(html)).toContain(
+      `It also asked to download an attachment from ${NORTHWIND} , a Workspace account.`,
+    );
+    expect(html).toMatch(/<bdi[^>]*>alex@northwind\.example<\/bdi>/);
+  }
+  expect(textOf(await renderPage({ ...waiting, unconfirmed: true }).text())).toContain(
+    `It also asked to download an attachment from ${NORTHWIND} , a Workspace account.`,
+  );
+});
+it("sanitizes a retained upload reference in the shared plan before showing its fields", async () => {
+  const f = await attaching("send_message", "ask");
+  const local = await upload(f);
+  const stored = (await uploads())[0]!;
+  const ref = JSON.parse(await fixtureOpen(`${stored.id}:upload`, stored.file!)) as Record<
+    string,
+    unknown
+  >;
+  const { fixtureSeal } = await import("./support/accounts");
+  const sealed = await fixtureSeal(
+    `${stored.id}:upload`,
+    JSON.stringify({ ...ref, filename: "ñ".repeat(190) + ".eml", type: "message/rfc822" }),
+  );
+  await env.DB.prepare("UPDATE uploads SET file = ? WHERE id = ?").bind(sealed, stored.id).run();
+  const id = (await answer(await attachCall(f, [{ upload: local.upload }]))).approval as string;
+  const shown = await page(f, id);
+  expect(shown.request.values.slice(4, -1)).toEqual([
+    { name: "Attachments", text: "1 file, 4 bytes in all", from: "agent" },
+    {
+      name: "Attachment 1 (sent to a link of this connection)",
+      text: `${"ñ".repeat(141)}.eml (application/octet-stream, 4 bytes)`,
+      from: "agent",
+    },
+  ]);
+  expect((await approve(f, id)).state.kind).toBe("succeeded");
+  expectMail({
+    files: [
+      {
+        filename: "ñ".repeat(141) + ".eml",
+        type: "application/octet-stream",
+        bytes: new Uint8Array([0, 255, 10, 65]),
+      },
+    ],
+  });
+});
+it("closes every source request timer after building a page", async () => {
+  const f = await attaching("send_message", "ask");
+  await setTool(f, "get_attachment", "allow", f.northwind);
+  const id = (await answer(await attachCall(f, [copy]))).approval as string;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: true });
+  expect(vi.getTimerCount()).toBe(0);
+});
+it.each(["allow", "ask"] as const)(
+  "checks the source before creating a copied draft under %s",
+  async (setting) => {
+    const f = await attaching("create_draft", setting);
+    await setTool(f, "get_attachment", "allow", f.northwind);
+    await setTool(f, "read_thread", "allow", f.northwind);
+    const pending =
+      setting === "ask"
+        ? ((await answer(await attachCall(f, [copy], {}, "create_draft"))).approval as string)
+        : null;
+    const shown = pending ? await digest(f, pending) : null;
+    const raw = serveAttachment({ ...filePart(), body: { size: 1, attachmentId: "held-file" } });
+    if (pending) {
+      // Keep the view unchanged and hold only the run's attachment bytes.
+      serveAttachment();
+      const original = google.messageAnswers.get(MESSAGE)!;
+      let reads = 0;
+      google.messageAnswers.set(MESSAGE, (request) =>
+        ++reads === 1 ? original(request) : Response.json(raw),
+      );
+    }
+    const reading = deferred();
+    const release = deferred();
+    google.attachmentAnswers.set("held-file", async () => {
+      reading.resolve();
+      await release.promise;
+      return Response.json({ data: "AA" });
+    });
+    const work = pending
+      ? post(f, pending, "approve", { digest: shown! })
+      : attachCall(f, [copy], {}, "create_draft");
+    await reading.promise;
+    await setTool(f, "get_attachment", "deny", f.northwind);
+    release.resolve();
+    if (pending) expect((await decided(await work)).state.kind).toBe("failed");
+    else await expectError(await work, "tool_not_allowed", /has not allowed get_attachment/);
+    noWrites();
+  },
+);
+
+it("keeps the sending account out of an approved run's undeclared sources", async () => {
+  const f = await attaching("send_message", "ask");
+  await setTool(f, "get_attachment", "allow", f.northwind);
+  const id = (await answer(await attachCall(f, [copy]))).approval as string;
+  const shown = await digest(f, id);
+  const { TOOLS } = await import("../src/mcp/tools");
+  const tool = TOOLS.find((tool) => tool.name === "send_message")!;
+  if (tool.kind !== "account" || !tool.create) throw new Error("Missing send tool");
+  vi.spyOn(tool, "create").mockImplementation((_send, _account, _args, _confirm, sources) =>
+    Effect.gen(function* () {
+      yield* sources.from(PERSONAL)(
+        (token, signal) =>
+          new Request(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${MESSAGE}`, {
+            signal,
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+      );
+      return { message: "message", thread: "thread" };
+    }),
+  );
+  expect((await decided(await post(f, id, "approve", { digest: shown }))).state.kind).toBe(
+    "failed",
+  );
+  expect(await get(f, id)).toMatchObject({
+    status: "failed",
+    error: { code: "account_not_available" },
+  });
+  noWrites();
+});
+it("keeps the sending account out of a page's undeclared sources", async () => {
+  const f = await attaching("send_message", "ask");
+  await setTool(f, "get_attachment", "allow", f.northwind);
+  const id = (await answer(await attachCall(f, [copy]))).approval as string;
+  const { TOOLS } = await import("../src/mcp/tools");
+  const tool = TOOLS.find((tool) => tool.name === "send_message")!;
+  if (tool.kind !== "account") throw new Error("Missing send tool");
+  vi.spyOn(tool.view, "values").mockImplementation((_args, _send, sources) =>
+    sources
+      .from(PERSONAL)(
+        (token, signal) =>
+          new Request(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${MESSAGE}`, {
+            signal,
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+      )
+      .pipe(Effect.as([])),
+  );
+  expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: false });
+  expect(accountTraffic).toEqual([]);
 });

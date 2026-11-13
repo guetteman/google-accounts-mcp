@@ -5,7 +5,6 @@ import {
   attachingTools,
   attachmentValues,
   attachedFiles,
-  withUploadAdvice,
   attachmentsDescription,
   attachmentsExpect,
   type Item,
@@ -104,6 +103,7 @@ export interface Uploaded {
   filename: string;
   type: string;
   size: number;
+  charset?: string | null;
   bytes: Effect.Effect<Uint8Array<ArrayBuffer>, ToolFailure>;
 }
 export interface Sources {
@@ -379,10 +379,7 @@ const unknownSend = (
   args: { duplicate?: number; attachments?: readonly Item[] },
 ) => {
   const next = (args.duplicate ?? 1) + 1;
-  return withUploadAdvice(
-    `The server does not know whether this mail went out from ${email}. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until ${isoSeconds(until)}, repeating this call does not send it again.${next <= 100 ? ` Only if the owner says that it is in neither place, call again with duplicate: ${next}.` : ""}`,
-    uploadsOf(args.attachments),
-  );
+  return `The server does not know whether this mail went out from ${email}. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until ${isoSeconds(until)}, repeating this call does not send it again.${next <= 100 ? ` Only if the owner says that it is in neither place, call again with duplicate: ${next}${uploadsOf(args.attachments).length ? " and a new upload of each file" : ""}.` : ""}`;
 };
 const sendRefused = (status: number) =>
   status === 400 ? notSendable(null) : new ToolFailure({ code: "google_unavailable" });
@@ -688,10 +685,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     defaults: { to: [], cc: [], bcc: [], subject: "", reply_all: false, attachments: [] },
     unknown: (email, until, args) => {
       const next = (args.duplicate ?? 1) + 1;
-      return withUploadAdvice(
-        `The server does not know whether the draft was created in ${email}. Ask the owner to look in Drafts. Until ${isoSeconds(until)}, repeating this call does not create it again.${next <= 100 ? ` If the owner says that the draft is missing, call again with duplicate: ${next}.` : ""}`,
-        uploadsOf(args.attachments),
-      );
+      return `The server does not know whether the draft was created in ${email}. Ask the owner to look in Drafts. Until ${isoSeconds(until)}, repeating this call does not create it again.${next <= 100 ? ` If the owner says that the draft is missing, call again with duplicate: ${next}${uploadsOf(args.attachments).length ? " and a new upload of each file" : ""}.` : ""}`;
     },
     expects: draftExpects,
     view: {
@@ -719,7 +713,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
           );
         }),
     },
-    create: (send, account, args, _confirm, sources) =>
+    create: (send, account, args, confirm, sources) =>
       Effect.gen(function* () {
         const boxes = draftRecipients(args);
         const plan = args.reply_to
@@ -737,6 +731,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
           sources,
           plan?.thread,
         );
+        if (alsoOf(args.attachments).length) yield* confirm.check;
         return yield* creating(stage);
       }),
   }),

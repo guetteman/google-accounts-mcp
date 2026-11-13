@@ -25,7 +25,7 @@ import worker from "../src/index";
 
 const missingText = (id: string) =>
   `No upload "${id}" is available to this connection. An upload works once, in the connection that asked for its link, before it expires. Call create_upload_link and send the file again.`;
-it.each(["missing", "empty-link", "expired", "other", "used"])(
+it.each(["missing", "empty-link", "expired", "used"])(
   "refuses an upload that is %s identically and records a refusal",
   async (reason) => {
     const f = await attaching("create_draft");
@@ -37,8 +37,6 @@ it.each(["missing", "empty-link", "expired", "other", "used"])(
       id = (await uploads()).find((row) => made.url.includes(row.link))!.id;
     }
     if (reason === "expired") await env.DB.prepare("UPDATE uploads SET expires_at = 1").run();
-    if (reason === "other")
-      await env.DB.prepare("UPDATE uploads SET connection_id = ?").bind(crypto.randomUUID()).run();
     if (reason === "used") await answer(await attachCall(f, [{ upload: id }], {}, "create_draft"));
     await expectError(
       await attachCall(f, [{ upload: id }], { body: "Another call" }, "create_draft"),
@@ -341,11 +339,11 @@ it("refuses upload sizes before creating an approval or reading KV", async () =>
   expect(await uploads()).toHaveLength(2);
 });
 
-it("releases the call without using its file after an upload reference read fails", async () => {
+it("releases the call without using its file after reserving uploads fails", async () => {
   const f = await attaching();
   const local = await upload(f);
   const { statementFailingDb } = await import("./support/db");
-  const db = statementFailingDb(/^SELECT id,file FROM uploads/);
+  const db = statementFailingDb(/^UPDATE uploads SET identity = \?6/);
   await expectError(
     await attachCall(f, [{ upload: local.upload }], {}, "send_message", testEnv({ DB: db })),
     "server_unavailable",
@@ -375,4 +373,148 @@ it("does not move an upload that expires while the approval arguments are being 
   );
   expect(await rows()).toEqual([]);
   noWrites();
+});
+
+it.each(["held response", "simultaneous calls"])(
+  "allows one message to use an upload with %s",
+  async (overlap) => {
+    const f = await attaching();
+    const file = await upload(f);
+    if (overlap === "held response") {
+      const held = hold(google.uploadAnswers, created());
+      const first = attachCall(f, [{ upload: file.upload }]);
+      await held.entered;
+      await expectError(
+        await attachCall(f, [{ upload: file.upload }], { body: "Changed" }),
+        "upload_not_available",
+        missingText(file.upload),
+      );
+      held.release();
+      await answer(await first);
+    } else {
+      const { rpcResult } = await import("./support/oauth");
+      const results = await Promise.all([
+        attachCall(f, [{ upload: file.upload }]),
+        attachCall(f, [{ upload: file.upload }], { body: "Changed" }),
+      ]).then((responses) => Promise.all(responses.map(rpcResult)));
+      expect(results.filter((result) => result.isError)).toHaveLength(1);
+      expect(
+        JSON.parse(
+          (results.find((result) => result.isError)!.content as { text: string }[])[0]!.text,
+        ),
+      ).toEqual({ code: "upload_not_available", message: missingText(file.upload) });
+    }
+    expect(google.uploads).toHaveLength(1);
+    expect(google.sends).toHaveLength(1);
+    expect(await uploads()).toEqual([]);
+  },
+);
+it("keeps an upload out of a draft approval while a direct send holds it", async () => {
+  const f = await attaching();
+  await setTool(f, "create_draft", "ask");
+  const file = await upload(f);
+  const held = hold(google.uploadAnswers, created());
+  const first = attachCall(f, [{ upload: file.upload }]);
+  await held.entered;
+  await expectError(
+    await attachCall(f, [{ upload: file.upload }], {}, "create_draft"),
+    "upload_not_available",
+    missingText(file.upload),
+  );
+  expect(await rows()).toEqual([]);
+  held.release();
+  await answer(await first);
+  expect(google.sends).toHaveLength(1);
+});
+it.each(["allow", "ask"] as const)(
+  "names the first missing upload and reserves none under %s",
+  async (setting) => {
+    const f = await attaching("send_message", setting);
+    const file = await upload(f);
+    const missing = crypto.randomUUID();
+    await expectError(
+      await attachCall(f, [{ upload: file.upload }, { upload: missing }]),
+      "upload_not_available",
+      missingText(missing),
+    );
+    expect(await rows()).toEqual([]);
+    expect(await uploads()).toHaveLength(1);
+    await setTool(f, "send_message", "allow");
+    await answer(await attachCall(f, [{ upload: file.upload }], { body: "Corrected" }));
+    expect(google.sends).toHaveLength(1);
+  },
+);
+it("retains a usable upload at the approval limit and attaches it after one approval ends", async () => {
+  const f = await attaching("send_message", "ask");
+  const file = await upload(f);
+  const waiting: string[] = [];
+  for (let i = 0; i < 20; i++)
+    waiting.push(
+      (await answer(await attachCall(f, [], { body: `Waiting ${i}` }))).approval as string,
+    );
+  await expectError(
+    await attachCall(f, [{ upload: file.upload }]),
+    "approval_limit_reached",
+    /20 calls waiting/,
+  );
+  expect(await uploads()).toHaveLength(1);
+  expect(await rows()).toHaveLength(20);
+  await post(f, waiting[0]!, "reject");
+  const pending = await answer(await attachCall(f, [{ upload: file.upload }]));
+  expect((await approve(f, pending.approval as string)).state.kind).toBe("succeeded");
+  expect(google.sends).toHaveLength(1);
+});
+it("keeps the upload when a setting changes before the approval insert", async () => {
+  const f = await attaching("send_message", "ask");
+  const file = await upload(f);
+  let changed = false;
+  const db = observeStatements(env.DB, async (sql) => {
+    if (!changed && sql.startsWith("INSERT INTO approvals")) {
+      changed = true;
+      await setTool(f, "send_message", "deny");
+    }
+  });
+  await expectError(
+    await attachCall(f, [{ upload: file.upload }], {}, "send_message", testEnv({ DB: db })),
+    "account_not_available",
+    /No account/,
+  );
+  expect(await uploads()).toHaveLength(1);
+  expect(await rows()).toEqual([]);
+});
+it("keeps a failed release reserved for the same identity only", async () => {
+  const f = await attaching();
+  const file = await upload(f);
+  google.uploadAnswers.push(() => new Response(null, { status: 500 }));
+  const { statementFailingDb } = await import("./support/db");
+  const db = statementFailingDb(/^UPDATE uploads SET identity = NULL/);
+  await expectError(
+    await attachCall(f, [{ upload: file.upload }], {}, "send_message", testEnv({ DB: db })),
+    "google_unavailable",
+    /Nothing was sent/,
+  );
+  expect(await onceRows()).toEqual([]);
+  await expectError(
+    await attachCall(f, [{ upload: file.upload }], { body: "Changed" }),
+    "upload_not_available",
+    missingText(file.upload),
+  );
+  await answer(await attachCall(f, [{ upload: file.upload }]));
+  expect(google.sends).toHaveLength(1);
+});
+it("keeps a finished upload reserved if deleting its row fails", async () => {
+  const f = await attaching();
+  const file = await upload(f);
+  const { statementFailingDb } = await import("./support/db");
+  const db = statementFailingDb(/^DELETE FROM uploads/);
+  await answer(
+    await attachCall(f, [{ upload: file.upload }], {}, "send_message", testEnv({ DB: db })),
+  );
+  expect(await uploads()).toHaveLength(1);
+  await expectError(
+    await attachCall(f, [{ upload: file.upload }], { body: "Changed" }),
+    "upload_not_available",
+    missingText(file.upload),
+  );
+  expect(google.sends).toHaveLength(1);
 });

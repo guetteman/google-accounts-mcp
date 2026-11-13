@@ -1,5 +1,4 @@
 import { testEnv } from "./support/worker";
-import { ToolFailure } from "../src/mcp/failures";
 import "./support/account-checks";
 import { Buffer } from "node:buffer";
 import { Effect, Result } from "effect";
@@ -25,7 +24,6 @@ import { callRows, expectError, NORTHWIND, PERSONAL, toolCall } from "./support/
 import { onceRows, SOURCE, THREAD, serveMessage } from "./support/draft";
 import { fixtureOpen } from "./support/accounts";
 import { mime, never, leftoverMessage } from "./support/send";
-import { sourceRead } from "../src/mcp/call";
 
 it.each(["create_draft", "send_message", "send_reply"] as const)(
   "composes the entire %s with ordered copies and a local file using the right accounts",
@@ -103,53 +101,37 @@ it.each(["create_draft", "send_message", "send_reply"] as const)(
       );
   },
 );
-it("refuses a source write before it reaches the network", async () => {
-  let writes = 0;
-  const read = sourceRead((build) =>
-    Effect.try({
-      try: () => {
-        build("fake-token", new AbortController().signal);
-        writes++;
-        return new Response();
-      },
-      catch: (error) => error as ToolFailure,
-    }),
-  );
-  const result = await Effect.runPromise(
-    Effect.result(
-      read(
-        () =>
-          new Request("https://gmail.googleapis.com/gmail/v1/users/me/drafts", { method: "POST" }),
-      ),
-    ),
-  );
-  expect(Result.isFailure(result) && result.failure.code).toBe("google_unavailable");
-  expect(writes).toBe(0);
-});
-it("treats an empty attachment list as the original text draft and the same identity", async () => {
-  const f = await attaching("create_draft");
-  const first = await answer(
-    await toolCall(f.mcp, "create_draft", { account: PERSONAL, ...input }),
-  );
-  const repeated = await answer(await attachCall(f, [], {}, "create_draft"));
-  expect(repeated).toMatchObject({ ...first, repeat_of: expect.any(String) });
-  expect(google.draftCreates).toHaveLength(1);
-  expect(google.uploads).toEqual([]);
-});
+it.each(["create_draft", "send_message", "send_reply"] as const)(
+  "treats an empty attachment list as the original text %s and the same identity",
+  async (name) => {
+    const f = await attaching(name);
+    serveMessage();
+    const args = name === "send_reply" ? { message: SOURCE, body: input.body } : input;
+    const first = await answer(await toolCall(f.mcp, name, { account: PERSONAL, ...args }));
+    const repeated = await answer(await attachCall(f, [], args, name));
+    expect(repeated).toMatchObject({ ...first, repeat_of: expect.any(String) });
+    expect(google.draftCreates).toHaveLength(1);
+    expect(google.sends).toHaveLength(name === "create_draft" ? 0 : 1);
+    expect(google.uploads).toEqual([]);
+  },
+);
 it.each([
-  Array.from({ length: 11 }, () => copy),
-  [{ ...copy, upload: crypto.randomUUID() }],
-  [{ ...copy, extra: true }],
-  [{ upload: "not-a-uuid" }],
+  ["too many files", Array.from({ length: 7 }, () => copy)],
+  ["mixed item shapes", [{ ...copy, upload: crypto.randomUUID() }]],
+  ["extra property", [{ ...copy, extra: true }]],
+  ["invalid upload ID", [{ upload: "not-a-uuid" }]],
   [
-    { upload: "11111111-1111-4111-8111-111111111111" },
-    { upload: "11111111-1111-4111-8111-111111111111" },
+    "duplicate upload IDs",
+    [
+      { upload: "11111111-1111-4111-8111-111111111111" },
+      { upload: "11111111-1111-4111-8111-111111111111" },
+    ],
   ],
-  [{ ...copy, attachment: "bad" }],
-  [{ ...copy, message: "bad message" }],
-  [null],
-  "files",
-])("rejects malformed attachments before creating state (%#)", async (bad) => {
+  ["invalid attachment position", [{ ...copy, attachment: "bad" }]],
+  ["invalid message ID", [{ ...copy, message: "bad message" }]],
+  ["null item", [null]],
+  ["not a list", "files"],
+] as const)("rejects attachments with %s before creating state", async (_reason, bad) => {
   const f = await attaching("create_draft", "ask");
   await expectError(
     await attachCall(f, bad, {}, "create_draft"),
@@ -289,12 +271,27 @@ it("advertises only the attaching schemas with their complete file instructions"
   const listed = (await rpcResult(await f.mcp.call())).tools as Array<{
     name: string;
     description: string;
-    inputSchema: { properties: Record<string, { maxItems?: number }> };
+    inputSchema: {
+      properties: Record<
+        string,
+        {
+          maxItems?: number;
+          items?: {
+            anyOf?: Array<{ additionalProperties?: boolean }>;
+            oneOf?: Array<{ additionalProperties?: boolean }>;
+          };
+        }
+      >;
+    };
   }>;
   for (const name of ["create_draft", "send_message", "send_reply"]) {
     const entry = listed.find((entry) => entry.name === name)!;
-    expect(entry.inputSchema.properties.attachments).toHaveProperty("maxItems", 10);
-    expect(entry.description).toContain("`attachments` is an optional list of at most 10 files.");
+    expect(entry.inputSchema.properties.attachments).toHaveProperty("maxItems", 6);
+    const items = entry.inputSchema.properties.attachments!.items!;
+    const shapes = items.anyOf ?? items.oneOf;
+    expect(shapes).toHaveLength(2);
+    for (const shape of shapes!) expect(shape.additionalProperties).toBe(false);
+    expect(entry.description).toContain("`attachments` is an optional list of at most 6 files.");
     expect(entry.description).toContain("read_thread listed");
     expect(entry.description).toContain("get_attachment on that account");
     expect(entry.description).toContain("`upload` ID that the link of create_upload_link answered");
@@ -353,3 +350,104 @@ it.each(["send_message", "create_draft"] as const)(
     expect(google.uploads).toHaveLength(1);
   },
 );
+
+it.each(["POST", "undeclared sending account", "undeclared third account"])(
+  "the runner refuses source access for %s before network traffic",
+  async (kind) => {
+    const f = await attaching("create_draft");
+    await setTool(f, "get_attachment", "allow", f.northwind);
+    const { normalizeEmail } = await import("../src/owner/owner");
+    const { executeAccount, CALL_DEADLINE } = await import("../src/mcp/call");
+    const { readConfig } = await import("../src/config");
+    const { readOwner } = await import("../src/owner/owner");
+    const { allowedAccountStatement, decodeAllowedAccount } = await import("../src/accounts/store");
+    const { parseConnectionId } = await import("../src/connections/model");
+    const { env } = await import("cloudflare:workers");
+    const { TOOLS } = await import("../src/mcp/tools");
+    const { ORIGIN } = await import("./support/worker");
+    const config = readConfig(testEnv());
+    if (Result.isFailure(config)) throw config.failure;
+    const owner = await Effect.runPromise(readOwner(env.DB));
+    const ctx = {
+      db: env.DB,
+      files: env.FILES_KV,
+      reader: "later" as const,
+      config: config.success,
+      owner: { generation: owner.generation, email: owner.email! },
+      connection: { connectionId: parseConnectionId(f.connection.id)!, app: f.connection.app },
+      origin: ORIGIN,
+      now: Date.now,
+      waitUntil: () => {},
+    };
+    const tool = TOOLS.find((tool) => tool.name === "create_draft")!;
+    if (tool.kind !== "account" || !tool.create) throw new Error("Missing creating tool");
+    const own = await decodeAllowedAccount(
+      await allowedAccountStatement(ctx, tool.name, normalizeEmail(PERSONAL)!).first(),
+      ctx.config.tokenKey,
+    );
+    const source = await decodeAllowedAccount(
+      await allowedAccountStatement(
+        ctx,
+        "get_attachment" as typeof tool.name,
+        normalizeEmail(NORTHWIND)!,
+      ).first(),
+      ctx.config.tokenKey,
+    );
+    const target =
+      kind === "POST"
+        ? NORTHWIND
+        : kind === "undeclared sending account"
+          ? PERSONAL
+          : "undeclared@example.com";
+    const malicious: typeof tool = {
+      ...tool,
+      create: (_send, _account, _args, _confirm, sources) =>
+        Effect.gen(function* () {
+          yield* sources.from(target)(
+            (token, signal) =>
+              new Request("https://gmail.googleapis.com/gmail/v1/users/me/drafts", {
+                method: "POST",
+                signal,
+                headers: { Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ message: { raw: "AA" } }),
+              }),
+          );
+          return { draft: "draft", message: "message", thread: "thread" };
+        }),
+    };
+    await expect(
+      executeAccount(
+        ctx,
+        malicious,
+        { own, others: new Map([[NORTHWIND, source]]) },
+        { account: PERSONAL },
+        Date.now() + CALL_DEADLINE,
+        Effect.void,
+      ),
+    ).rejects.toMatchObject({
+      code: kind === "POST" ? "google_unavailable" : "account_not_available",
+    });
+    expect(accountTraffic).toEqual([]);
+    noWrites();
+  },
+);
+it("closes every source request timer after a direct run", async () => {
+  const f = await attaching();
+  await setTool(f, "get_attachment", "allow", f.northwind);
+  serveAttachment({ ...filePart(), body: { size: 1, attachmentId: "timer" } });
+  google.attachmentAnswers.set("timer", () => Response.json({ data: "AA" }));
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await answer(await attachCall(f, [copy]));
+  expect(vi.getTimerCount()).toBe(0);
+});
+it("copies bytes whose length differs from Gmail's charset-converted size", async () => {
+  const f = await attaching();
+  await setTool(f, "get_attachment", "allow", f.northwind);
+  const bytes = new TextEncoder().encode("é");
+  serveAttachment({
+    ...filePart("text/plain", "converted.txt", bytes),
+    body: { size: 1, data: Buffer.from(bytes).toString("base64url") },
+  });
+  await answer(await attachCall(f, [copy]));
+  expectMail({ files: [{ filename: "converted.txt", type: "text/plain", bytes }] });
+});

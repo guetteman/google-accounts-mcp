@@ -87,7 +87,15 @@ it.each([undefined, "text/plain; charset=utf-8", "bad media", "Application/PDF"]
     });
     expect(made.url).not.toContain(out.upload);
     await answer(await attachCall(f, [{ upload: out.upload }], {}, "create_draft"));
-    expectMail({ files: [{ filename: "informe año 2026 (v2).pdf", type: media, bytes }] });
+    expectMail({
+      files: [
+        {
+          filename: "informe año 2026 (v2).pdf",
+          type: type?.startsWith("text/plain") ? `${media}; charset=utf-8` : media,
+          bytes,
+        },
+      ],
+    });
   },
 );
 it("keeps the file key and metadata sealed and expires KV after the latest approval", async () => {
@@ -248,5 +256,64 @@ it.each(["locked", "setup"])("keeps the deploy gate for uploads when %s", async 
   expect(await response.json()).toEqual({
     code: "server_unavailable",
     message: expect.any(String),
+  });
+});
+
+it("refuses a streamed body longer than its declared length and leaves its link usable", async () => {
+  const f = await attaching();
+  const made = await link(f);
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2]));
+      controller.close();
+    },
+  });
+  const response = await callWorker(
+    new Request(made.url + "file", { method: "PUT", headers: { "Content-Length": "1" }, body }),
+  );
+  expect(response.status).toBe(413);
+  expect((await put(made.url + "retry", "x")).status).toBe(201);
+});
+it("stores and returns the outgoing fields and preserves a valid charset", async () => {
+  const f = await attaching("create_draft");
+  const filename = "ñ".repeat(190) + ".eml";
+  const stored = await upload(
+    f,
+    new Uint8Array([255]),
+    filename,
+    "message/rfc822; charset=iso-8859-1",
+  );
+  expect(stored).toMatchObject({
+    filename: "ñ".repeat(141) + ".eml",
+    type: "application/octet-stream",
+    size: 1,
+  });
+  const ref = JSON.parse(
+    await fixtureOpen(`${stored.upload}:upload`, (await uploads())[0]!.file!),
+  ) as { filename: string; type: string; charset: string };
+  expect(ref).toMatchObject({
+    filename: stored.filename,
+    type: stored.type,
+    charset: "iso-8859-1",
+  });
+  await answer(await attachCall(f, [{ upload: stored.upload }], {}, "create_draft"));
+  expectMail({
+    files: [
+      {
+        filename: stored.filename,
+        type: `${stored.type}; charset=iso-8859-1`,
+        bytes: new Uint8Array([255]),
+      },
+    ],
+  });
+});
+
+it("returns the shortened outgoing name for two hundred three-byte characters", async () => {
+  const f = await attaching("create_draft");
+  const stored = await upload(f, new Uint8Array([1]), "界".repeat(196) + ".pdf");
+  expect(stored.filename).toBe("界".repeat(94) + ".pdf");
+  await answer(await attachCall(f, [{ upload: stored.upload }], {}, "create_draft"));
+  expectMail({
+    files: [{ filename: stored.filename, type: stored.type, bytes: new Uint8Array([1]) }],
   });
 });

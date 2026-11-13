@@ -199,14 +199,15 @@ const attachmentPreview: ApprovalPageProps = {
 };
 const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
   "approval-waiting-attachments": attachmentPreview,
+  "approval-succeeded-attachments": { ...attachmentPreview, state: { kind: "succeeded" } },
   "approval-waiting-attachments-many": {
     ...attachmentPreview,
     request: {
       ...attachmentPreview.request,
       values: [
         ...attachmentPreview.request.values.slice(0, 2),
-        { name: "Attachments", text: "10 files, 1,250,000 bytes in all", from: "agent" },
-        ...Array.from({ length: 10 }, (_, i) => [
+        { name: "Attachments", text: "6 files, 750,000 bytes in all", from: "agent" },
+        ...Array.from({ length: 6 }, (_, i) => [
           {
             name: `Attachment ${i + 1} (copied)`,
             text: `${"Northwind project budget and invoice details for the international workshop ".repeat(2)}${i + 1}.pdf (application/pdf, 125,000 bytes)`,

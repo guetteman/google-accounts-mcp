@@ -8,14 +8,15 @@ import type { Owner } from "../owner/owner";
 import type { ApprovalId } from "../approvals/model";
 import { APPROVAL_LIFETIME } from "../approvals/model";
 import { open, seal, type Sealed } from "../seal";
+import type { Identity } from "../once/identity";
 
 export const LINK_LIFETIME = 15 * 60_000;
 export type UploadId = string & { readonly __uploadId: unique symbol };
-export const parseUploadId = (value: unknown): UploadId | null =>
+export const isUuid = (value: unknown): value is string =>
   typeof value === "string" &&
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
-    ? (value as UploadId)
-    : null;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+export const parseUploadId = (value: unknown): UploadId | null =>
+  isUuid(value) ? (value as UploadId) : null;
 export const UploadRef = Schema.Struct({
   ...FileRef.fields,
   size: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -85,56 +86,114 @@ export const storeFile = (ctx: LinkContext, link: string, file: FileData, now: n
     },
     catch: () => new Unavailable(),
   });
-export const readUploads = (ctx: CallContext, ids: readonly UploadId[]) =>
-  Effect.tryPromise({
-    try: async (): Promise<ReadonlyMap<string, UploadRef> | null> => {
-      if (!ids.length) return new Map();
-      const rows = await ctx.db
-        .prepare(`SELECT id,file FROM uploads WHERE id IN (SELECT value FROM json_each(?1))
-      AND connection_id = ?2 AND generation = ?3 AND expires_at > ?4 AND file IS NOT NULL AND ${live("?4", "?5")}`)
-        .bind(
-          JSON.stringify(ids),
-          ctx.connection.connectionId,
-          ctx.owner.generation,
-          ctx.now(),
-          ctx.owner.email,
-        )
-        .all<{ id: string; file: string }>();
-      if (rows.results.length !== ids.length) return null;
-      const refs = await Promise.all(
-        rows.results.map(async (row) => {
-          const opened = await open(ctx.config.tokenKey, `${row.id}:upload`, row.file as Sealed);
-          if (!opened.ok) throw new Unavailable();
-          return [row.id, Schema.decodeUnknownSync(UploadRef)(JSON.parse(opened.value))] as const;
-        }),
-      );
-      return new Map(refs);
-    },
-    catch: () => new Unavailable(),
-  });
-export const dropUploads = (ctx: CallContext, ids: readonly UploadId[]) =>
-  Effect.tryPromise({
-    try: () =>
-      ctx.db
-        .prepare(
-          `DELETE FROM uploads WHERE id IN (SELECT value FROM json_each(?1)) AND connection_id = ?2 AND generation = ?3`,
-        )
-        .bind(JSON.stringify(ids), ctx.connection.connectionId, ctx.owner.generation)
-        .run(),
-    catch: () => new Unavailable(),
-  }).pipe(Effect.asVoid);
-/** All placeholders come from the approval store, never from request data. */
-export const usableUploadsWhere = (p: {
-  ids: string;
-  count: string;
+type UploadPlaceholders = {
   connection: string;
   generation: string;
   now: string;
   email: string;
-}) =>
-  `(SELECT count(*) FROM uploads WHERE id IN (SELECT value FROM json_each(${p.ids})) AND connection_id = ${p.connection}
-    AND generation = ${p.generation} AND expires_at > ${p.now} AND file IS NOT NULL AND ${live(p.now, p.email)}) = ${p.count}`;
-export const moveUploadsStatement = (
+  identity: string;
+};
+const usableUpload = (p: UploadPlaceholders) =>
+  `connection_id = ${p.connection} AND generation = ${p.generation}
+   AND expires_at > ${p.now} AND file IS NOT NULL AND ${live(p.now, p.email)}
+   AND (identity IS NULL OR identity = ${p.identity})`;
+const placeholders = { connection: "?2", generation: "?3", now: "?4", email: "?5", identity: "?6" };
+const uploadValues = (ctx: CallContext, ids: readonly UploadId[], identity: Identity | null) =>
+  [
+    JSON.stringify(ids),
+    ctx.connection.connectionId,
+    ctx.owner.generation,
+    ctx.now(),
+    ctx.owner.email,
+    identity,
+  ] as const;
+const openRefs = async (ctx: CallContext, rows: readonly { id: string; file: string }[]) =>
+  new Map(
+    await Promise.all(
+      rows.map(async (row) => {
+        const opened = await open(ctx.config.tokenKey, `${row.id}:upload`, row.file as Sealed);
+        if (!opened.ok) throw new Unavailable();
+        return [row.id, Schema.decodeUnknownSync(UploadRef)(JSON.parse(opened.value))] as const;
+      }),
+    ),
+  );
+/** Partial references are only for sealing an approval; its batch decides usability. */
+export const readApprovalUploads = (
+  ctx: CallContext,
+  ids: readonly UploadId[],
+  identity: Identity | null,
+) =>
+  Effect.tryPromise({
+    try: async () => {
+      if (!ids.length) return new Map<string, UploadRef>();
+      const rows = await ctx.db
+        .prepare(`SELECT id,file FROM uploads
+        WHERE id IN (SELECT value FROM json_each(?1)) AND ${usableUpload(placeholders)}`)
+        .bind(...uploadValues(ctx, ids, identity))
+        .all<{ id: string; file: string }>();
+      return openRefs(ctx, rows.results);
+    },
+    catch: () => new Unavailable(),
+  });
+export const missingUploadStatement = (
+  ctx: CallContext,
+  ids: readonly UploadId[],
+  identity: Identity | null,
+) =>
+  ctx.db
+    .prepare(`SELECT wanted.value AS id FROM json_each(?1) wanted
+    WHERE NOT EXISTS (SELECT 1 FROM uploads WHERE id = wanted.value AND ${usableUpload(placeholders)})
+    ORDER BY wanted.key LIMIT 1`)
+    .bind(...uploadValues(ctx, ids, identity));
+/** A single UPDATE reserves the complete set, or changes none of it. */
+export const holdUploads = (ctx: CallContext, ids: readonly UploadId[], identity: Identity) =>
+  Effect.tryPromise({
+    try: async () => {
+      if (!ids.length) return { refs: new Map<string, UploadRef>(), missing: null };
+      const rows = await ctx.db.batch([
+        ctx.db
+          .prepare(`UPDATE uploads SET identity = ?6 WHERE id IN (SELECT value FROM json_each(?1))
+          AND ${usableUploadsWhere({ ...placeholders, ids: "?1", count: "json_array_length(?1)" })} RETURNING id,file`)
+          .bind(...uploadValues(ctx, ids, identity)),
+        missingUploadStatement(ctx, ids, identity),
+      ]);
+      return {
+        refs: await openRefs(ctx, rows[0]!.results as { id: string; file: string }[]),
+        missing: (rows[1]!.results[0] as { id: UploadId } | undefined)?.id ?? null,
+      };
+    },
+    catch: () => new Unavailable(),
+  });
+export const releaseUploads = (ctx: CallContext, ids: readonly UploadId[], identity: Identity) =>
+  Effect.tryPromise({
+    try: () =>
+      ctx.db
+        .prepare(`UPDATE uploads SET identity = NULL WHERE id IN (SELECT value FROM json_each(?1))
+      AND connection_id = ?2 AND generation = ?3 AND identity = ?4`)
+        .bind(JSON.stringify(ids), ctx.connection.connectionId, ctx.owner.generation, identity)
+        .run(),
+    catch: () => new Unavailable(),
+  }).pipe(Effect.asVoid);
+export const dropUploads = (ctx: CallContext, ids: readonly UploadId[], identity: Identity) =>
+  Effect.tryPromise({
+    try: () =>
+      ctx.db
+        .prepare(
+          `DELETE FROM uploads WHERE id IN (SELECT value FROM json_each(?1)) AND connection_id = ?2 AND generation = ?3 AND identity = ?4`,
+        )
+        .bind(JSON.stringify(ids), ctx.connection.connectionId, ctx.owner.generation, identity)
+        .run(),
+    catch: () => new Unavailable(),
+  }).pipe(Effect.asVoid);
+/** All placeholders come from stores, never from request data. */
+export const usableUploadsWhere = (
+  p: UploadPlaceholders & {
+    ids: string;
+    count: string;
+  },
+) =>
+  `(SELECT count(*) FROM uploads WHERE id IN (SELECT value FROM json_each(${p.ids})) AND ${usableUpload(p)}) = ${p.count}`;
+export const deleteApprovalUploadsStatement = (
   ctx: CallContext,
   ids: readonly UploadId[],
   approval: ApprovalId,

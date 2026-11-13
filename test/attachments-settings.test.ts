@@ -111,7 +111,7 @@ it.each([
   },
 );
 it.each(["deny", "remove"])(
-  "keeps each used pair once and ends the approval on source %s",
+  "records each source setting once and ends the approval on source %s",
   async (change) => {
     const f = await attaching("send_message", "ask");
     await setTool(f, "get_attachment", "allow", f.northwind);
@@ -257,5 +257,60 @@ it.each(["message", "attachment", "google", "refresh"])(
         .run();
     await answer(await attachCall(f, [copy]));
     expect(google.sends).toHaveLength(1);
+  },
+);
+
+it.each(["sending", "source"])(
+  "checks the %s account's missing access when only the source asks",
+  async (which) => {
+    const f = await attaching();
+    await setTool(f, "get_attachment", "ask", f.northwind);
+    const account = which === "sending" ? f.personal : f.northwind;
+    await env.DB.prepare("UPDATE accounts SET scopes = '[]' WHERE id = ?").bind(account.id).run();
+    await expectError(
+      await attachCall(f, [copy]),
+      "account_missing_access",
+      `Google did not grant all the Gmail access this server asks for on ${account.email}. Ask the owner to reconnect it at ${ORIGIN}/accounts and check every box.`,
+    );
+    expect(await rows()).toEqual([]);
+    expect(google.messageRequests).toEqual([]);
+  },
+);
+it("refuses a source missing access even when every setting is allow", async () => {
+  const f = await attaching();
+  await setTool(f, "get_attachment", "allow", f.northwind);
+  await env.DB.prepare("UPDATE accounts SET scopes = '[]' WHERE id = ?").bind(f.northwind.id).run();
+  await expectError(
+    await attachCall(f, [copy]),
+    "account_missing_access",
+    `Google did not grant all the Gmail access this server asks for on ${NORTHWIND}. Ask the owner to reconnect it at ${ORIGIN}/accounts and check every box.`,
+  );
+  expect(await rows()).toEqual([]);
+  expect(google.messageRequests).toEqual([]);
+});
+
+it.each(["sending with an asking source", "source under allow"])(
+  "refuses reconnect status on the %s before an approval exists",
+  async (which) => {
+    const f = await attaching();
+    await setTool(
+      f,
+      "get_attachment",
+      which === "source under allow" ? "allow" : "ask",
+      f.northwind,
+    );
+    const account = which === "source under allow" ? f.northwind : f.personal;
+    await env.DB.prepare(
+      "UPDATE accounts SET health = 'needs_reconnect', refresh_token = NULL, access_token = NULL, access_expires_at = NULL WHERE id = ?",
+    )
+      .bind(account.id)
+      .run();
+    await expectError(
+      await attachCall(f, [copy]),
+      "account_needs_reconnect",
+      `Ask the owner to reconnect ${account.email} at ${ORIGIN}/accounts.`,
+    );
+    expect(await rows()).toEqual([]);
+    expect(google.messageRequests).toEqual([]);
   },
 );
