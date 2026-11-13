@@ -1,3 +1,4 @@
+import { ActivityPage } from "./activity";
 import { ApprovalPage } from "./approval";
 import { createElement } from "react";
 import { AccountsPage } from "./accounts";
@@ -7,6 +8,8 @@ import type { HydratedPage } from "./page";
 // SSR and hydration must select the same component for every hydrated page.
 export const hydratedElement = (page: HydratedPage) => {
   switch (page._tag) {
+    case "Activity":
+      return createElement(ActivityPage, page);
     case "Approval":
       return createElement(ApprovalPage, page);
     case "Accounts":

@@ -77,6 +77,11 @@ describe("standalone pages", () => {
 describe("owner pages", () => {
   it.each([
     [
+      "/activity",
+      "Activity",
+      "Every tool call your connections made, newest first. Times are in UTC.",
+    ],
+    [
       "/accounts",
       "Accounts",
       "Google accounts your agents can use. Each connection sees only the ones you grant.",
@@ -100,6 +105,7 @@ describe("owner pages", () => {
         expect(text).toContain(value);
       expect(html).toMatch(/<a\b[^>]*href="\/accounts"/);
       expect(html).toMatch(/<a\b[^>]*href="\/connections"/);
+      expect(html).toMatch(/<a\b[^>]*href="\/activity"/);
       expect(html).toMatch(
         new RegExp(
           `<a\\b[^>]*href="${path}"[^>]*aria-current="page"|<a\\b[^>]*aria-current="page"[^>]*href="${path}"`,

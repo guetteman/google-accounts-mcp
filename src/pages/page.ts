@@ -1,3 +1,4 @@
+import type { ActivityLoad, ActivityQuery } from "../activity/store";
 import type { ApprovalPageProps } from "../approvals/model";
 import type { AcceptedClient } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
@@ -11,9 +12,15 @@ export const PRODUCT = "Google Accounts MCP";
 export interface Frame {
   readonly host: string;
   readonly ownerEmail: string;
-  readonly current: "accounts" | "connections";
+  readonly current: "accounts" | "connections" | "activity";
 }
 export type FramePage =
+  | {
+      readonly _tag: "Activity";
+      readonly frame: Frame;
+      readonly query: ActivityQuery;
+      readonly load: ActivityLoad;
+    }
   | {
       readonly _tag: "Connection";
       readonly permissionNotice?: string;
@@ -65,7 +72,10 @@ export type Page =
   | ApprovalPageProps;
 
 export const isFramePage = (page: Page): page is FramePage =>
-  page._tag === "Accounts" || page._tag === "Connections" || page._tag === "Connection";
+  page._tag === "Activity" ||
+  page._tag === "Accounts" ||
+  page._tag === "Connections" ||
+  page._tag === "Connection";
 
 export type HydratedPage = FramePage | ApprovalPageProps;
 export const isHydratedPage = (page: Page): page is HydratedPage =>

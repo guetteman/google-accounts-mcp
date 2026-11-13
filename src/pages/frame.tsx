@@ -57,11 +57,15 @@ function AppSidebar({ frame }: { readonly frame: Frame }) {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {(["accounts", "connections"] as const).map((page) => (
+              {(["accounts", "connections", "activity"] as const).map((page) => (
                 <SidebarMenuItem key={page}>
                   <SidebarMenuButton asChild isActive={frame.current === page}>
                     <a href={`/${page}`} aria-current={frame.current === page ? "page" : undefined}>
-                      {page === "accounts" ? "Accounts" : "Connections"}
+                      {page === "accounts"
+                        ? "Accounts"
+                        : page === "connections"
+                          ? "Connections"
+                          : "Activity"}
                     </a>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

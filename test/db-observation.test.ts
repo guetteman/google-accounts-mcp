@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vite-plus/test";
-import { dump, writeRecordingDb } from "./support/db";
+import { dump, readRecordingDb, writeRecordingDb } from "./support/db";
 
 // A recorder that misses no-op writes would let the unchanged-dump assertions hide them again.
 describe("D1 write observation", () => {
@@ -41,4 +41,36 @@ it("includes both KV namespaces in an unchanged-state snapshot", async () => {
   const snapshot = await dump();
   expect(snapshot.OAUTH_KV).toEqual([{ name: "oauth-proof", value: "oauth-value" }]);
   expect(snapshot.FILES_KV).toEqual([{ name: "file:proof", value: "file-value" }]);
+});
+
+it("measures first, column-first, all, run, raw and each batch statement without losing their results", async () => {
+  await env.DB.prepare("CREATE TABLE read_samples (id INTEGER PRIMARY KEY, value TEXT)").run();
+  await env.DB.prepare(
+    "INSERT INTO read_samples VALUES (1, 'one'), (2, 'two'), (3, 'three')",
+  ).run();
+  const { db, reads } = readRecordingDb();
+  expect(await db.prepare("SELECT value FROM read_samples WHERE id = 2").first()).toEqual({
+    value: "two",
+  });
+  expect(await db.prepare("SELECT value FROM read_samples WHERE id = 1").first("value")).toBe(
+    "one",
+  );
+  expect((await db.prepare("SELECT value FROM read_samples WHERE id = 3").all()).results).toEqual([
+    { value: "three" },
+  ]);
+  expect((await db.prepare("SELECT * FROM read_samples WHERE id = 1").run()).results).toEqual([
+    { id: 1, value: "one" },
+  ]);
+  expect(
+    await db.prepare("SELECT id, value FROM read_samples WHERE id = 2").raw({ columnNames: true }),
+  ).toEqual([
+    ["id", "value"],
+    [2, "two"],
+  ]);
+  const batch = await db.batch<{ id: number; value: string }>([
+    db.prepare("SELECT * FROM read_samples WHERE id = 1"),
+    db.prepare("SELECT * FROM read_samples WHERE id > 1 ORDER BY id"),
+  ]);
+  expect(batch.map((result) => result.results.map((row) => row.id))).toEqual([[1], [2, 3]]);
+  expect(reads.map((read) => read.rows)).toEqual([1, 1, 1, 1, 1, 1, 2]);
 });

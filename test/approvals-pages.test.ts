@@ -229,3 +229,45 @@ it.each(["double", "identity", "digest"] as const)(
   },
   30_000,
 );
+
+it("renders the seven Activity previews with their record, filter, paging and empty states", async () => {
+  for (const name of [
+    "activity",
+    "activity-older",
+    "activity-pending",
+    "activity-account",
+    "activity-ended",
+    "activity-no-match",
+    "activity-empty",
+  ]) {
+    const preview = previews[name];
+    expect(preview?._tag).toBe("Activity");
+    const html = await renderPage(preview!).text();
+    expect(html).toContain('id="page-props"');
+    expect(html).toContain("/src/pages/client.tsx");
+    expect(html).toContain("Times are in UTC.");
+    expect(html).toContain(
+      name === "activity-empty"
+        ? "No activity yet"
+        : name === "activity-no-match"
+          ? "No records match this filter"
+          : 'aria-label="Records"',
+    );
+    if (name === "activity-older") expect(html).toContain("Back to newest");
+    if (name === "activity")
+      for (const label of [
+        "Done",
+        "Waiting",
+        "Refused",
+        "Failed",
+        "Rejected",
+        "Expired",
+        "Repeat",
+        "Unknown",
+        "No account",
+        "No such tool",
+        "+1",
+      ])
+        expect(html).toContain(label);
+  }
+});

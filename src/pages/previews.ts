@@ -569,7 +569,146 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
   ),
   "approval-unconfirmed": { ...approvalBase, unconfirmed: true },
 };
+const activityConnections: ReadonlyArray<import("../activity/store").ActivityConnection> = [
+  ...connections.map(({ id, name, appLabel, status }) => ({ id, name, appLabel, status })),
+  {
+    id: "66666666-6666-4666-8666-666666666666" as ConnectionView["id"],
+    name: "Claude Code on the Fabrikam finance team's shared build machine",
+    appLabel: "Claude Code",
+    status: { kind: "active" },
+  },
+];
+const activityAccounts: ReadonlyArray<import("../activity/store").ActivityAccount> = [
+  ...permissionAccounts.map(({ id, name, email }) => ({ id, name, email, removedOn: null })),
+  {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-000000000005" as import("../accounts/model").AccountId,
+    name: "Studio",
+    email: "alex@oldwork.example",
+    removedOn: "Oct 20",
+  },
+];
+const activityRecord = (
+  id: number,
+  outcome: import("../activity/store").ActivityRecord["outcome"],
+  tool: string | null = "read_thread",
+  account = 0,
+  connection = 0,
+): import("../activity/store").ActivityRecord => {
+  const definition = TOOLS.find((t) => t.name === tool);
+  return {
+    id: id as import("../calls/store").CallId,
+    outcome,
+    tool: definition
+      ? { name: definition.name, label: definition.label, kind: definition.kind }
+      : null,
+    account: account < 0 ? null : activityAccounts[account]!,
+    connection: activityConnections[connection]!,
+    also: [],
+    time:
+      id > 75
+        ? {
+            iso: "2026-11-13T14:02:00.000Z",
+            short: "14:02",
+            full: "Fri, Nov 13, 2026 at 14:02 UTC",
+            today: true,
+          }
+        : {
+            iso: "2026-11-12T09:41:00.000Z",
+            short: "Nov 12, 09:41",
+            full: "Thu, Nov 12, 2026 at 09:41 UTC",
+            today: false,
+          },
+    approval:
+      outcome === "pending" ? { id: approvalBase.id, state: "waiting", decidedOn: null } : null,
+  };
+};
+const activityRecords: ReadonlyArray<import("../activity/store").ActivityRecord> = [
+  activityRecord(100, "pending", "send_message"),
+  {
+    ...activityRecord(99, "success", "send_message", 0, 1),
+    also: [
+      {
+        account: activityAccounts[1]!,
+        tool: { name: "get_attachment", label: "Download attachment" },
+      },
+    ],
+  },
+  activityRecord(98, "refused", "delete_messages", 1),
+  activityRecord(97, "failed", "search_threads", 2),
+  {
+    ...activityRecord(96, "rejected", "trash_messages"),
+    approval: {
+      id: approvalBase.id,
+      state: "rejected",
+      decidedOn: "Fri, Nov 13, 2026 at 13:56 UTC",
+    },
+  },
+  activityRecord(95, "expired", "send_reply", 1, 2),
+  activityRecord(94, "unknown", "create_draft", 3, 5),
+  activityRecord(93, "repeat", "send_message"),
+  activityRecord(92, "success", "list_accounts", -1),
+  activityRecord(91, "refused", "read_thread", -1),
+  activityRecord(90, "refused", null, -1),
+  activityRecord(89, "success", "get_approval", -1),
+  activityRecord(88, "success", "create_upload_link", -1),
+  activityRecord(87, "success", "list_labels", 4, 3),
+  activityRecord(86, "refused", "change_labels", 4, 4),
+  ...Array.from({ length: 10 }, (_, i) =>
+    activityRecord(85 - i, "success", "read_thread", i % 4, i % 3),
+  ),
+];
+const activityPreview = (scenario: string): Page => {
+  const filter: import("../activity/store").ActivityFilter | null =
+    scenario === "pending"
+      ? { kind: "outcome", outcome: "pending" }
+      : scenario === "account"
+        ? { kind: "account", id: activityAccounts[1]!.id }
+        : scenario === "ended"
+          ? { kind: "connection", id: activityConnections[3]!.id }
+          : scenario === "no-match"
+            ? { kind: "outcome", outcome: "failed" }
+            : null;
+  const records =
+    scenario === "empty" || scenario === "no-match"
+      ? []
+      : scenario === "older"
+        ? Array.from({ length: 25 }, (_, i) =>
+            activityRecord(75 - i, "success", "read_thread", i % 4, i % 3),
+          )
+        : scenario === "pending"
+          ? activityRecords.filter((r) => r.outcome === "pending")
+          : scenario === "account"
+            ? activityRecords.filter(
+                (r) =>
+                  r.account?.id === activityAccounts[1]!.id ||
+                  r.also.some((a) => a.account.id === activityAccounts[1]!.id),
+              )
+            : scenario === "ended"
+              ? activityRecords.filter((r) => r.connection.id === activityConnections[3]!.id)
+              : activityRecords;
+  return {
+    _tag: "Activity",
+    frame: { host, ownerEmail: "owner@example.com", current: "activity" },
+    query: {
+      filter,
+      before: scenario === "older" ? (76 as import("../calls/store").CallId) : null,
+    },
+    load: {
+      records,
+      connections: scenario === "empty" ? [] : activityConnections,
+      accounts: scenario === "empty" ? [] : activityAccounts,
+      older: scenario === "activity" ? (76 as import("../calls/store").CallId) : null,
+    },
+  };
+};
+
 export const previews: Readonly<Record<string, Page>> = {
+  ...Object.fromEntries(
+    ["activity", "older", "pending", "account", "ended", "no-match", "empty"].map((scenario) => [
+      scenario === "activity" ? "activity" : `activity-${scenario}`,
+      activityPreview(scenario),
+    ]),
+  ),
   ...approvalPreviews,
   "approval-waiting-notes": {
     ...approvalBase,

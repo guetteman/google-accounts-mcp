@@ -1,3 +1,4 @@
+import { activityHref } from "../activity/query";
 import type { Setting } from "../permissions/store";
 import { useRef, useState } from "react";
 import {
@@ -272,6 +273,21 @@ export function ConnectionPage(props: Props) {
                   `Created ${connection.created}`,
                 ].join(" · ")}
               </p>
+              <Button
+                asChild
+                variant="link"
+                size="sm"
+                className="h-auto justify-start self-start p-0"
+              >
+                <a
+                  href={activityHref({
+                    filter: { kind: "connection", id: connection.id },
+                    before: null,
+                  })}
+                >
+                  See its activity
+                </a>
+              </Button>
             </div>
             {active && (
               <DropdownMenu>
