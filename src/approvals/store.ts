@@ -1,3 +1,4 @@
+import { usableUploadsWhere, moveUploadsStatement, type UploadId } from "../uploads/store";
 import { Effect, Schema } from "effect";
 import { Unavailable, WriteUncertain } from "../db";
 import type { Owner } from "../owner/owner";
@@ -192,11 +193,13 @@ export const createApproval = (
     arguments: Sealed;
     at: number;
     identity?: Identity;
+    uploads?: { ids: readonly UploadId[]; found: boolean };
   },
 ): Effect.Effect<
   | "created"
   | "limit"
   | "unavailable"
+  | "upload"
   | { waiting: { id: ApprovalId; expiresAt: number } }
   | { repeat: Repeat },
   WriteUncertain
@@ -209,6 +212,7 @@ export const createApproval = (
           .prepare(`INSERT INTO approvals (id,generation,connection_id,call_id,tool,uses,created_at,expires_at,state,arguments,identity)
           SELECT ?1,?2,?3,?4,?5,?6,?7,?8,'waiting',?9,?11
           WHERE ${usable("?3", "?2", "?6", "?7", "?10")}
+          AND (?13 = 1 AND ${usableUploadsWhere({ ids: "?12", count: "json_array_length(?12)", connection: "?3", generation: "?2", now: "?14", email: "?10" })})
           AND (?11 IS NULL OR (NOT ${liveRowWhere("?11", "?7")}
             AND NOT EXISTS (SELECT 1 FROM approvals WHERE connection_id = ?3 AND identity = ?11 AND state = 'waiting' AND expires_at > ?7)))
           AND (SELECT count(*) FROM approvals WHERE connection_id = ?3 AND generation = ?2 AND state = 'waiting' AND expires_at > ?7) < ${WAITING_LIMIT} RETURNING id`)
@@ -224,6 +228,9 @@ export const createApproval = (
             input.arguments,
             ctx.owner.email,
             input.identity ?? null,
+            JSON.stringify(input.uploads?.ids ?? []),
+            input.uploads?.found === false ? 0 : 1,
+            ctx.now(),
           ),
         ctx.db
           .prepare(`UPDATE calls SET outcome = 'pending' WHERE id = ?1 AND connection_id = ?2
@@ -237,6 +244,7 @@ export const createApproval = (
         ...(input.identity
           ? [rowStatement(ctx.db, input.identity), waitingStatement(ctx, input.identity, at)]
           : []),
+        ...(input.uploads?.ids.length ? [moveUploadsStatement(ctx, input.uploads.ids, id)] : []),
       ]);
       if (results[0]!.results.length) return "created";
       if (input.identity) {
@@ -245,6 +253,7 @@ export const createApproval = (
         const waiting = decodeWaiting(results[4]!.results[0]);
         if (waiting) return { waiting };
       }
+      if (input.uploads?.ids.length) return "upload";
       return Number((results[2]!.results[0] as { count: number }).count) >= WAITING_LIMIT
         ? ("limit" as const)
         : ("unavailable" as const);
@@ -323,8 +332,7 @@ export const viewCredential = (
   ctx: ApprovalContext,
   id: ApprovalId,
   now: number,
-  // oxlint-disable-next-line typescript/no-redundant-type-constituents -- Keep the missing-row case explicit in this public signature.
-): Effect.Effect<unknown | null, Unavailable> =>
+): Effect.Effect<ReadonlyArray<unknown>, Unavailable> =>
   Effect.tryPromise({
     try: () =>
       ctx.db
@@ -332,7 +340,8 @@ export const viewCredential = (
       FROM approvals JOIN json_each(approvals.uses) u JOIN accounts a ON a.id = json_extract(u.value,'$.account') AND a.generation = approvals.generation
       WHERE approvals.id = ?1 AND ${ownerGuard("?2", "?3")} AND approvals.state = 'waiting' AND ?4 < approvals.expires_at AND ${rowUsable("?4", "?3")}`)
         .bind(id, ctx.owner.generation, ctx.owner.email, now)
-        .first<unknown>(),
+        .all<unknown>()
+        .then((result) => result.results),
     catch: () => new Unavailable(),
   });
 

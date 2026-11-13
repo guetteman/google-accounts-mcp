@@ -94,7 +94,7 @@ const mcpModules = import.meta.glob<{ createMcpServer: (...args: unknown[]) => u
   "../src/mcp/server.ts",
 );
 it.each(clients)(
-  "initializes both tools and passes the stored $app identity in the call context",
+  "initializes plain tools and passes the stored $app identity in the call context",
   async (client) => {
     const mcp = await new McpClient(client).connect();
     const row = await onlyConnection();
@@ -120,6 +120,7 @@ it.each(clients)(
     expect(listed.tools).toEqual([
       expect.objectContaining({ name: "list_accounts" }),
       expect.objectContaining({ name: "get_approval" }),
+      expect.objectContaining({ name: "create_upload_link" }),
     ]);
     expect(spy).toHaveBeenCalledTimes(2);
     for (const args of spy.mock.calls)

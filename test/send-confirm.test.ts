@@ -350,7 +350,14 @@ it.each([200, 403, 503])(
     google.sendAnswers.push(() => new Response(null, { status }));
     const args = { account: PERSONAL, ...sendCases[0].args };
     await expect(
-      executeAccount(ctx, broken, allowed, args, Date.now() + CALL_DEADLINE, Effect.void),
+      executeAccount(
+        ctx,
+        broken,
+        { own: allowed, others: new Map() },
+        args,
+        Date.now() + CALL_DEADLINE,
+        Effect.void,
+      ),
     ).rejects.toMatchObject({ code: status === 403 ? "google_unavailable" : "outcome_unknown" });
     expect((await onceRows()).map((r) => r.state)).toEqual(status === 403 ? [] : ["unknown"]);
     if (status !== 403) {
@@ -404,7 +411,7 @@ it.each(
     executeAccount(
       ctx,
       bypass,
-      allowed,
+      { own: allowed, others: new Map() },
       { account: PERSONAL },
       Date.now() + CALL_DEADLINE,
       Effect.void,
@@ -616,7 +623,7 @@ it.each(["attachment_too_large", "attachment_not_readable"] as const)(
     const released = await executeAccount(
       ctx,
       broken,
-      allowed,
+      { own: allowed, others: new Map() },
       { account: PERSONAL },
       Date.now() + CALL_DEADLINE,
       Effect.void,
@@ -665,7 +672,7 @@ it("forgets an earlier refusal before recording the next sending request's lost 
     executeAccount(
       ctx,
       broken,
-      allowed,
+      { own: allowed, others: new Map() },
       { account: PERSONAL },
       Date.now() + CALL_DEADLINE,
       Effect.void,
@@ -710,7 +717,14 @@ it("keeps a checked messages/send request unknown after the stub fails", async (
   };
   const args = { account: PERSONAL, ...sendCases[0].args };
   await expect(
-    executeAccount(ctx, stub, allowed, args, Date.now() + CALL_DEADLINE, Effect.void),
+    executeAccount(
+      ctx,
+      stub,
+      { own: allowed, others: new Map() },
+      args,
+      Date.now() + CALL_DEADLINE,
+      Effect.void,
+    ),
   ).rejects.toMatchObject({ code: "outcome_unknown" });
   expect((await onceRows())[0]!.state).toBe("unknown");
   await expectError(await sendCall(f), "outcome_unknown", /Ask the owner to look in Sent/);
@@ -743,7 +757,14 @@ it("starts no preparing request after the reserve even before its timer fires", 
       }),
   };
   await expect(
-    executeAccount(ctx, stub, allowed, { account: PERSONAL }, at + CALL_DEADLINE, Effect.void),
+    executeAccount(
+      ctx,
+      stub,
+      { own: allowed, others: new Map() },
+      { account: PERSONAL },
+      at + CALL_DEADLINE,
+      Effect.void,
+    ),
   ).rejects.toMatchObject({ code: "google_unavailable", released: true });
   expect(google.labelRequests).toEqual([]);
   expect(await onceRows()).toEqual([]);
@@ -821,7 +842,7 @@ it.each([200, 400])("leaves no call or request timer after a send answered %s", 
   const work = executeAccount(
     ctx,
     tool,
-    allowed,
+    { own: allowed, others: new Map() },
     { account: PERSONAL, ...sendCases[0].args },
     Date.now() + CALL_DEADLINE,
     Effect.void,

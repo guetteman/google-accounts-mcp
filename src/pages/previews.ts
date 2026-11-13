@@ -150,7 +150,94 @@ const approvalBase: ApprovalPageProps = {
   },
   state: { kind: "waiting", shown: true, changed: false, digest: "preview" },
 };
+const attachmentPreview: ApprovalPageProps = {
+  ...approvalBase,
+  request: {
+    ...approvalBase.request,
+    tool: {
+      ...approvalBase.request.tool,
+      label: "Send message",
+      action: "send a message",
+      joiner: "from",
+    },
+    also: [
+      {
+        label: "Download attachment",
+        action: "download an attachment",
+        joiner: "from",
+        name: "Northwind",
+        email: "alex@northwind.example",
+        workspace: true,
+      },
+    ],
+    notes: [{ text: "A sent message cannot be taken back.", warning: true }],
+    values: [
+      { name: "To", text: "Kim <kim@northwind.example>", from: "agent" },
+      { name: "Subject", text: "Invoice and notes for Friday", from: "agent" },
+      { name: "Attachments", text: "2 files, 125,180 bytes in all", from: "agent" },
+      {
+        name: "Attachment 1 (copied)",
+        text: "October invoice.pdf (application/pdf, 125,000 bytes)",
+        from: "gmail",
+      },
+      { name: "Attachment 1 is copied from", text: "alex@northwind.example", from: "agent" },
+      { name: "Attachment 1 message from", text: "Sam <sam@example.com>", from: "gmail" },
+      { name: "Attachment 1 message subject", text: "Invoice for October", from: "gmail" },
+      { name: "Attachment 1 message date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+      {
+        name: "Attachment 2 (sent to a link of this connection)",
+        text: "Notes.txt (text/plain, 180 bytes)",
+        from: "agent",
+      },
+      {
+        name: "Body",
+        text: "Hi Kim,\n\nHere are the invoice and our notes for Friday.\n\nThanks,\nAlex",
+        from: "agent",
+      },
+    ],
+  },
+};
 const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
+  "approval-waiting-attachments": attachmentPreview,
+  "approval-waiting-attachments-many": {
+    ...attachmentPreview,
+    request: {
+      ...attachmentPreview.request,
+      values: [
+        ...attachmentPreview.request.values.slice(0, 2),
+        { name: "Attachments", text: "10 files, 1,250,000 bytes in all", from: "agent" },
+        ...Array.from({ length: 10 }, (_, i) => [
+          {
+            name: `Attachment ${i + 1} (copied)`,
+            text: `${"Northwind project budget and invoice details for the international workshop ".repeat(2)}${i + 1}.pdf (application/pdf, 125,000 bytes)`,
+            from: "gmail" as const,
+          },
+          {
+            name: `Attachment ${i + 1} is copied from`,
+            text: "alex@northwind.example",
+            from: "agent" as const,
+          },
+          {
+            name: `Attachment ${i + 1} message from`,
+            text: "Northwind international workshop planning team <workshops@northwind.example>",
+            from: "gmail" as const,
+          },
+          {
+            name: `Attachment ${i + 1} message subject`,
+            text: "Project budget, invoices, and planning notes for the November workshop",
+            from: "gmail" as const,
+          },
+          {
+            name: `Attachment ${i + 1} message date`,
+            text: "Nov 11, 2026 at 09:41 UTC",
+            from: "gmail" as const,
+          },
+        ]).flat(),
+        attachmentPreview.request.values.at(-1)!,
+      ],
+    },
+  },
+  "approval-ended-tool-two": { ...attachmentPreview, state: { kind: "ended", by: "tool" } },
   "approval-waiting": approvalBase,
   "approval-waiting-long-names": {
     ...approvalBase,

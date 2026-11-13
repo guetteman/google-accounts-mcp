@@ -247,6 +247,13 @@ function WaitingView({
           )}{" "}
           <Value className="px-1.5 font-semibold">{account.name}</Value>.
         </h1>
+        {(request.also ?? []).map((use, index) => (
+          <p key={index} className="text-base/7 text-muted-foreground">
+            It also wants to <strong className="font-medium text-foreground">{use.action}</strong>{" "}
+            {use.joiner} <Value>{use.email}</Value>
+            {use.workspace && ", a Workspace account"}.
+          </p>
+        ))}
         <Facts request={request}>
           Asked {minutes(times.minutesSinceAsked)} ago, at {times.asked}. Expires in{" "}
           {minutes(times.minutesLeft)}, at {times.expires}.
@@ -418,7 +425,18 @@ function DecidedView({
       case "ended-tool":
         return {
           headline: "No longer allowed. Nothing ran.",
-          detail: (
+          detail: request.also?.length ? (
+            <>
+              While this request waited, you set one of the tools it uses to Not allowed for{" "}
+              <Value>{connection.name}</Value>:
+              {[{ label: tool.label, name: account.name }, ...request.also].map((use, index) => (
+                <Fragment key={index}>
+                  <br />
+                  <Value>{use.label}</Value> on <Value>{use.name}</Value>
+                </Fragment>
+              ))}
+            </>
+          ) : (
             <>
               While this request waited, you set {tool.label} to Not allowed for{" "}
               <Value>{connection.name}</Value> on <Value>{account.name}</Value>.
@@ -453,7 +471,19 @@ function DecidedView({
       case "ended-account":
         return {
           headline: "Account removed. Nothing ran.",
-          detail: (
+          detail: request.also?.length ? (
+            <>
+              While this request waited, you removed an account that it uses:
+              {Array.from(
+                new Map([account, ...request.also].map((use) => [use.email, use.name])),
+              ).map(([email, name]) => (
+                <Fragment key={email}>
+                  <br />
+                  <Value>{name}</Value>
+                </Fragment>
+              ))}
+            </>
+          ) : (
             <>
               While this request waited, you removed the account <Value>{account.name}</Value> from
               this server.

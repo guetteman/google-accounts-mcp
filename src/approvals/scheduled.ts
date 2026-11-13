@@ -1,3 +1,4 @@
+import { cleanupUploadsStatement } from "../uploads/store";
 import { Effect, Result } from "effect";
 import { readConfig } from "../config";
 import { readOwner, standing } from "../owner/owner";
@@ -23,4 +24,5 @@ export async function scheduled(_event: ScheduledController, env: Env) {
     ),
   );
   await cleanupStatement(env.DB, Date.now()).run();
+  await cleanupUploadsStatement(env.DB, Date.now()).run();
 }

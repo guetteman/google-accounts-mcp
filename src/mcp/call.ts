@@ -1,8 +1,11 @@
+import { readUploads, dropUploads, parseUploadId, type UploadRef } from "../uploads/store";
+import { getFile, type FileData } from "../files/store";
+import { checkAttachedSize, withUploadAdvice } from "./attachments";
 import { createApproval, waitingApproval } from "../approvals/store";
 import { APPROVAL_LIFETIME, CALL_DEADLINE, isoSeconds, type ApprovalId } from "../approvals/model";
 import { pendingAnswer } from "../approvals/result";
 import { sealArguments } from "../approvals/text";
-import { classify, failures, ToolFailure } from "./failures";
+import { classify, failures, ToolFailure, uploadNotAvailable, uploadNotReady } from "./failures";
 import { Effect, Result } from "effect";
 import {
   ProtocolError,
@@ -34,6 +37,8 @@ import {
   type Sending,
   type Confirm,
   type Tool,
+  type Sources,
+  type Uploaded,
 } from "./tools";
 import { contentOf, takes, type Reader } from "./file";
 import { identityOf } from "../once/identity";
@@ -69,7 +74,10 @@ export const repeatAnswer = (
         account,
         ...repeat.result,
         repeat_of: at,
-        note: `This call already ran at ${at}. Nothing was created or sent again. This is its result.${"duplicate" in tool.expects && next <= 100 ? ` To make one more on purpose, call again with duplicate: ${next}.` : ""}`,
+        note: withUploadAdvice(
+          `This call already ran at ${at}. Nothing was created or sent again. This is its result.${"duplicate" in tool.expects && next <= 100 ? ` To make one more on purpose, call again with duplicate: ${next}.` : ""}`,
+          tool.uploads?.(args) ?? [],
+        ),
       };
     }
     case "running":
@@ -85,11 +93,22 @@ export const repeatAnswer = (
       });
   }
 };
-const notAllowed = (seen: unknown) =>
+const notAllowed = (seen: unknown, about?: ToolFailure["about"]) =>
   new ToolFailure({
     code: seen ? "tool_not_allowed" : "account_not_available",
+    ...(about ? { about } : {}),
   });
 type Allowed = { credential: Credential; status: AccountStatus };
+export type Accounts = { own: Allowed; others: ReadonlyMap<string, Allowed> };
+/** Sources never let a tool write as another account. */
+export const sourceRead =
+  (send: Send): Send =>
+  (build) =>
+    send((token, signal) => {
+      const request = build(token, signal);
+      if (request.method !== "GET") throw new ToolFailure({ code: "google_unavailable" });
+      return request;
+    });
 const tokenFailure = (error: TokenError): ToolFailure => {
   switch (error._tag) {
     case "NeedsReconnect":
@@ -106,16 +125,61 @@ const tokenFailure = (error: TokenError): ToolFailure => {
       return new ToolFailure({ code: "server_unavailable" });
   }
 };
+/** Bound preparation, including token acquisition, and keep sending behind Confirm. */
+export function preparation(now: () => number, reserve: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(0, reserve - now()));
+  const unavailable = () => new ToolFailure({ code: "google_unavailable" });
+  const stopped = Effect.callback<never, ToolFailure>((resume) => {
+    const fail = () => resume(Effect.fail(unavailable()));
+    if (controller.signal.aborted) {
+      fail();
+      return;
+    }
+    controller.signal.addEventListener("abort", fail, { once: true });
+    return Effect.sync(() => controller.signal.removeEventListener("abort", fail));
+  });
+  const reserved =
+    (requests: Send): Send =>
+    (build) => {
+      let built = false;
+      return requests((token, signal) => {
+        if (now() >= reserve || controller.signal.aborted) throw unavailable();
+        const request = preparing(build(token, AbortSignal.any([signal, controller.signal])));
+        built = true;
+        return request;
+      }).pipe(
+        // Token acquisition can be waiting before a request is built. It shares the reserve.
+        Effect.raceFirst(stopped),
+        Effect.mapError((failure) =>
+          controller.signal.aborted || now() >= reserve
+            ? new ToolFailure({
+                code: "google_unavailable",
+                ...(built ? { unknown: true } : {}),
+              })
+            : failure,
+        ),
+      );
+    };
+  return { wrap: reserved, close: () => clearTimeout(timer) };
+}
+const preparing = (request: Request) => {
+  if (isSend(request)) throw new ToolFailure({ code: "google_unavailable" });
+  return request;
+};
 export async function executeAccount(
   ctx: CallContext,
   tool: Extract<Tool, { kind: "account" }>,
-  allowed: Allowed,
+  accounts: Accounts,
   args: DecodedArgs,
   deadline: number,
   still: Effect.Effect<void, ToolFailure>,
+  held: ReadonlyMap<string, FileData> | null = null,
   signal?: AbortSignal,
 ): Promise<Executed> {
+  const allowed = accounts.own;
   const requests = accountRequests(ctx, allowed, deadline, signal);
+  const otherRequests = new Map<string, ReturnType<typeof accountRequests>>();
   try {
     if (!tool.create) {
       const result = await Effect.runPromise(
@@ -138,41 +202,9 @@ export async function executeAccount(
     if (entered.success.kind !== "run") return { kind: "repeat", repeat: entered.success };
     const claim = entered.success.claim;
     const reserve = deadline - SEND_RESERVE;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.max(0, reserve - ctx.now()));
+    const preparingRequests = preparation(ctx.now, reserve);
     const unavailable = () => new ToolFailure({ code: "google_unavailable" });
-    const stopped = Effect.callback<never, ToolFailure>((resume) => {
-      const fail = () => resume(Effect.fail(unavailable()));
-      if (controller.signal.aborted) {
-        fail();
-        return;
-      }
-      controller.signal.addEventListener("abort", fail, { once: true });
-      return Effect.sync(() => controller.signal.removeEventListener("abort", fail));
-    });
-    const preparing = (request: Request) => {
-      if (isSend(request)) throw unavailable();
-      return request;
-    };
-    const send: Send = (build) => {
-      let built = false;
-      return requests
-        .send((token, signal) => {
-          if (ctx.now() >= reserve || controller.signal.aborted) throw unavailable();
-          const request = preparing(build(token, AbortSignal.any([signal, controller.signal])));
-          built = true;
-          return request;
-        })
-        .pipe(
-          // Token acquisition can be waiting before a request is built. It shares the reserve.
-          Effect.raceFirst(stopped),
-          Effect.mapError((failure) =>
-            controller.signal.aborted || ctx.now() >= reserve
-              ? new ToolFailure({ code: "google_unavailable", ...(built ? { unknown: true } : {}) })
-              : failure,
-          ),
-        );
-    };
+    const send = preparingRequests.wrap(requests.send);
     const seen: { started: boolean; status: number | null } = { started: false, status: null };
     const sending = ((build) => {
       let sends = false;
@@ -214,13 +246,62 @@ export async function executeAccount(
       }),
     };
     try {
+      const ids = (tool.uploads?.(args) ?? []).map((id) => parseUploadId(id)!);
+      const refs =
+        held === null
+          ? await Effect.runPromise(
+              readUploads(ctx, ids).pipe(
+                Effect.mapError(() => new ToolFailure({ code: "server_unavailable" })),
+              ),
+            )
+          : new Map<string, UploadRef>();
+      if (refs === null) throw uploadNotAvailable(ids[0]!);
+      const sources: Sources = {
+        from: (input) => {
+          const email = normalizeEmail(input);
+          const source = email ? accounts.others.get(email) : undefined;
+          if (!source)
+            return () =>
+              Effect.fail(
+                new ToolFailure({ code: "account_not_available", about: { input, email: input } }),
+              );
+          let request = otherRequests.get(email!);
+          if (!request) {
+            request = accountRequests(ctx, source, deadline, signal);
+            otherRequests.set(email!, request);
+          }
+          return sourceRead(preparingRequests.wrap(request.send));
+        },
+        uploads: new Map<string, Uploaded>(
+          held === null
+            ? Array.from(refs, ([id, ref]) => [
+                id,
+                {
+                  ...ref,
+                  bytes: getFile(ctx.files, ref).pipe(
+                    Effect.flatMap((file) =>
+                      file ? Effect.succeed(file.bytes) : Effect.fail(uploadNotReady()),
+                    ),
+                  ),
+                },
+              ])
+            : Array.from(held, ([id, file]) => [
+                id,
+                { ...file, size: file.bytes.byteLength, bytes: Effect.succeed(file.bytes) },
+              ]),
+        ),
+      };
       const result = await Effect.runPromise(
-        Effect.result(tool.create(send, { email: allowed.credential.email }, args, confirm)),
+        Effect.result(
+          tool.create(send, { email: allowed.credential.email }, args, confirm, sources),
+        ),
       );
       if (Result.isFailure(result)) throw result.failure;
       await Effect.runPromise(
         Effect.result(settle(ctx, claim, ctx.now(), { kind: "done", result: result.success })),
       );
+      if (held === null && ids.length)
+        await Effect.runPromise(Effect.result(dropUploads(ctx, ids)));
       return { kind: "ran", value: { account: allowed.credential.email, ...result.success } };
     } catch (error) {
       if (
@@ -235,16 +316,20 @@ export async function executeAccount(
       }
       const now = ctx.now();
       await Effect.runPromise(Effect.result(settle(ctx, claim, now, { kind: "unknown" })));
+      const ids = (tool.uploads?.(args) ?? []).map((id) => parseUploadId(id)!);
+      if (held === null && ids.length)
+        await Effect.runPromise(Effect.result(dropUploads(ctx, ids)));
       throw new ToolFailure({
         code: "outcome_unknown",
         unknown: true,
         said: tool.unknown(allowed.credential.email, now + WINDOW, args),
       });
     } finally {
-      clearTimeout(timer);
+      preparingRequests.close();
     }
   } finally {
     requests.close();
+    for (const request of otherRequests.values()) request.close();
   }
 }
 export function accountRequests(
@@ -309,12 +394,38 @@ export async function runCall(
       new TextEncoder().encode(JSON.stringify(args)).byteLength > MAX_ARGUMENTS_BYTES;
     if (!oversized) input = typeof args?.account === "string" ? args.account : "";
     const account = tool?.kind === "account" && !oversized ? normalizeEmail(input) : null;
-    const statements = [recordStatement(ctx, tool?.name ?? null, account)];
-    if (tool?.kind === "account" && account)
-      statements.push(
-        allowedAccountStatement(ctx, tool.name, account),
-        seenAccountStatement(ctx, account),
-      );
+    const decoded = tool?.kind === "account" && !oversized ? decodeArgs(tool, args) : null;
+    const otherUses =
+      tool?.kind === "account" && decoded?.ok ? (tool.also?.(decoded.value) ?? []) : [];
+    const pairs =
+      tool?.kind === "account" ? [{ account: input, tool: tool.name }, ...otherUses] : [];
+    const checks = () =>
+      pairs.flatMap((pair) => {
+        const email = normalizeEmail(pair.account);
+        // A missing address gets empty results too, without disclosing any account.
+        return email
+          ? [
+              allowedAccountStatement(
+                ctx,
+                pair.tool as Extract<Tool, { kind: "account" }>["name"],
+                email,
+              ),
+              seenAccountStatement(ctx, email),
+            ]
+          : [ctx.db.prepare("SELECT 1 WHERE 0"), ctx.db.prepare("SELECT 1 WHERE 0")];
+      });
+    const statements = [
+      recordStatement(
+        ctx,
+        tool?.name ?? null,
+        account,
+        otherUses.flatMap((use) => {
+          const email = normalizeEmail(use.account);
+          return email ? [{ account: email, tool: use.tool }] : [];
+        }),
+      ),
+      ...(!oversized && decoded?.ok ? checks() : []),
+    ];
     const batch = await ctx.db.batch(statements);
     id = decodeCallId(batch[0]!);
     if (!id) throw new ToolFailure({ code: "server_unavailable" });
@@ -331,31 +442,74 @@ export async function runCall(
         if (Result.isFailure(plain)) throw plain.failure;
         value = plain.success;
       } else {
-        const decoded = decodeArgs(tool, args);
-        if (!decoded.ok) {
-          const name = decoded.field ?? "account";
+        if (!decoded || !decoded.ok) {
+          const name = decoded && !decoded.ok ? (decoded.field ?? "account") : "account";
           throw new ToolFailure({
             code: "invalid_arguments",
-            field: { name, expects: decoded.expects ?? tool.expects[name] ?? "valid" },
+            field: {
+              name,
+              expects:
+                (decoded && !decoded.ok ? decoded.expects : undefined) ??
+                tool.expects[name] ??
+                "valid",
+            },
           });
         }
-        const row = batch[1]?.results[0];
-        if (!row) {
-          email = account ?? "";
-          throw notAllowed(batch[2]?.results[0]);
-        }
-        const allowed: Allowed = await decodeAllowedAccount(row, ctx.config.tokenKey);
-        email = allowed.credential.email;
-        if ((row as { ask: unknown }).ask !== 0) {
-          if (["needs_reconnect", "missing_access", "unreadable"].includes(allowed.status.kind))
+        const checked: Allowed[] = [];
+        let ask = false;
+        for (const [i, pair] of pairs.entries()) {
+          const row = batch[1 + i * 2]?.results[0];
+          const about = i
+            ? {
+                input: pair.account,
+                email: normalizeEmail(pair.account) ?? pair.account,
+                tool: pair.tool,
+              }
+            : undefined;
+          if (!row) {
+            if (!i) email = account ?? "";
+            throw notAllowed(batch[2 + i * 2]?.results[0], about);
+          }
+          const allowed = await decodeAllowedAccount(row, ctx.config.tokenKey);
+          checked.push(allowed);
+          if (!i) email = allowed.credential.email;
+          ask ||= (row as { ask: unknown }).ask !== 0;
+          if (
+            (i || (row as { ask: unknown }).ask !== 0) &&
+            ["needs_reconnect", "missing_access", "unreadable"].includes(allowed.status.kind)
+          )
             throw new ToolFailure({
               code: `account_${allowed.status.kind}` as
                 | "account_needs_reconnect"
                 | "account_missing_access"
                 | "account_unreadable",
+              ...(about ? { about } : {}),
             });
+        }
+        const allowed = checked[0]!;
+        const accounts: Accounts = {
+          own: allowed,
+          others: new Map(checked.slice(1).map((value) => [value.credential.email, value])),
+        };
+        if (ask) {
           const approval = crypto.randomUUID() as ApprovalId;
-          const argumentsSealed = await sealArguments(ctx.config.tokenKey, approval, decoded.value);
+          const ids = (tool.uploads?.(decoded.value) ?? []).map((id) => parseUploadId(id)!);
+          const refs = await Effect.runPromise(readUploads(ctx, ids));
+          if (refs) {
+            const body = (decoded.value as DecodedArgs & { body?: string }).body ?? "";
+            await Effect.runPromise(
+              checkAttachedSize(
+                Array.from(refs.values(), (ref) => ref.size),
+                new TextEncoder().encode(body).byteLength,
+              ),
+            );
+          }
+          const argumentsSealed = await sealArguments(
+            ctx.config.tokenKey,
+            approval,
+            decoded.value,
+            refs ? Object.fromEntries(refs) : {},
+          );
           // Once the batch starts, its lost response must never close the audit record.
           const created = await Effect.runPromise(
             Effect.result(
@@ -363,7 +517,11 @@ export async function runCall(
                 id: approval,
                 call: id,
                 tool: tool.name,
-                uses: [{ account: allowed.credential.id, tool: tool.name }],
+                uses: checked.map((value, i) => ({
+                  account: value.credential.id,
+                  tool: pairs[i]!.tool as typeof tool.name,
+                })),
+                uploads: { ids, found: refs !== null },
                 arguments: argumentsSealed,
                 at,
                 ...(tool.create
@@ -392,6 +550,8 @@ export async function runCall(
                     created.success.waiting.id,
                     created.success.waiting.expiresAt,
                   );
+          } else if (created.success === "upload") {
+            throw uploadNotAvailable(ids[0]!);
           } else if (created.success !== "created") {
             throw new ToolFailure({
               code:
@@ -424,23 +584,28 @@ export async function runCall(
             const executed = await executeAccount(
               ctx,
               tool,
-              allowed,
+              accounts,
               decoded.value,
               at + CALL_DEADLINE,
               Effect.tryPromise({
-                try: () =>
-                  ctx.db.batch([
-                    allowedAccountStatement(ctx, tool.name, account!),
-                    seenAccountStatement(ctx, account!),
-                  ]),
+                try: () => ctx.db.batch(checks()),
                 catch: () => new ToolFailure({ code: "server_unavailable" }),
               }).pipe(
                 Effect.flatMap((checked) => {
-                  const row = checked[0]!.results[0];
-                  if (!row) return Effect.fail(notAllowed(checked[1]!.results[0]));
-                  return (row as { ask: unknown }).ask === 0
-                    ? Effect.void
-                    : Effect.fail(new ToolFailure({ code: "server_unavailable" }));
+                  for (const [i, pair] of pairs.entries()) {
+                    const row = checked[i * 2]!.results[0];
+                    const about = i
+                      ? {
+                          input: pair.account,
+                          email: normalizeEmail(pair.account) ?? pair.account,
+                          tool: pair.tool,
+                        }
+                      : undefined;
+                    if (!row) return Effect.fail(notAllowed(checked[i * 2 + 1]!.results[0], about));
+                    if ((row as { ask: unknown }).ask !== 0)
+                      return Effect.fail(new ToolFailure({ code: "server_unavailable" }));
+                  }
+                  return Effect.void;
                 }),
               ),
             );

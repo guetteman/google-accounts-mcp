@@ -1,3 +1,17 @@
+import {
+  Attachments,
+  alsoOf,
+  uploadsOf,
+  attachingTools,
+  attachmentValues,
+  attachedFiles,
+  withUploadAdvice,
+  attachmentsDescription,
+  attachmentsExpect,
+  type Item,
+} from "./attachments";
+import { createLink } from "../uploads/store";
+import { UPLOAD_PATH } from "../uploads/link";
 import type { Tool as McpTool } from "@modelcontextprotocol/server";
 import { isoSeconds, viewDate, type ViewNote, type ViewValue } from "../approvals/model";
 import { getApproval } from "../approvals/result";
@@ -71,6 +85,7 @@ type AccountExecution<A> =
         account: { email: string },
         args: A,
         confirm: Confirm,
+        sources: Sources,
       ) => Effect.Effect<Created, ToolFailure>;
       defaults: Readonly<Partial<A>>;
       unknown: (email: string, until: number, args: A) => string;
@@ -85,6 +100,16 @@ export type AccountTool = string & { readonly __accountTool: unique symbol };
 export type Send = (
   build: (accessToken: string, signal: AbortSignal) => Request,
 ) => Effect.Effect<Response, ToolFailure>;
+export interface Uploaded {
+  filename: string;
+  type: string;
+  size: number;
+  bytes: Effect.Effect<Uint8Array<ArrayBuffer>, ToolFailure>;
+}
+export interface Sources {
+  from: (account: string) => Send;
+  uploads: ReadonlyMap<string, Uploaded>;
+}
 export type Sending = Send & { readonly __sending: unique symbol };
 export type Confirm = { readonly check: Effect.Effect<Sending, ToolFailure>; readonly late: Send };
 /** What tools/list tells a client about a tool. A tool that changes mail says so. */
@@ -94,7 +119,7 @@ export type ToolAnnotations =
 export type Tool =
   | {
       kind: "plain";
-      name: "list_accounts" | "get_approval";
+      name: "list_accounts" | "get_approval" | "create_upload_link";
       inputSchema?: McpTool["inputSchema"];
       description: string;
       annotations: ToolAnnotations;
@@ -121,6 +146,8 @@ export type Tool =
       input: Schema.Codec<DecodedArgs, unknown>;
       /** What each field must be, for the message of invalid_arguments. */
       expects: Readonly<Record<string, string>>;
+      also?: (args: DecodedArgs) => ReadonlyArray<{ account: string; tool: string }>;
+      uploads?: (args: DecodedArgs) => ReadonlyArray<string>;
       view: {
         action: string;
         joiner: string;
@@ -132,6 +159,7 @@ export type Tool =
         values: (
           args: DecodedArgs,
           send: Send,
+          sources: Sources,
         ) => Effect.Effect<ReadonlyArray<ViewValue>, ViewUnavailable | ToolFailure>;
       };
     } & AccountExecution<DecodedArgs>);
@@ -145,6 +173,8 @@ type AccountDefinition<A extends DecodedArgs> = {
   annotations: ToolAnnotations;
   input: Schema.Codec<A, unknown>;
   expects: Readonly<Record<keyof A & string, string>>;
+  also?: (args: A) => ReadonlyArray<{ account: string; tool: string }>;
+  uploads?: (args: A) => ReadonlyArray<string>;
   view: {
     action: string;
     joiner: string;
@@ -156,6 +186,7 @@ type AccountDefinition<A extends DecodedArgs> = {
     values: (
       args: A,
       send: Send,
+      sources: Sources,
     ) => Effect.Effect<ReadonlyArray<ViewValue>, ViewUnavailable | ToolFailure>;
   };
 } & AccountExecution<A>;
@@ -232,6 +263,7 @@ const DraftInput = Schema.Struct({
   bcc: Schema.optionalKey(Mailboxes),
   subject: Schema.optionalKey(Subject),
   body: Schema.String,
+  attachments: Schema.optionalKey(Attachments),
   reply_to: Schema.optionalKey(
     Schema.String.check(Schema.isBetweenLength(1, 64), Schema.isPattern(/^[A-Za-z0-9_-]+$/)),
   ),
@@ -285,6 +317,7 @@ const draftValues = (
   mail: Outgoing,
   boxes: ReturnType<typeof draftRecipients>,
   plan?: ReplyPlan,
+  files: readonly ViewValue[] = [],
 ): ViewValue[] => {
   const values: ViewValue[] = [];
   if (plan) {
@@ -311,6 +344,7 @@ const draftValues = (
       });
   if (mail.subject)
     values.push({ name: "Subject", text: mail.subject, from: plan ? "gmail" : "agent" });
+  values.push(...files);
   if (args.duplicate !== undefined)
     values.push({
       name: "Duplicate",
@@ -322,6 +356,7 @@ const draftValues = (
 };
 
 const draftExpects = {
+  attachments: attachmentsExpect,
   account: "a string",
   to: "a list of mailboxes, empty or absent when reply_all is true",
   cc: "a list of mailboxes, empty or absent when reply_all is true",
@@ -338,20 +373,54 @@ const repeatSend =
   "Repeating: a call with the same arguments as a call of the last 7 days is the same call. It never sends a second message. It returns the first call's result with repeat_of, or its pending approval. So when you get no answer or an error that says to try again, call again with exactly the same arguments. Copy them; do not reword the text, because changed text is a new message. When the answer says that the outcome is unknown, do not try another wording: ask the owner to look in Gmail.";
 const deliberateSend =
   " To send one more message with the same content on purpose, add duplicate: 2 (then 3).";
-const unknownSend = (email: string, until: number, args: { duplicate?: number }) => {
+const unknownSend = (
+  email: string,
+  until: number,
+  args: { duplicate?: number; attachments?: readonly Item[] },
+) => {
   const next = (args.duplicate ?? 1) + 1;
-  return `The server does not know whether this mail went out from ${email}. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until ${isoSeconds(until)}, repeating this call does not send it again.${next <= 100 ? ` Only if the owner says that it is in neither place, call again with duplicate: ${next}.` : ""}`;
+  return withUploadAdvice(
+    `The server does not know whether this mail went out from ${email}. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until ${isoSeconds(until)}, repeating this call does not send it again.${next <= 100 ? ` Only if the owner says that it is in neither place, call again with duplicate: ${next}.` : ""}`,
+    uploadsOf(args.attachments),
+  );
 };
 const sendRefused = (status: number) =>
   status === 400 ? notSendable(null) : new ToolFailure({ code: "google_unavailable" });
-const sendMail = (send: Send, confirm: Confirm, mail: Outgoing, thread?: string) =>
-  sendStaged(
-    confirm,
-    createDraft(
-      send,
-      { raw: rawMessage(messageText(mail)), ...(thread ? { thread } : {}) },
-      sendRefused,
-    ),
+const composedDraft = (
+  send: Send,
+  mail: Outgoing,
+  items: readonly Item[] | undefined,
+  sources: Sources,
+  thread?: string,
+  refused?: (status: number) => ToolFailure,
+) =>
+  Effect.gen(function* () {
+    if (!items?.length)
+      return createDraft(
+        send,
+        { raw: rawMessage(messageText(mail)), ...(thread ? { thread } : {}) },
+        refused,
+      );
+    const files = yield* attachedFiles(
+      items,
+      sources,
+      new TextEncoder().encode(mail.body).byteLength,
+    );
+    return uploadDraft(send, {
+      message: mixedMessage(mail, files),
+      ...(thread ? { thread } : {}),
+    });
+  });
+const sendMail = (
+  send: Send,
+  confirm: Confirm,
+  mail: Outgoing,
+  items: readonly Item[] | undefined,
+  sources: Sources,
+  thread?: string,
+) =>
+  composedDraft(send, mail, items, sources, thread, sendRefused).pipe(
+    Effect.flatMap((stage) => sendStaged(confirm, stage)),
   );
 const replyExpects =
   "a message whose recipients the server can fill in. For this one, create a draft with create_draft, reply_to, and the recipients, and send it with send_draft";
@@ -610,19 +679,26 @@ export const TOOLS: ReadonlyArray<Tool> = [
     permissionDescription: "Write a draft, new or as a reply. Nothing is sent.",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     description:
-      "Creates a draft, new or as a reply, in one Google account. Nothing is sent. `account` is the address of an account that list_accounts returns. `to`, `cc`, and `bcc` are optional lists of mailboxes, each an address or Name <address>. A draft needs no recipients or subject. `subject` is optional for a new draft, at most 998 characters, with no control characters. `body` is required plain text and may be empty. A reply includes no quote of the answered message unless you write one in body. `reply_to` is a message ID from read_thread for this account. A reply takes its recipients from the message's Reply-To when it has one (the reply_to field of read_thread), else from its From, and its subject from the message with Re: added when needed. A reply to the account's own message goes to that message's To. `reply_all: true` also includes the other To and Cc addresses, without the account's own address or repeated addresses. When you give a non-empty to, cc, or bcc, the reply has exactly the recipients you give. Give to when you must be sure where a reply goes. `reply_all: true` requires reply_to and cannot be combined with given recipients; a non-empty subject cannot be combined with reply_to. The result has account, draft, message, and thread. draft is the ID that stays while the draft exists; message and thread are the IDs at creation and can change when it is edited. `duplicate` is an optional whole number from 2 to 100 for a deliberate copy.\n\nRepeating: a call with the same arguments as a call of the last 7 days is the same call. It never creates a second draft. It returns the first call's result with `repeat_of`, or its pending approval. So when you get no answer or an error that says to try again, call again with exactly the same arguments. Copy them; do not reword the text, because changed text is a new draft. When the answer says that the outcome is unknown, do not try another wording: ask the owner to look in Gmail. To create one more draft with the same content on purpose, add `duplicate: 2` (then 3).\n\nWith ask, a reply that cannot be built appears on the owner's page, not in the agent's answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of a draft; get_approval returns the draft after the owner approves.",
+      "Creates a draft, new or as a reply, in one Google account. Nothing is sent. `account` is the address of an account that list_accounts returns. `to`, `cc`, and `bcc` are optional lists of mailboxes, each an address or Name <address>. A draft needs no recipients or subject. `subject` is optional for a new draft, at most 998 characters, with no control characters. `body` is required plain text and may be empty. A reply includes no quote of the answered message unless you write one in body. `reply_to` is a message ID from read_thread for this account. A reply takes its recipients from the message's Reply-To when it has one (the reply_to field of read_thread), else from its From, and its subject from the message with Re: added when needed. A reply to the account's own message goes to that message's To. `reply_all: true` also includes the other To and Cc addresses, without the account's own address or repeated addresses. When you give a non-empty to, cc, or bcc, the reply has exactly the recipients you give. Give to when you must be sure where a reply goes. `reply_all: true` requires reply_to and cannot be combined with given recipients; a non-empty subject cannot be combined with reply_to. The result has account, draft, message, and thread. draft is the ID that stays while the draft exists; message and thread are the IDs at creation and can change when it is edited. `duplicate` is an optional whole number from 2 to 100 for a deliberate copy.\n\nRepeating: a call with the same arguments as a call of the last 7 days is the same call. It never creates a second draft. It returns the first call's result with `repeat_of`, or its pending approval. So when you get no answer or an error that says to try again, call again with exactly the same arguments. Copy them; do not reword the text, because changed text is a new draft. When the answer says that the outcome is unknown, do not try another wording: ask the owner to look in Gmail. To create one more draft with the same content on purpose, add `duplicate: 2` (then 3).\n\nWith ask, a reply that cannot be built appears on the owner's page, not in the agent's answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of a draft; get_approval returns the draft after the owner approves." +
+      "\n\n" +
+      attachmentsDescription,
     input: DraftInput,
-    defaults: { to: [], cc: [], bcc: [], subject: "", reply_all: false },
+    also: (args) => alsoOf(args.attachments),
+    uploads: (args) => uploadsOf(args.attachments),
+    defaults: { to: [], cc: [], bcc: [], subject: "", reply_all: false, attachments: [] },
     unknown: (email, until, args) => {
       const next = (args.duplicate ?? 1) + 1;
-      return `The server does not know whether the draft was created in ${email}. Ask the owner to look in Drafts. Until ${isoSeconds(until)}, repeating this call does not create it again.${next <= 100 ? ` If the owner says that the draft is missing, call again with duplicate: ${next}.` : ""}`;
+      return withUploadAdvice(
+        `The server does not know whether the draft was created in ${email}. Ask the owner to look in Drafts. Until ${isoSeconds(until)}, repeating this call does not create it again.${next <= 100 ? ` If the owner says that the draft is missing, call again with duplicate: ${next}.` : ""}`,
+        uploadsOf(args.attachments),
+      );
     },
     expects: draftExpects,
     view: {
       action: "create a draft",
       joiner: "in",
       empty: "This call has no other values. The sentence above is the whole call.",
-      values: (args, send) =>
+      values: (args, send, sources) =>
         Effect.gen(function* () {
           const boxes = draftRecipients(args);
           const plan = args.reply_to
@@ -634,10 +710,16 @@ export const TOOLS: ReadonlyArray<Tool> = [
               })
             : undefined;
           const mail = draftMail(args, boxes, plan);
-          return draftValues(args, mail, boxes, plan);
+          return draftValues(
+            args,
+            mail,
+            boxes,
+            plan,
+            yield* attachmentValues(args.attachments ?? [], sources),
+          );
         }),
     },
-    create: (send, account, args) =>
+    create: (send, account, args, _confirm, sources) =>
       Effect.gen(function* () {
         const boxes = draftRecipients(args);
         const plan = args.reply_to
@@ -648,12 +730,14 @@ export const TOOLS: ReadonlyArray<Tool> = [
               given: givenRecipients(boxes),
             })
           : undefined;
-        return yield* creating(
-          createDraft(send, {
-            raw: rawMessage(messageText(draftMail(args, boxes, plan))),
-            ...(plan ? { thread: plan.thread } : {}),
-          }),
+        const stage = yield* composedDraft(
+          send,
+          draftMail(args, boxes, plan),
+          args.attachments,
+          sources,
+          plan?.thread,
         );
+        return yield* creating(stage);
       }),
   }),
   accountTool({
@@ -728,7 +812,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     label: "Download attachment",
     group: "Download attachments",
     irreversible: false,
-    permissionDescription: "Download a file attached to a message of this account.",
+    permissionDescription:
+      "Download a file attached to a message of this account, or copy it into mail that this connection writes from any account.",
     annotations: { readOnlyHint: true },
     description:
       "Returns one attachment of a message of one Google account. `account` is the address of an account that list_accounts returns. `message` is a message ID and `attachment` an attachment ID that read_thread returned for that account; both work only in that account. The result has two parts. The first is JSON with the account, the message, the attachment, and the file's name, media type, and size in bytes. The second is the file. In Claude Code the file comes as an embedded resource of any type: Claude Code saves it to disk and gives its path. In other clients an image (PNG, JPEG, GIF, or WebP) comes as an image and a text file as text, and any other file, such as a PDF, returns attachment_not_readable: tell the owner that Claude Code can open it. An attachment larger than 12 MB returns attachment_too_large with its size. Downloading changes nothing in Gmail. When the owner sets this tool to ask, it returns a pending approval with a link instead of the file; get_approval returns the file after the owner approves, for one hour.",
@@ -798,7 +883,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     permissionDescription:
       "Send a new message from this account. A sent message cannot be taken back.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
-    description: `Sends a new plain text message from one Google account. A sent message cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`to\` is a required non-empty list of mailboxes, each an address or Name <address>; \`cc\` and \`bcc\` are optional lists. \`subject\` is required, 1 to 998 characters without control characters. \`body\` is required plain text and may be empty. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    description: `Sends a new plain text message from one Google account. A sent message cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`to\` is a required non-empty list of mailboxes, each an address or Name <address>; \`cc\` and \`bcc\` are optional lists. \`subject\` is required, 1 to 998 characters without control characters. \`body\` is required plain text and may be empty. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.\n\n${attachmentsDescription}`,
     input: Schema.Struct({
       account: DraftInput.fields.account,
       to: Mailboxes.check(Schema.isMinLength(1)),
@@ -807,6 +892,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
       subject: Subject.check(Schema.isMinLength(1)),
       body: DraftInput.fields.body,
       duplicate: DraftInput.fields.duplicate,
+      attachments: DraftInput.fields.attachments,
     }),
     expects: {
       account: draftExpects.account,
@@ -816,21 +902,31 @@ export const TOOLS: ReadonlyArray<Tool> = [
       subject: `a string of 1 to ${MAX_SUBJECT} characters without control characters`,
       body: draftExpects.body,
       duplicate: draftExpects.duplicate,
+      attachments: attachmentsExpect,
     },
-    defaults: { cc: [], bcc: [] },
+    also: (args) => alsoOf(args.attachments),
+    uploads: (args) => uploadsOf(args.attachments),
+    defaults: { cc: [], bcc: [], attachments: [] },
     unknown: unknownSend,
     view: {
       action: "send a message",
       notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
       joiner: "from",
       empty: "This call has no other values. The sentence above is the whole call.",
-      values: (args) => {
-        const boxes = draftRecipients(args);
-        return Effect.succeed(draftValues(args, draftMail(args, boxes), boxes));
-      },
+      values: (args, _send, sources) =>
+        Effect.gen(function* () {
+          const boxes = draftRecipients(args);
+          return draftValues(
+            args,
+            draftMail(args, boxes),
+            boxes,
+            undefined,
+            yield* attachmentValues(args.attachments ?? [], sources),
+          );
+        }),
     },
-    create: (send, _account, args, confirm) =>
-      sendMail(send, confirm, draftMail(args, draftRecipients(args))),
+    create: (send, _account, args, confirm, sources) =>
+      sendMail(send, confirm, draftMail(args, draftRecipients(args)), args.attachments, sources),
   }),
   accountTool({
     name: "send_reply",
@@ -840,13 +936,14 @@ export const TOOLS: ReadonlyArray<Tool> = [
     permissionDescription:
       "Reply to a message in its thread: to its reply address or its sender, or to everyone on it. A sent reply cannot be taken back.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
-    description: `Sends a plain text reply in a message's thread. A sent reply cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The recipients and subject come from that message, as in create_draft with reply_to and no given recipients: Reply-To (the reply_to field of read_thread) or From, or To for the account's own message, and Re: when needed. \`reply_all: true\` adds the message's other To and Cc recipients, without the account's own address or repeated addresses; it defaults to false. \`body\` is required plain text and may be empty. The body holds no quote unless you write one. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
+    description: `Sends a plain text reply in a message's thread. A sent reply cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The recipients and subject come from that message, as in create_draft with reply_to and no given recipients: Reply-To (the reply_to field of read_thread) or From, or To for the account's own message, and Re: when needed. \`reply_all: true\` adds the message's other To and Cc recipients, without the account's own address or repeated addresses; it defaults to false. \`body\` is required plain text and may be empty. The body holds no quote unless you write one. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.\n\n${attachmentsDescription}`,
     input: Schema.Struct({
       account: DraftInput.fields.account,
       message: MessageId,
       body: DraftInput.fields.body,
       reply_all: DraftInput.fields.reply_all,
       duplicate: DraftInput.fields.duplicate,
+      attachments: DraftInput.fields.attachments,
     }),
     expects: {
       account: draftExpects.account,
@@ -854,26 +951,41 @@ export const TOOLS: ReadonlyArray<Tool> = [
       body: draftExpects.body,
       reply_all: "a boolean",
       duplicate: draftExpects.duplicate,
+      attachments: attachmentsExpect,
     },
-    defaults: { reply_all: false },
+    also: (args) => alsoOf(args.attachments),
+    uploads: (args) => uploadsOf(args.attachments),
+    defaults: { reply_all: false, attachments: [] },
     unknown: unknownSend,
     view: {
       action: "send a reply",
       notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
       joiner: "from",
       empty: "This call has no other values. The sentence above is the whole call.",
-      values: (args, send) =>
-        sendReplyPlan(send, args).pipe(
-          Effect.map((plan) => {
-            const boxes = draftRecipients({});
-            return draftValues(args, draftMail(args, boxes, plan), boxes, plan);
-          }),
-        ),
+      values: (args, send, sources) =>
+        Effect.gen(function* () {
+          const plan = yield* sendReplyPlan(send, args);
+          const boxes = draftRecipients({});
+          return draftValues(
+            args,
+            draftMail(args, boxes, plan),
+            boxes,
+            plan,
+            yield* attachmentValues(args.attachments ?? [], sources),
+          );
+        }),
     },
-    create: (send, _account, args, confirm) =>
+    create: (send, _account, args, confirm, sources) =>
       sendReplyPlan(send, args).pipe(
         Effect.flatMap((plan) =>
-          sendMail(send, confirm, draftMail(args, draftRecipients({}), plan), plan.thread),
+          sendMail(
+            send,
+            confirm,
+            draftMail(args, draftRecipients({}), plan),
+            args.attachments,
+            sources,
+            plan.thread,
+          ),
         ),
       ),
   }),
@@ -1054,6 +1166,35 @@ export const TOOLS: ReadonlyArray<Tool> = [
     description:
       "Returns the state of a call that waits for the owner's approval, and the call's result once the owner approved it. `approval` is the approval ID from the pending answer. Call it after the owner tells you that they decided. It answers at once and never waits for the owner. When the approved call returns a file, the answer has a second part with the file, in the form that get_attachment describes. The status running can also mean that the owner approved and the file is not ready yet. A client that cannot read the file gets attachment_not_readable, and the file stays for the rest of its hour.",
     run: (ctx, args) => getApproval(ctx, args),
+  },
+  {
+    kind: "plain",
+    name: "create_upload_link",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    description:
+      "Gives a link that takes one local file, so that create_draft, send_message, or send_reply can attach it to mail. It needs a client that can read the owner's local files and send an HTTP request, such as Claude Code. It takes no input and returns `url` and `expires_at`. Send the file with one PUT request to `url` followed by the file's name, with the file's bytes as the body and its media type in the Content-Type header. With curl: `curl -sS -T <path> -H 'Content-Type: <media type>' '<url>'`. `url` ends with a slash, so curl adds the file's name itself. The answer to that request is JSON with `upload`, the ID of the stored file, and the name, type, and size that the server stored; check them against the file. Only that answer gives the ID. Then name the file as `{ \"upload\": \"<upload>\" }` in `attachments`. A link takes one file of at most 25 MB, once. The link, and a file that no call has used, end at `expires_at`. One upload attaches to one message; for another message, ask for another link. Never put a file's content into a tool argument. If the answer is a sign-in page and not JSON, the owner has not opened `/uploads/*` in Cloudflare Access yet; tell the owner. It returns tool_not_allowed when the owner has not allowed any tool that attaches files.",
+    run: (ctx) =>
+      Effect.gen(function* () {
+        const listed = yield* readListedTools(
+          ctx.db,
+          ctx.owner,
+          ctx.connection.connectionId,
+          ctx.now(),
+        );
+        if (!listed.tools.some((name) => attachingTools().includes(name as AccountTool)))
+          return yield* Effect.fail(
+            new ToolFailure({
+              code: "tool_not_allowed",
+              said: `The owner has not allowed create_draft, send_message, or send_reply on any account for this connection, so it cannot attach a file. The owner can change this at ${ctx.origin}/connections/${ctx.connection.connectionId}.`,
+            }),
+          );
+        const created = yield* createLink(ctx);
+        if (!created) return yield* Effect.fail(new ToolFailure({ code: "server_unavailable" }));
+        return {
+          url: `${ctx.origin}${UPLOAD_PATH}${created.link}/`,
+          expires_at: isoSeconds(created.expiresAt),
+        };
+      }),
   },
 ];
 export const parseAccountTool = (raw: unknown): AccountTool | null => {

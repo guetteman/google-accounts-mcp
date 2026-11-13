@@ -556,6 +556,6 @@ it("lists the attachment tool with its public schema at ask or allow and removes
     /<script id="page-props" type="application\/json">([\s\S]*?)<\/script>/.exec(html)![1]!,
   ) as Extract<FramePage, { _tag: "Connection" }>;
   expect(page.tools.find((tool) => tool.name === "get_attachment")?.description).toBe(
-    "Download a file attached to a message of this account.",
+    "Download a file attached to a message of this account, or copy it into mail that this connection writes from any account.",
   );
 });

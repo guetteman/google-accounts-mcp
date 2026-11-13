@@ -57,8 +57,7 @@ export const withGoogle = (
 /**
  * One call's requests to Google for one account. withGoogle's contract holds for each request.
  * The first request acquires the access token and later requests reuse it, so a call with
- * several requests refreshes an expired token once. Send the first request alone: requests
- * that start together each acquire a token.
+ * several requests refreshes an expired token once, also when its first reads start together.
  */
 export const googleSession = (
   deps: Deps,
@@ -138,13 +137,14 @@ export const googleSession = (
       }
       return { token: result.success.accessToken, refreshed: true, snapshot, reloaded };
     });
+  const first = Effect.runSync(Effect.cached(acquire(account, false, false)));
   return (build) => {
     const send = (token: string) => {
       const request = build(token);
       return Effect.tryPromise({ try: () => fetch(request), catch: () => new RequestLost() });
     };
     return Effect.gen(function* () {
-      const access = held ?? (yield* acquire(account, false, false));
+      const access = held ?? (yield* first);
       held = access;
       const response = yield* send(access.token);
       if (response.status !== 401 || access.refreshed) return response;

@@ -696,7 +696,14 @@ it("executeAccount fails closed on an unclassified exception after the creating 
   };
   const args = { account: PERSONAL, body: "Hello" };
   await expect(
-    executeAccount(ctx, broken, allowed, args, Date.now() + CALL_DEADLINE, Effect.void),
+    executeAccount(
+      ctx,
+      broken,
+      { own: allowed, others: new Map() },
+      args,
+      Date.now() + CALL_DEADLINE,
+      Effect.void,
+    ),
   ).rejects.toMatchObject({
     code: "outcome_unknown",
     unknown: true,

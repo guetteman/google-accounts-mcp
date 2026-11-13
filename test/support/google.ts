@@ -102,7 +102,14 @@ export const THREAD_LINES = [
   },
 ];
 export const issuedTokens = new Set<string>();
-const authorized = (request: { headers: { get(name: string): string | null } }): boolean => {
+export const accountTraffic: Array<{ url: string; method: string; authorization: string | null }> =
+  [];
+const authorized = (request: Pick<Request, "url" | "method" | "headers">): boolean => {
+  accountTraffic.push({
+    url: request.url,
+    method: request.method,
+    authorization: request.headers.get("Authorization"),
+  });
   const bearer = /^Bearer (.+)$/.exec(request.headers.get("Authorization") ?? "")?.[1];
   return bearer !== undefined && issuedTokens.has(bearer);
 };
@@ -176,6 +183,7 @@ export const google = {
     message: string;
   }>,
   uploadAnswers: [] as Array<(request: Pick<Request, "signal">) => Response | Promise<Response>>,
+  accountMessages: new Map<string, object>(),
   messageRequests: [] as string[],
   messageAnswers: new Map<
     string,
@@ -262,6 +270,8 @@ export const google = {
     this.uploadAnswers = [];
     this.messageRequests = [];
     this.messageAnswers.clear();
+    this.accountMessages.clear();
+    accountTraffic.length = 0;
     this.labelRequests = [];
     this.labelAnswers = [];
     this.threadRequests = [];
@@ -458,6 +468,12 @@ export const google = {
         this.messageRequests.push(request.url);
         if (request.method !== "GET") return new HttpResponse(null, { status: 405 });
         if (!authorized(request)) return new HttpResponse(null, { status: 401 });
+        if (this.accountMessages.size) {
+          const message = this.accountMessages.get(
+            `${request.headers.get("Authorization")}:${String(params.message)}`,
+          );
+          return message ? HttpResponse.json(message) : new HttpResponse(null, { status: 404 });
+        }
         return (
           (await this.messageAnswers.get(String(params.message))?.(request)) ??
           new HttpResponse(null, { status: 404 })
