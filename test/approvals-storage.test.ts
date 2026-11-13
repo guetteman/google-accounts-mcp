@@ -22,7 +22,7 @@ const context = async (db = env.DB) => {
   return { db, owner: { generation: owner.generation, email: owner.email! } };
 };
 
-it("looks up calls by primary key in every approval audit statement", async () => {
+it("looks up calls by record ID in every approval audit statement", async () => {
   const f = await fixture();
   await setting(f, "ask");
   let operation = "create";
@@ -81,8 +81,10 @@ it("looks up calls by primary key in every approval audit statement", async () =
   );
   for (const plan of plans) {
     expect(plan.details.join("\n"), plan.operation).not.toMatch(/SCAN calls\b/);
+    // Activity's outcome index can also seek a record by rowid. The lookup must include
+    // equality on that ID; selecting every pending call would grow with the log.
     expect(plan.details.join("\n"), plan.operation).toMatch(
-      /SEARCH calls USING INTEGER PRIMARY KEY/,
+      /SEARCH calls USING (?:INTEGER PRIMARY KEY|(?:COVERING )?INDEX \S+) \([^\n)]*\browid=\?/,
     );
   }
 });

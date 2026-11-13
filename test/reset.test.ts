@@ -219,13 +219,14 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
     const guard =
       "EXISTS (SELECT 1 FROM owner WHERE id = 1 AND state = 'resetting' AND generation = 7)";
     const cleanup = RESET_CLEANUP.map((statement) => statement({ guard, now: NOW }));
-    expect(cleanup).toHaveLength(7);
+    expect(cleanup).toHaveLength(8);
     expect(cleanup).toEqual(
       expect.arrayContaining([
         `DELETE FROM connections WHERE ${guard}`,
         `DELETE FROM accounts WHERE ${guard}`,
         `DELETE FROM permissions WHERE ${guard}`,
         `DELETE FROM calls WHERE ${guard}`,
+        `DELETE FROM call_accounts WHERE ${guard}`,
         `DELETE FROM approvals WHERE ${guard}`,
         `DELETE FROM once WHERE ${guard}`,
         `DELETE FROM uploads WHERE ${guard}`,
@@ -293,8 +294,14 @@ it("continues connection cleanup after an interrupted reset", async () => {
 
 it("deletes live and removed accounts only under the confirmed reset guard", async () => {
   await pinnedOwner(1);
-  await seedAccount();
+  const account = await seedAccount();
   await seedAccount({ state: "removed", refresh_token: null, access_token: null });
+  await env.DB.prepare(
+    "INSERT INTO calls (connection_id,account_id,tool,at) VALUES ('reset-connection',?,'read_thread',?)",
+  )
+    .bind(account.id, NOW)
+    .run();
+  expect((await env.DB.prepare("SELECT * FROM call_accounts").all()).results).toHaveLength(1);
   const row = await readForPlan();
   const before = await dump();
   await runAll(
@@ -303,6 +310,7 @@ it("deletes live and removed accounts only under the confirmed reset guard", asy
   expect(await dump()).toEqual(before);
   await runAll(resetPlan(row, NOW).statements);
   expect(await accounts()).toEqual([]);
+  expect((await env.DB.prepare("SELECT * FROM call_accounts").all()).results).toEqual([]);
 });
 
 it("deletes same-call rows only under the confirmed reset guard", async () => {

@@ -569,7 +569,176 @@ const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
   ),
   "approval-unconfirmed": { ...approvalBase, unconfirmed: true },
 };
+const activityConnections: ReadonlyArray<import("../activity/store").ActivityConnection> = [
+  ...connections.map(({ id, name, appLabel, status }) => ({ id, name, appLabel, status })),
+  {
+    id: "66666666-6666-4666-8666-666666666666" as ConnectionView["id"],
+    name: "Claude Code on the Fabrikam finance team's shared build machine",
+    appLabel: "Claude Code",
+    status: { kind: "active" },
+  },
+];
+const activityAccounts: ReadonlyArray<import("../activity/store").ActivityAccount> = [
+  ...permissionAccounts.map(({ id, name, email }) => ({ id, name, email, removedOn: null })),
+  {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-000000000005" as import("../accounts/model").AccountId,
+    name: "Studio",
+    email: "alex@oldwork.example",
+    removedOn: "Oct 20",
+  },
+];
+const activityTime = (at: number): import("../activity/store").ActivityRecord["time"] => {
+  const iso = new Date(at).toISOString();
+  const clock = iso.slice(11, 16);
+  const today = iso.startsWith("2026-11-13");
+  const date = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(new Date(at).getUTCFullYear() === 2026 ? {} : { year: "numeric" }),
+    timeZone: "UTC",
+  }).format(at);
+  const fullDate = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(at);
+  return {
+    iso,
+    short: today ? clock : `${date}, ${clock}`,
+    full: `${fullDate} at ${clock} UTC`,
+    today,
+  };
+};
+const activityRecord = (
+  id: number,
+  outcome: import("../activity/store").ActivityRecord["outcome"],
+  tool: string | null = "read_thread",
+  account = 0,
+  connection = 0,
+  at = Date.UTC(2026, 10, 13, 14, 21) - (100 - id) * 43 * 60_000,
+): import("../activity/store").ActivityRecord => {
+  const definition = TOOLS.find((t) => t.name === tool);
+  return {
+    id: id as import("../calls/store").CallId,
+    outcome,
+    tool: definition
+      ? { name: definition.name, label: definition.label, kind: definition.kind }
+      : null,
+    account: account < 0 ? null : activityAccounts[account]!,
+    connection: activityConnections[connection]!,
+    also: [],
+    time: activityTime(at),
+    approval:
+      outcome === "pending" ? { id: approvalBase.id, state: "waiting", decidedOn: null } : null,
+  };
+};
+const activityRecords: ReadonlyArray<import("../activity/store").ActivityRecord> = [
+  activityRecord(100, "pending", "send_message"),
+  {
+    ...activityRecord(99, "success", "send_message", 0, 1),
+    also: [
+      {
+        account: activityAccounts[1]!,
+        tool: { name: "get_attachment", label: "Download attachment" },
+      },
+    ],
+  },
+  activityRecord(98, "refused", "delete_messages", 1),
+  activityRecord(97, "failed", "search_threads", 2),
+  {
+    ...activityRecord(96, "rejected", "trash_messages"),
+    approval: {
+      id: approvalBase.id,
+      state: "rejected",
+      decidedOn: "Fri, Nov 13, 2026 at 11:34 UTC",
+    },
+  },
+  activityRecord(95, "expired", "send_reply", 1, 2),
+  activityRecord(94, "unknown", "create_draft", 3, 5),
+  activityRecord(93, "repeat", "send_message"),
+  activityRecord(92, "success", "list_accounts", -1),
+  activityRecord(91, "refused", "read_thread", -1),
+  activityRecord(90, "refused", null, -1),
+  activityRecord(89, "success", "get_approval", -1),
+  activityRecord(88, "success", "create_upload_link", -1),
+  activityRecord(87, "success", "list_labels", 4, 3),
+  activityRecord(86, "refused", "change_labels", 4, 4),
+  ...Array.from({ length: 10 }, (_, i) =>
+    activityRecord(85 - i, "success", "read_thread", i % 4, i % 3),
+  ),
+];
+const activityOlderRecords = Array.from({ length: 25 }, (_, i) => {
+  const [outcome, tool] = (
+    [
+      ["success", "search_threads"],
+      ["refused", "change_labels"],
+      ["failed", "create_draft"],
+      ["expired", "send_message"],
+      ["repeat", "send_reply"],
+      ["unknown", "read_thread"],
+    ] as const
+  )[i % 6]!;
+  return activityRecord(
+    75 - i,
+    outcome,
+    tool,
+    i % 5,
+    i % activityConnections.length,
+    i === 24 ? Date.UTC(2025, 11, 31, 16, 38) : Date.UTC(2026, 10, 12, 18, 7) - i * 7 * 3_600_000,
+  );
+});
+const activityPreview = (scenario: string): Page => {
+  const filter: import("../activity/store").ActivityFilter | null =
+    scenario === "pending"
+      ? { kind: "outcome", outcome: "pending" }
+      : scenario === "account"
+        ? { kind: "account", id: activityAccounts[1]!.id }
+        : scenario === "ended"
+          ? { kind: "connection", id: activityConnections[3]!.id }
+          : scenario === "no-match"
+            ? { kind: "outcome", outcome: "failed" }
+            : null;
+  const records =
+    scenario === "empty" || scenario === "no-match"
+      ? []
+      : scenario === "older"
+        ? activityOlderRecords
+        : scenario === "pending"
+          ? activityRecords.filter((r) => r.outcome === "pending")
+          : scenario === "account"
+            ? activityRecords.filter(
+                (r) =>
+                  r.account?.id === activityAccounts[1]!.id ||
+                  r.also.some((a) => a.account.id === activityAccounts[1]!.id),
+              )
+            : scenario === "ended"
+              ? activityRecords.filter((r) => r.connection.id === activityConnections[3]!.id)
+              : activityRecords;
+  return {
+    _tag: "Activity",
+    frame: { host, ownerEmail: "owner@example.com", current: "activity" },
+    query: {
+      filter,
+      before: scenario === "older" ? (76 as import("../calls/store").CallId) : null,
+    },
+    load: {
+      records,
+      connections: scenario === "empty" ? [] : activityConnections,
+      accounts: scenario === "empty" ? [] : activityAccounts,
+      older: scenario === "activity" ? (76 as import("../calls/store").CallId) : null,
+    },
+  };
+};
+
 export const previews: Readonly<Record<string, Page>> = {
+  ...Object.fromEntries(
+    ["activity", "older", "pending", "account", "ended", "no-match", "empty"].map((scenario) => [
+      scenario === "activity" ? "activity" : `activity-${scenario}`,
+      activityPreview(scenario),
+    ]),
+  ),
   ...approvalPreviews,
   "approval-waiting-notes": {
     ...approvalBase,

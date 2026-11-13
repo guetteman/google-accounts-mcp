@@ -15,12 +15,21 @@ export async function dump(
 ): Promise<Record<string, unknown[]>> {
   const tables = await db
     .prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name",
+      "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name",
     )
-    .all<{ name: string }>();
+    .all<{ name: string; sql: string }>();
   const out: Record<string, unknown[]> = {};
-  for (const { name } of tables.results) {
-    const rows = await db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all();
+  for (const { name, sql } of tables.results) {
+    const order = /WITHOUT ROWID/i.test(sql)
+      ? (
+          await db.prepare(`PRAGMA table_info("${name}")`).all<{ name: string; pk: number }>()
+        ).results
+          .filter((column) => column.pk > 0)
+          .sort((a, b) => a.pk - b.pk)
+          .map((column) => `"${column.name}"`)
+          .join(",")
+      : "rowid";
+    const rows = await db.prepare(`SELECT * FROM "${name}" ORDER BY ${order}`).all();
     out[name] = rows.results;
   }
   out.OAUTH_KV = await kvDump(kv);
@@ -78,6 +87,7 @@ export function observeStatements(
   real: D1Database,
   before: (sql: string) => void | Promise<void>,
   after: (sql: string) => void = () => {},
+  onResult?: (sql: string, result: D1Result) => void,
 ): D1Database {
   const originals = new WeakMap<
     D1PreparedStatement,
@@ -91,11 +101,26 @@ export function observeStatements(
         if (key === "run" || key === "all" || key === "first" || key === "raw") {
           return async (...args: unknown[]) => {
             await before(sql);
+            if (onResult && (key === "first" || key === "raw")) {
+              const result = await target.all();
+              onResult(sql, result);
+              after(sql);
+              if (key === "first") {
+                const row = result.results[0] ?? null;
+                return typeof args[0] === "string" && row !== null ? row[args[0]] : row;
+              }
+              const columns = Object.keys(result.results[0] ?? {});
+              const rows = result.results.map((row) => columns.map((column) => row[column]));
+              return (args[0] as { columnNames?: boolean } | undefined)?.columnNames
+                ? [columns, ...rows]
+                : rows;
+            }
             const result = await Reflect.apply(
               value as (...args: unknown[]) => unknown,
               target,
               args,
             );
+            onResult?.(sql, result as D1Result);
             after(sql);
             return result;
           };
@@ -120,7 +145,11 @@ export function observeStatements(
             unwrapped.push(original.statement);
           }
           const results = await target.batch(unwrapped);
-          for (const statement of statements) after(originals.get(statement)!.sql);
+          statements.forEach((statement, i) => {
+            const sql = originals.get(statement)!.sql;
+            onResult?.(sql, results[i]!);
+            after(sql);
+          });
           return results;
         };
       }
@@ -243,4 +272,18 @@ export function racingConnectionWriteDb(
       await changeOwner();
     }
   });
+}
+
+/** D1's measured rows for every prepared execution, including first() and batch(). */
+export function readRecordingDb(real: D1Database = env.DB) {
+  const reads: { sql: string; rows: number }[] = [];
+  const db = observeStatements(
+    real,
+    () => {},
+    () => {},
+    (sql, result) => {
+      reads.push({ sql, rows: result.meta.rows_read });
+    },
+  );
+  return { db, reads };
 }

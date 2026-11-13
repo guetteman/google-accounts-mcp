@@ -11,6 +11,7 @@ export async function hydrateAccounts(input: {
   html: string;
   headers: Record<string, string>;
   connection?: boolean;
+  activity?: { url: string; html: string; headers: Record<string, string> };
   approval?: {
     action: "approve" | "reject";
     response: ApprovalPageProps;
@@ -67,6 +68,8 @@ export async function hydrateAccounts(input: {
       const url = new URL(route.request().url());
       if (url.href === input.url)
         return route.fulfill({ body: input.html, headers: input.headers });
+      if (input.activity && url.href === input.activity.url)
+        return route.fulfill({ body: input.activity.html, headers: input.activity.headers });
       if (input.approval && url.pathname.endsWith(`/${input.approval.action}`)) {
         submissions.push(Object.fromEntries(new URLSearchParams(route.request().postData() ?? "")));
         await decisionHeld;
@@ -112,6 +115,40 @@ export async function hydrateAccounts(input: {
     });
     await page.goto(input.url);
     if (input.dark) await page.locator("html").evaluate((el) => el.classList.add("dark"));
+    if (input.activity) {
+      await page.evaluate(() => document.fonts.ready);
+      const records = page.getByRole("list", { name: "Records", exact: true });
+      const initialRows = await records.locator(":scope > li").count();
+      const details: string[] = [];
+      const triggers = records.getByRole("button", { name: /Show details$/ });
+      const urls: string[] = [];
+      for (let i = 0; i < initialRows; i++) {
+        await triggers.nth(i).click();
+        const detail = records.locator("dl:visible");
+        await detail.waitFor();
+        details.push(await detail.innerText());
+        urls.push(page.url());
+        await triggers.nth(i).click();
+      }
+      const topBefore = (await records.boundingBox())!.y;
+      await page.getByRole("button", { name: "Account: All accounts", exact: true }).click();
+      await page.getByRole("menuitem", { name: /Northwind/ }).click();
+      await page.waitForURL(input.activity.url);
+      const filtered = page.getByRole("list", { name: "Records", exact: true });
+      await filtered.waitFor();
+      return {
+        clientLoads,
+        initialRows,
+        details,
+        urls,
+        filteredUrl: page.url(),
+        filteredRows: await filtered.locator(":scope > li").count(),
+        topBefore,
+        topAfter: (await filtered.boundingBox())!.y,
+        overflow: await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+        errors,
+      };
+    }
     if (input.approval) {
       await page.evaluate(() => document.fonts.ready);
       const before = await page.locator("main").boundingBox();

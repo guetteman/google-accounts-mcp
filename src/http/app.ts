@@ -1,3 +1,4 @@
+import { activityRoutes } from "../activity/routes";
 import { approvalRoutes } from "../approvals/routes";
 import { accountRoutes } from "../accounts/routes";
 import { Result } from "effect";
@@ -36,6 +37,7 @@ app.use("*", async (c, next) => {
 });
 app.route("/", consentRoutes);
 app.route("/", connectionRoutes);
+app.route("/", activityRoutes);
 app.route("/", accountRoutes);
 app.route("/", approvalRoutes);
 app.route("/", ownerRoutes);

@@ -120,6 +120,7 @@ export type Tool =
   | {
       kind: "plain";
       name: "list_accounts" | "get_approval" | "create_upload_link";
+      label: string;
       inputSchema?: McpTool["inputSchema"];
       description: string;
       annotations: ToolAnnotations;
@@ -479,6 +480,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   {
     kind: "plain",
     name: "list_accounts",
+    label: "List accounts",
     annotations: { readOnlyHint: true },
     description:
       "Lists the Google accounts this connection can use, as a JSON array. An empty array means the owner has not given this connection access to any account.",
@@ -1152,6 +1154,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   {
     kind: "plain",
     name: "get_approval",
+    label: "Get approval result",
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
@@ -1165,6 +1168,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
   {
     kind: "plain",
     name: "create_upload_link",
+    label: "Create upload link",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     description:
       "Gives a link that takes one local file, so that create_draft, send_message, or send_reply can attach it to mail. It needs a client that can read the owner's local files and send an HTTP request, such as Claude Code. It takes no input and returns `url` and `expires_at`. Send the file with one PUT request to `url` followed by the file's name, with the file's bytes as the body and its media type in the Content-Type header. With curl: `curl -sS -T <path> -H 'Content-Type: <media type>' '<url>'`. `url` ends with a slash, so curl adds the file's name itself. The answer to that request is JSON with `upload`, the ID of the stored file, and the name, type, and size that the server stored; check them against the file. Only that answer gives the ID. Then name the file as `{ \"upload\": \"<upload>\" }` in `attachments`. A link takes one file of at most 25 MB, once. The link, and a file that no call has used, end at `expires_at`. One upload attaches to one message; for another message, ask for another link. Never put a file's content into a tool argument. If the answer is a sign-in page and not JSON, the owner has not opened `/uploads/*` in Cloudflare Access yet; tell the owner. It returns tool_not_allowed when the owner has not allowed any tool that attaches files.",
