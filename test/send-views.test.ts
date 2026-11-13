@@ -26,7 +26,7 @@ const originalForApproval = () => {
       part("text/plain", "Distinct original body.\nSecond original line.", "0"),
       part("application/pdf", "PDF", "1", "source-menu.pdf"),
       {
-        ...part("image/png", "", "2", "source-photo.png"),
+        ...part("message/rfc822", "", "2", "🙂".repeat(100) + ".eml"),
         body: { size: 5, attachmentId: "image" },
       },
     ]),
@@ -194,7 +194,11 @@ it("the forward lists every file before its exact quoted block without downloadi
     { name: "Subject", text: "Fwd: Original subject for forwarding", from: "gmail" },
     { name: "Attachments", text: "2 files, 8 bytes in all", from: "gmail" },
     { name: "Attachment 1", text: "source-menu.pdf (application/pdf, 3 bytes)", from: "gmail" },
-    { name: "Attachment 2", text: "source-photo.png (image/png, 5 bytes)", from: "gmail" },
+    {
+      name: "Attachment 2",
+      text: `${"🙂".repeat(70)}.eml (application/octet-stream, 5 bytes)`,
+      from: "gmail",
+    },
     { name: "Duplicate", text: "2 (a deliberate copy of an earlier call)", from: "agent" },
     { name: "Note", text: "See below.", from: "agent" },
     {
@@ -225,7 +229,7 @@ it("the forward lists every file before its exact quoted block without downloadi
   }));
   expect(files).toEqual([
     { filename: "source-menu.pdf", type: "application/pdf", size: 3 },
-    { filename: "source-photo.png", type: "image/png", size: 5 },
+    { filename: "🙂".repeat(70) + ".eml", type: "application/octet-stream", size: 5 },
   ]);
   expect(
     values.filter((value) => /^Attachment \d+$/.test(value.name)).map((value) => value.text),

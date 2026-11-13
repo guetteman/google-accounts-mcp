@@ -6,7 +6,7 @@ import { get } from "./gmail";
 import { attachmentParts, header, RawMessage, readMessage, type RawPart } from "./message";
 import { BodyBudget, textOf } from "./thread";
 import { partBytes } from "./attachment";
-import type { FilePart } from "./mail";
+import { fileFields, type FilePart } from "./mail";
 
 export const MAX_FORWARD_BYTES = 25_000_000;
 /**
@@ -55,8 +55,7 @@ export const forwardPlan = (send: Send, message: string): Effect.Effect<ForwardP
       quoted,
       files: attachmentParts(raw).map((part) => ({
         part,
-        filename: part.filename,
-        type: part.mimeType,
+        ...fileFields({ filename: part.filename, type: part.mimeType }),
         size: part.body.size,
       })),
       original: {

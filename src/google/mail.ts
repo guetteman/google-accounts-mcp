@@ -178,26 +178,37 @@ export interface FilePart {
   bytes: Uint8Array;
 }
 const DISPOSITION = "Content-Disposition: attachment; filename*=UTF-8''";
+const encodeFilename = (text: string) =>
+  encodeURIComponent(text).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 /** Keep the encoded header within 900 ASCII characters, preserving a short extension. */
-const encodedFilename = (value: string): string => {
+const boundedFilename = (value: string): string => {
   const name = value.toWellFormed();
-  const encode = (text: string) =>
-    encodeURIComponent(text).replace(
-      /[!'()*]/g,
-      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-    );
   const dot = name.lastIndexOf(".");
   const extension = dot > 0 && /^.{1,16}$/su.test(name.slice(dot + 1)) ? name.slice(dot) : "";
-  const suffix = encode(extension);
-  const budget = 900 - DISPOSITION.length - suffix.length;
-  let encoded = "";
+  const budget = 900 - DISPOSITION.length - encodeFilename(extension).length;
+  let size = 0;
+  let kept = "";
   for (const character of name.slice(0, name.length - extension.length)) {
-    const next = encode(character);
-    if (encoded.length + next.length > budget) break;
-    encoded += next;
+    const cost = encodeFilename(character).length;
+    if (size + cost > budget) break;
+    kept += character;
+    size += cost;
   }
-  return encoded + suffix;
+  return kept + extension;
 };
+/** The file metadata the recipient gets, shared by composition and its approval view. */
+export const fileFields = (file: Pick<FilePart, "filename" | "type">) => ({
+  filename: boundedFilename(file.filename),
+  type:
+    file.type.length <= 100 &&
+    !/^message\//i.test(file.type) &&
+    /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(file.type)
+      ? file.type
+      : "application/octet-stream",
+});
 
 /** Encode in multiples of 57 bytes, so chunks end on both a base64 and a MIME line boundary. */
 export const mixedMessage = (mail: Outgoing, files: ReadonlyArray<FilePart>): Blob => {
@@ -216,13 +227,9 @@ export const mixedMessage = (mail: Outgoing, files: ReadonlyArray<FilePart>): Bl
     ].join("\r\n"),
   ];
   for (const file of files) {
-    const type =
-      file.type.length <= 100 &&
-      !/^message\//i.test(file.type) &&
-      /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(file.type)
-        ? file.type
-        : "application/octet-stream";
-    const filename = encodedFilename(file.filename);
+    const fields = fileFields(file);
+    const type = fields.type;
+    const filename = encodeFilename(fields.filename);
     parts.push(
       `--${boundary}\r\nContent-Type: ${type}\r\n${DISPOSITION}${filename}\r\nContent-Transfer-Encoding: base64\r\n\r\n`,
     );
