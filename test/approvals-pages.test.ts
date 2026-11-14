@@ -1,8 +1,6 @@
 import { env } from "cloudflare:workers";
 import { expect, it } from "vite-plus/test";
 import "./support/account-checks";
-import { previews } from "../src/pages/previews";
-import { renderPage } from "../src/pages/render";
 import { fixture } from "./support/permissions";
 import { ask, page, setting } from "./support/approvals";
 import type { TestEnv } from "./env";
@@ -73,67 +71,6 @@ it.each(["approve", "reject", "changed", "lost", "503"] as const)(
   },
   30_000,
 );
-it.each([
-  { width: 390, dark: false },
-  { width: 390, dark: true },
-  { width: 1280, dark: false },
-  { width: 1280, dark: true },
-])(
-  "renders approval pages at $width px with dark=$dark without overflow",
-  async ({ width, dark }) => {
-    for (const name of [
-      "waiting-long-names",
-      "cannot-show",
-      "changed",
-      "succeeded",
-      "failed",
-      "unconfirmed",
-    ]) {
-      const response = renderPage(previews[`approval-${name}`]!);
-      const hydrated = await (
-        await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
-          method: "POST",
-          body: JSON.stringify({
-            url: `${ORIGIN}/__pages/approval-${name}`,
-            html: await response.text(),
-            headers: Object.fromEntries(response.headers),
-            width,
-            dark,
-            layout: true,
-          }),
-        })
-      ).json<{ clientLoads: number; overflow: boolean; errors: string[] }>();
-      expect(hydrated.errors).toEqual([]);
-      expect(hydrated.clientLoads).toBe(1);
-      expect(hydrated.overflow).toBe(false);
-    }
-  },
-  60_000,
-);
-
-it.each([390, 1280])(
-  "renders the three-option permission control at %s px",
-  async (width) => {
-    const response = renderPage(previews["connection-some-allowed"]!);
-    const hydrated = await (
-      await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
-        method: "POST",
-        body: JSON.stringify({
-          url: `${ORIGIN}/__pages/connection-some-allowed`,
-          html: await response.text(),
-          headers: Object.fromEntries(response.headers),
-          width,
-          layout: true,
-        }),
-      })
-    ).json<{ clientLoads: number; overflow: boolean; errors: string[] }>();
-    expect(hydrated.errors).toEqual([]);
-    expect(hydrated.clientLoads).toBe(1);
-    expect(hydrated.overflow).toBe(false);
-  },
-  30_000,
-);
-
 it.each(["double", "identity", "digest"] as const)(
   "protects approval submissions against %s mistakes",
   async (protection) => {

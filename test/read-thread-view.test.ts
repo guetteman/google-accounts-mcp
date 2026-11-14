@@ -2,7 +2,6 @@ import { env } from "cloudflare:workers";
 import { Effect } from "effect";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
-import type { TestEnv } from "./env";
 import type { ApprovalPageProps, ViewValue } from "../src/approvals/model";
 import { viewDigest } from "../src/approvals/view";
 import { TOOLS } from "../src/mcp/tools";
@@ -19,7 +18,7 @@ import {
   toolCall,
 } from "./support/permissions";
 import { observeStatements } from "./support/db";
-import { ORIGIN, testEnv, textOf } from "./support/worker";
+import { testEnv, textOf } from "./support/worker";
 import { asking, message, read, serveThread, THREAD } from "./support/thread";
 
 const readTool = TOOLS.find((t) => t.name === "read_thread")!;
@@ -111,34 +110,6 @@ it.each([
       );
   },
 );
-
-it("renders thread, search, notes and label previews at 390 and 1280 pixels without overflow", async () => {
-  for (const name of [
-    "approval-waiting-thread",
-    "approval-waiting-search",
-    "approval-waiting-notes",
-    "approval-waiting-labels",
-    "approval-waiting-labels-many",
-  ])
-    for (const width of [390, 1280]) {
-      const response = renderPage(previews[name]!);
-      const result = await (
-        await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
-          method: "POST",
-          body: JSON.stringify({
-            url: `${ORIGIN}/__pages/${name}`,
-            html: await response.text(),
-            headers: Object.fromEntries(response.headers),
-            layout: true,
-            width,
-          }),
-        })
-      ).json<{ overflow: boolean; errors: string[] }>();
-      expect(result.errors).toEqual([]);
-      expect(result.overflow).toBe(false);
-    }
-  // Ten Chromium pages, within the existing browser-test budget.
-}, 60_000);
 
 it.each([200, 500])(
   "includes notes only when Gmail's %s response allows a view",

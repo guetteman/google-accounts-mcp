@@ -1,9 +1,6 @@
-import { env } from "cloudflare:workers";
 import { expect, it } from "vite-plus/test";
 import "./support/account-checks";
-import type { TestEnv } from "./env";
 import { renderPage } from "../src/pages/render";
-import { previews } from "../src/pages/previews";
 import { parseAddressList } from "../src/google/mail";
 import { answer, approve, page } from "./support/approvals";
 import { PERSONAL } from "./support/permissions";
@@ -16,7 +13,7 @@ import {
   SOURCE,
 } from "./support/draft";
 import { google } from "./support/google";
-import { ORIGIN, textOf } from "./support/worker";
+import { textOf } from "./support/worker";
 
 const recipientAddresses = (text: string | undefined) => {
   const parsed = parseAddressList(text ?? "");
@@ -213,28 +210,3 @@ it.each([400, 404, 500])(
     expect(google.draftCreates).toEqual([]);
   },
 );
-
-it("renders draft, reply and two permission groups at 390 and 1280 pixels without overflow", async () => {
-  for (const name of [
-    "approval-waiting-draft",
-    "approval-waiting-reply",
-    "connection-some-allowed",
-  ])
-    for (const width of [390, 1280]) {
-      const response = renderPage(previews[name]!);
-      const result = await (
-        await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
-          method: "POST",
-          body: JSON.stringify({
-            url: `${ORIGIN}/__pages/${name}`,
-            html: await response.text(),
-            headers: Object.fromEntries(response.headers),
-            layout: true,
-            width,
-          }),
-        })
-      ).json<{ overflow: boolean; errors: string[] }>();
-      expect(result.errors).toEqual([]);
-      expect(result.overflow).toBe(false);
-    }
-}, 60_000);

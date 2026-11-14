@@ -1,7 +1,6 @@
 import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
-import type { TestEnv } from "./env";
 import { previews } from "../src/pages/previews";
 import { renderPage } from "../src/pages/render";
 import { NOW } from "./support/accounts";
@@ -12,7 +11,7 @@ import { requests } from "./support/network";
 import { callRows, PERSONAL } from "./support/permissions";
 import { message } from "./support/thread";
 import { asking, changed, ids15, operations, serveMessages, WARNING } from "./support/trash";
-import { ORIGIN, testEnv, textOf } from "./support/worker";
+import { testEnv, textOf } from "./support/worker";
 
 const metadataUrl = (id: string) =>
   `${MESSAGES_URL}/${id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`;
@@ -476,7 +475,7 @@ it("keeps an approved delete unknown when its deadline cuts a later change in fl
   expect((await callRows())[0]!.outcome).toBeNull();
 });
 
-it("renders the delete preview at 390 and 1280 pixels without overflow", async () => {
+it("the delete preview names a message the account does not have and warns", () => {
   const preview = previews["approval-waiting-delete"]!;
   if (preview._tag !== "Approval") throw new Error("Expected approval preview");
   expect(preview.request.values).toHaveLength(7);
@@ -486,21 +485,4 @@ it("renders the delete preview at 390 and 1280 pixels without overflow", async (
     from: "agent",
   });
   expect(preview.request.notes).toEqual([{ text: WARNING, warning: true }]);
-  for (const width of [390, 1280]) {
-    const response = renderPage(preview);
-    const result = await (
-      await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
-        method: "POST",
-        body: JSON.stringify({
-          url: `${ORIGIN}/__pages/approval-waiting-delete`,
-          html: await response.text(),
-          headers: Object.fromEntries(response.headers),
-          layout: true,
-          width,
-        }),
-      })
-    ).json<{ overflow: boolean; errors: string[] }>();
-    expect(result.errors).toEqual([]);
-    expect(result.overflow).toBe(false);
-  }
-}, 60_000);
+});

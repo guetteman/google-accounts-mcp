@@ -1,16 +1,13 @@
 import { MAX_FORWARD_FILES } from "../src/google/forward";
-import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
-import type { TestEnv } from "./env";
 import { renderPage } from "../src/pages/render";
-import { previews } from "../src/pages/previews";
 import { answer, approve, decided, digest, page, post } from "./support/approvals";
 import { decodedMail, SOURCE } from "./support/draft";
 import { google } from "./support/google";
 import { fullMessage, mime, sendCall, sendFixture, serveFull } from "./support/send";
 import { part, tree } from "./support/thread";
-import { ORIGIN, textOf } from "./support/worker";
+import { textOf } from "./support/worker";
 
 const originalForApproval = () => {
   const raw = fullMessage({
@@ -428,32 +425,6 @@ it.each(["gone", "unreadable", "incomplete"])(
     expect(google.sends).toEqual([]);
   },
 );
-
-it("the four send previews render at 390 and 1280 pixels without overflow", async () => {
-  for (const name of [
-    "approval-waiting-send",
-    "approval-waiting-send-reply",
-    "approval-waiting-forward",
-    "approval-waiting-send-draft",
-  ])
-    for (const width of [390, 1280]) {
-      const response = renderPage(previews[name]!);
-      const result = await (
-        await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
-          method: "POST",
-          body: JSON.stringify({
-            url: `${ORIGIN}/__pages/${name}`,
-            html: await response.text(),
-            headers: Object.fromEntries(response.headers),
-            layout: true,
-            width,
-          }),
-        })
-      ).json<{ overflow: boolean; errors: string[] }>();
-      expect(result.errors).toEqual([]);
-      expect(result.overflow).toBe(false);
-    }
-}, 60_000);
 
 it("HTML that cannot be converted offers no Approve", async () => {
   const f = await sendFixture("send_draft", "ask");

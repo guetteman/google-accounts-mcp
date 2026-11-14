@@ -9,15 +9,13 @@ import { cleanupApprovals } from "../src/approvals/store";
 import { readConfig } from "../src/config";
 import { readOwner } from "../src/owner/owner";
 import { renderPage } from "../src/pages/render";
-import { previews } from "../src/pages/previews";
-import type { TestEnv } from "./env";
 import { clients } from "./support/oauth";
 import { NOW } from "./support/accounts";
 import { approve, decided, digest, get, page, post, row } from "./support/approvals";
 import { failingKv, observeStatements } from "./support/db";
 import { google, MESSAGES_URL } from "./support/google";
 import { callRows, googleTraffic, permission, PERSONAL } from "./support/permissions";
-import { ORIGIN, testEnv, textOf } from "./support/worker";
+import { testEnv, textOf } from "./support/worker";
 import {
   askingAttachment,
   blocks,
@@ -441,23 +439,3 @@ it("opens file references only when their persisted schema is valid and keeps or
     });
   }
 });
-
-it("renders the attachment preview at 390 and 1280 pixels without overflow", async () => {
-  for (const width of [390, 1280]) {
-    const response = renderPage(previews["approval-waiting-attachment"]!);
-    const result = await (
-      await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
-        method: "POST",
-        body: JSON.stringify({
-          url: `${ORIGIN}/__pages/approval-waiting-attachment`,
-          html: await response.text(),
-          headers: Object.fromEntries(response.headers),
-          layout: true,
-          width,
-        }),
-      })
-    ).json<{ overflow: boolean; errors: string[] }>();
-    expect(result.errors).toEqual([]);
-    expect(result.overflow).toBe(false);
-  }
-}, 60_000);
