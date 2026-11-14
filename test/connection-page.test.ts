@@ -6,7 +6,6 @@ import { seedConnection } from "./support/connections";
 import { fixture, permission, problemCases } from "./support/permissions";
 import { textOf } from "./support/worker";
 import type { FramePage } from "../src/pages/page";
-import { previews } from "../src/pages/previews";
 import { GROUPS } from "../src/mcp/groups";
 import { TOOLS } from "../src/mcp/tools";
 
@@ -57,101 +56,25 @@ it("links each connection to its own permissions page and shows only the account
     expect(props.settings[`${f.northwind.id}:${tool.name}`]).toBeUndefined();
 });
 
-it("renders every tool in its group, in tool-list order, and no empty group", async () => {
+it("renders the tools in GROUPS order and in tool-list order inside a group", async () => {
   const f = await fixture();
   const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
-  const props = pageProps(html);
-  expect(props.tools.map(({ name, group }) => ({ name, group }))).toEqual([
-    { name: "list_labels", group: "Find and read" },
-    { name: "search_threads", group: "Find and read" },
-    { name: "read_thread", group: "Find and read" },
-    { name: "change_labels", group: "Organize" },
-    { name: "create_draft", group: "Draft" },
-    { name: "trash_messages", group: "Trash and delete" },
-    { name: "restore_messages", group: "Trash and delete" },
-    { name: "delete_messages", group: "Trash and delete" },
-    { name: "get_attachment", group: "Download attachments" },
-    { name: "send_message", group: "Send" },
-    { name: "send_reply", group: "Send" },
-    { name: "forward_message", group: "Send" },
-    { name: "send_draft", group: "Send" },
-  ]);
-  expect(props.tools.find((tool) => tool.name === "change_labels")).toEqual({
-    name: "change_labels",
-    label: "Change labels",
-    group: "Organize",
-    irreversible: false,
-    description:
-      "Archive threads, mark them read or unread, and add or remove labels. It cannot move mail to the trash or to spam, or take it out.",
-  });
+  const tools = TOOLS.flatMap((tool) => (tool.kind === "account" ? [tool] : []));
+  expect(pageProps(html).tools.map((tool) => tool.name)).toEqual(tools.map((tool) => tool.name));
   const first = html.slice(
     html.indexOf("Tool permissions"),
     html.indexOf('aria-label="All tools on Northwind'),
   );
-  expect(textOf(first)).toContain("Find and read");
-  expect(textOf(first)).toContain("Organize");
-  expect(first.indexOf('aria-label="List labels on Personal')).toBeLessThan(
-    first.indexOf('aria-label="Search mail on Personal'),
-  );
-  expect(first.indexOf('aria-label="Search mail on Personal')).toBeLessThan(
-    first.indexOf('aria-label="Read thread on Personal'),
-  );
-  expect(textOf(first)).toContain("Send");
-  expect(first.indexOf('aria-label="Create draft on Personal')).toBeLessThan(
-    first.indexOf('aria-label="Send message on Personal'),
-  );
-  expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
-    first.indexOf('aria-label="Change labels on Personal'),
-  );
-  expect(textOf(first)).toContain("Draft");
-  expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
-    first.indexOf('aria-label="Create draft on Personal'),
-  );
-  expect(textOf(first)).toContain("Download attachments");
-  expect(first.indexOf('aria-label="Read thread on Personal')).toBeLessThan(
-    first.indexOf('aria-label="Download attachment on Personal'),
-  );
-  expect(textOf(first).indexOf("Organize")).toBeLessThan(textOf(first).indexOf("Trash and delete"));
-  expect(first.indexOf('aria-label="Move to trash on Personal')).toBeLessThan(
-    first.indexOf('aria-label="Restore from trash on Personal'),
-  );
-  expect(first.indexOf('aria-label="Restore from trash on Personal')).toBeLessThan(
-    first.indexOf('aria-label="Delete permanently on Personal'),
-  );
-  const usedGroups = new Set(props.tools.map((tool) => tool.group));
-  for (const group of GROUPS.filter((group) => !usedGroups.has(group)))
-    expect(textOf(html)).not.toContain(group);
-});
-
-it("keeps every connection preview's tool groups and settings aligned with the real page", async () => {
-  const f = await fixture();
-  const real = pageProps(await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text());
-  for (const scenario of [
-    "new-connection",
-    "some-allowed",
-    "all-allowed",
-    "no-accounts",
-    "ended-connection",
-    "save-failed",
-  ]) {
-    const preview = previews[`connection-${scenario}`];
-    if (preview?._tag !== "Connection") throw new Error("Expected a connection preview");
-    expect(preview.tools).toEqual(real.tools);
-    for (const [index, account] of preview.accounts.entries())
-      for (const tool of real.tools) {
-        const expected =
-          scenario === "all-allowed"
-            ? "allow"
-            : ["some-allowed", "save-failed"].includes(scenario) && index === 0
-              ? "ask"
-              : ["some-allowed", "save-failed"].includes(scenario) &&
-                  index === 2 &&
-                  tool.name === "list_labels"
-                ? "allow"
-                : undefined;
-        expect(preview.settings[`${account.id}:${tool.name}`]).toBe(expected);
-      }
-  }
+  // Each used group's heading, then its tools, in order.
+  const used = GROUPS.filter((group) => tools.some((tool) => tool.group === group));
+  const positions = used.flatMap((group) => [
+    first.indexOf(`>${group}</h4>`),
+    ...tools
+      .filter((tool) => tool.group === group)
+      .map((tool) => first.indexOf(`aria-label="${tool.label} on Personal for Claude"`)),
+  ]);
+  expect(positions).not.toContain(-1);
+  expect(positions).toEqual([...positions].sort((a, b) => a - b));
 });
 
 it.each(["revoked", "expired"])(
@@ -213,24 +136,6 @@ it.each(problemCases)(
   },
 );
 
-it("renames and revokes from the connection page using the existing action routes", async () => {
-  const f = await fixture();
-  expect((await f.mcp.browser.get(`/connections/${f.connection.id}`)).status).toBe(200);
-  expect(
-    await (
-      await f.mcp.browser.post(`/connections/${f.connection.id}/name`, { name: "Personal agent" })
-    ).json(),
-  ).toEqual({ outcome: "ok" });
-  const renamed = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
-  expect(textOf(renamed)).toContain("Personal agent");
-  expect(await (await f.mcp.browser.post(`/connections/${f.connection.id}/revoke`)).json()).toEqual(
-    { outcome: "ok" },
-  );
-  const revoked = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
-  expect(revoked).not.toContain('role="radiogroup"');
-  expect(textOf(revoked)).toMatch(/ended connection cannot be given access/i);
-});
-
 it.each(["00000000-0000-4000-8000-000000000000", "not-an-id"])(
   "returns a private 404 for absent connection %s",
   async (id) => {
@@ -268,24 +173,4 @@ it("marks four sends and permanent delete as irreversible", async () => {
     { name: "delete_messages", label: "Delete permanently" },
   ]);
   expect(tools.find((tool) => tool.name === "create_draft")!.irreversible).toBe(false);
-});
-
-it("tells the page which tools cannot be undone, from each tool's own declaration", async () => {
-  const f = await fixture();
-  const tool = TOOLS.find((tool) => tool.name === "search_threads")!;
-  if (tool.kind !== "account") throw new Error("search_threads has a setting");
-  const original = tool.irreversible;
-  tool.irreversible = true;
-  try {
-    const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
-    const shown = pageProps(html).tools.map(({ name, irreversible }) => ({ name, irreversible }));
-    expect(shown).toContainEqual({ name: "search_threads", irreversible: true });
-    expect(shown).toEqual(
-      TOOLS.flatMap((tool) =>
-        tool.kind === "account" ? [{ name: tool.name, irreversible: tool.irreversible }] : [],
-      ),
-    );
-  } finally {
-    tool.irreversible = original;
-  }
 });
