@@ -79,7 +79,6 @@ it(
     const shown = declined.stdout.slice(0, prompt);
     expect(shown).toContain("Database: binding DB (local)");
     expect(shown).toContain("Configuration: wrangler.jsonc");
-    expect(shown).toContain("Environment: top level");
     expect(shown).toContain(`Stored owner: ${OWNER}`);
     expect(shown).toContain("State: pinned, generation 3");
     expect(declined.stdout).toContain("Nothing changed.");
@@ -97,6 +96,15 @@ it(
     );
     expect(owner).toEqual([{ state: "unpinned", generation: 4, email: null }]);
     expect(tables.flat()).toEqual(OWNER_TABLES.map((name) => ({ name, rows: 0 })));
+
+    // --yes skips the question, here on a deploy with no owner.
+    const unattended = ownerReset([...local, "--yes"]);
+    expect(unattended.status, unattended.stderr).toBe(0);
+    expect(unattended.stdout).toContain("Stored owner: no owner");
+    expect(unattended.stdout).not.toContain('Type "reset"');
+    expect(sql("SELECT state, generation FROM owner WHERE id = 1")[0]).toEqual([
+      { state: "unpinned", generation: 5 },
+    ]);
   },
   TIMEOUT,
 );

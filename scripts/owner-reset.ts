@@ -21,7 +21,6 @@ interface D1BindingConfig {
 async function main() {
   const args = process.argv.slice(2);
   let configPath = "wrangler.jsonc";
-  let environmentArg: string | undefined;
   let persistTo: string | undefined;
   let local = false;
   let yes = false;
@@ -29,23 +28,17 @@ async function main() {
     const arg = args[i];
     if (arg === "--yes") yes = true;
     else if (arg === "--local") local = true;
-    else if (arg === "--persist-to" || arg === "--config" || arg === "--env") {
+    else if (arg === "--persist-to" || arg === "--config") {
       const value = args[++i];
-      // `--env ""` selects the top level, as in wrangler.
-      if (value === undefined || value.startsWith("--") || (value === "" && arg !== "--env"))
-        throw new Error(`Missing value for ${arg}`);
+      if (!value || value.startsWith("--")) throw new Error(`Missing value for ${arg}`);
       if (arg === "--config") configPath = value;
-      else if (arg === "--env") environmentArg = value;
       else persistTo = value;
     } else throw new Error(`Unknown argument: ${arg}`);
   }
   if (persistTo !== undefined && !local) throw new Error("--persist-to needs --local.");
 
-  // The environment is decided here and passed to every wrangler call, so wrangler cannot pick
-  // another one from a .env file.
-  const environment = environmentArg ?? process.env.CLOUDFLARE_ENV ?? "";
   const config: { d1_databases: D1BindingConfig[] } = unstable_readConfig(
-    { config: configPath, env: environment },
+    { config: configPath },
     { hideWarnings: true },
   );
   const database = config.d1_databases.find((db) => db.binding === "DB");
@@ -55,8 +48,6 @@ async function main() {
     ...(persistTo === undefined ? [] : ["--persist-to", persistTo]),
     "--config",
     configPath,
-    "--env",
-    environment,
   ];
 
   /** Runs statements as one call; reports wrangler's JSON error without changing anything more. */
@@ -120,7 +111,6 @@ async function main() {
   if (database.database_id) label.push(`id ${database.database_id}`);
   console.log(`Database: ${label.join(", ")} (${local ? "local" : "remote"})`);
   console.log(`Configuration: ${configPath}`);
-  console.log(environment ? `Environment: ${environment}` : "Environment: top level");
   const row = readOwner();
   describe(row);
   console.log("Reset removes all data from the previous owner.");
@@ -146,7 +136,7 @@ async function main() {
   switch (resetOutcome(plan, execute(plan.statements.join("; ")))) {
     case "overtaken":
       console.log(
-        "The owner changed before the reset ran (another reset began); nothing done. Run again to see the current state.",
+        "The owner changed before the reset ran; nothing done. Run again to see the current state.",
       );
       break;
     case "done":
