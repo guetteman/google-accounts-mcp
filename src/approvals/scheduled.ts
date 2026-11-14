@@ -1,7 +1,7 @@
 import { cleanupUploadsStatement } from "../uploads/store";
 import { Effect, Result } from "effect";
 import { readConfig } from "../config";
-import { readOwner, standing } from "../owner/owner";
+import { isLocked, readOwner } from "../owner/owner";
 import { cleanupApprovals } from "./store";
 import { cleanupStatement } from "../once/store";
 export async function scheduled(_event: ScheduledController, env: Env) {
@@ -10,7 +10,7 @@ export async function scheduled(_event: ScheduledController, env: Env) {
   const owner = await Effect.runPromise(Effect.result(readOwner(env.DB)));
   if (
     Result.isFailure(owner) ||
-    standing(owner.success, config.success)._tag !== "Open" ||
+    isLocked(owner.success, config.success) ||
     owner.success.state !== "pinned"
   )
     return;
