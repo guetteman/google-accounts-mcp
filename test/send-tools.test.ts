@@ -14,6 +14,7 @@ import { callRows, expectError, googleTraffic, PERSONAL, toolCall } from "./supp
 import { decodedMail, onceRows, replyCases, SOURCE, THREAD } from "./support/draft";
 import { google, deferred } from "./support/google";
 import { rpcResult } from "./support/oauth";
+import { fileOf, noWrites, upload } from "./support/uploads";
 import {
   created,
   fullMessage,
@@ -449,20 +450,29 @@ it("an existing-draft preflight read failure is known without sending", async ()
   expect(google.sends).toEqual([]);
 });
 
-it("ask then allow returns the same pending approval until Approve sends once", async () => {
+it("ask then allow returns the same pending approval until Approve sends once with its file", async () => {
   const f = await sendFixture("send_message", "ask");
-  const pending = await answer(await sendCall(f));
+  const file = await upload(f);
+  const call = () => sendCall(f, "send_message", { attachments: [{ upload: file.upload }] });
+  const pending = await answer(await call());
   await setSend(f, "send_message", "allow");
-  expect(await answer(await sendCall(f))).toEqual(pending);
-  expect(google.sends).toEqual([]);
-  expect(google.draftCreates).toEqual([]);
+  expect(await answer(await call())).toEqual(pending);
+  noWrites();
   expect(await onceRows()).toEqual([]);
   expect(await rows()).toHaveLength(1);
-  expect((await callRows()).map((r) => r.outcome)).toEqual(["pending", "repeat"]);
+  expect((await callRows()).filter((r) => r.tool === "send_message").map((r) => r.outcome)).toEqual(
+    ["pending", "repeat"],
+  );
   expect((await approve(f, pending.approval as string)).state.kind).toBe("succeeded");
   expect(google.sends).toHaveLength(1);
-  expect(google.draftCreates).toHaveLength(1);
-  expect((await answer(await sendCall(f))).repeat_of).toBe(isoSeconds(Date.now()));
+  expect(google.uploads).toHaveLength(1);
+  expect(fileOf(mime(google.uploads[0]!.message).parts[1]!)).toEqual({
+    filename: "local.pdf",
+    type: "application/pdf",
+    bytes: new Uint8Array([0, 255, 10, 65]),
+  });
+  expect((await get(f, pending.approval as string)).status).toBe("success");
+  expect((await answer(await call())).repeat_of).toBe(isoSeconds(Date.now()));
   expect(google.sends).toHaveLength(1);
 });
 

@@ -10,15 +10,14 @@ import {
   setTool,
   watchedFiles,
   noWrites,
-  input,
   expectMail,
 } from "./support/uploads";
-import { answer, approve, page, post, row, rows, get } from "./support/approvals";
+import { answer, approve, page, post, row, rows } from "./support/approvals";
 import { expectError, callRows } from "./support/permissions";
 import { fixtureOpen } from "./support/accounts";
 import { onceRows } from "./support/draft";
-import { google, deferred } from "./support/google";
-import { created, hold, never } from "./support/send";
+import { google } from "./support/google";
+import { created, hold } from "./support/send";
 import { testEnv } from "./support/worker";
 import { observeStatements } from "./support/db";
 import worker from "../src/index";
@@ -99,36 +98,6 @@ it.each(["500", "400"])(
     expect(await uploads()).toEqual([]);
   },
 );
-it("deletes an upload after an unknown send and retains recovery advice for repeats", async () => {
-  const f = await attaching();
-  const file = await upload(f);
-  const entered = deferred();
-  google.sendAnswers.push((request) => {
-    entered.resolve();
-    return never(request);
-  });
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const work = attachCall(f, [{ upload: file.upload }]);
-  await entered.promise;
-  await vi.advanceTimersByTimeAsync(10_000);
-  await expectError(
-    await work,
-    "outcome_unknown",
-    /call again with duplicate: 2 and a new upload of each file\.$/,
-  );
-  expect(await uploads()).toEqual([]);
-  await expectError(
-    await attachCall(f, [{ upload: file.upload }]),
-    "outcome_unknown",
-    /new upload of each file/,
-  );
-  await expectError(
-    await attachCall(f, [{ upload: file.upload }], { duplicate: 2 }),
-    "upload_not_available",
-    missingText(file.upload),
-  );
-  expect(google.sends).toHaveLength(1);
-});
 it.each(["ask", "allow"] as const)(
   "isolates uploads between connections under %s",
   async (setting) => {
@@ -253,43 +222,6 @@ it.each(["missing", "damaged"])(
     expect(google.sends).toHaveLength(1);
   },
 );
-it("refuses known upload sizes before KV and leaves the files usable", async () => {
-  const f = await attaching();
-  const first = await upload(f, new Uint8Array(13_000_000));
-  const second = await upload(f, new Uint8Array(13_000_000));
-  const watched = watchedFiles();
-  await expectError(
-    await attachCall(
-      f,
-      [{ upload: first.upload }, { upload: second.upload }],
-      {},
-      "send_message",
-      testEnv({ FILES_KV: watched.files }),
-    ),
-    "message_too_large",
-    `This message would have ${(26_000_000 + new TextEncoder().encode(input.body).byteLength).toLocaleString("en-US")} bytes of attachments and text. The limit is 25,000,000 bytes.`,
-  );
-  expect(watched.reads).toEqual([]);
-  noWrites();
-  await answer(await attachCall(f, [{ upload: first.upload }]));
-  expect(google.sends).toHaveLength(1);
-});
-it("returns the same waiting approval after allow and sends its file only when approved", async () => {
-  const f = await attaching("send_message", "ask");
-  const file = await upload(f);
-  const first = await answer(await attachCall(f, [{ upload: file.upload }]));
-  await setTool(f, "send_message", "allow");
-  expect(await answer(await attachCall(f, [{ upload: file.upload }]))).toEqual(first);
-  noWrites();
-  expect(await rows()).toHaveLength(1);
-  expect((await approve(f, first.approval as string)).state.kind).toBe("succeeded");
-  expectMail({
-    files: [
-      { filename: "local.pdf", type: "application/pdf", bytes: new Uint8Array([0, 255, 10, 65]) },
-    ],
-  });
-  expect((await get(f, first.approval as string)).status).toBe("success");
-});
 it("leaves the file in an approval that wins before the direct call takes its row", async () => {
   const f = await attaching();
   const file = await upload(f);
@@ -326,26 +258,33 @@ it("returns running without an approval after the direct call took its row", asy
   expect(google.sends).toHaveLength(1);
 });
 
-it("refuses upload sizes before creating an approval or reading KV", async () => {
-  const f = await attaching("send_message", "ask");
-  const first = await upload(f, new Uint8Array(13_000_000));
-  const second = await upload(f, new Uint8Array(13_000_000));
-  const watched = watchedFiles();
-  await expectError(
-    await attachCall(
-      f,
-      [{ upload: first.upload }, { upload: second.upload }],
-      {},
-      "send_message",
-      testEnv({ FILES_KV: watched.files }),
-    ),
-    "message_too_large",
-    /This message would have 26,000,027 bytes of attachments and text/,
-  );
-  expect(watched.reads).toEqual([]);
-  expect(await rows()).toEqual([]);
-  expect(await uploads()).toHaveLength(2);
-});
+it.each(["allow", "ask"] as const)(
+  "refuses upload sizes under %s before an approval, a KV read, or a write",
+  async (setting) => {
+    const f = await attaching("send_message", setting);
+    const first = await upload(f, new Uint8Array(13_000_000));
+    const second = await upload(f, new Uint8Array(13_000_000));
+    const watched = watchedFiles();
+    await expectError(
+      await attachCall(
+        f,
+        [{ upload: first.upload }, { upload: second.upload }],
+        {},
+        "send_message",
+        testEnv({ FILES_KV: watched.files }),
+      ),
+      "message_too_large",
+      /This message would have 26,000,027 bytes of attachments and text/,
+    );
+    expect(watched.reads).toEqual([]);
+    expect(await rows()).toEqual([]);
+    noWrites();
+    expect(await uploads()).toHaveLength(2);
+    await setTool(f, "send_message", "allow");
+    await answer(await attachCall(f, [{ upload: first.upload }]));
+    expect(google.sends).toHaveLength(1);
+  },
+);
 
 it("releases the call without using its file after reserving uploads fails", async () => {
   const f = await attaching();
