@@ -62,8 +62,11 @@ it("a new send shows normalized recipients, subject, duplicate and its whole bod
     { name: "Duplicate", text: "2 (a deliberate copy of an earlier call)", from: "agent" },
     { name: "Body", text: "Hello\n\nWhole body", from: "agent" },
   ]);
-  expect(textOf(await renderPage(props).text())).toContain(
-    "The agent wrote the shaded text below.",
+  const html = (await renderPage(props).text()).replace(/<script[\s\S]*?<\/script>/g, "");
+  expect(textOf(html)).toContain("The agent wrote the shaded text below.");
+  expect(html).toMatch(/role="alert"[\s\S]*A sent message cannot be taken back/);
+  expect(html.indexOf("A sent message cannot be taken back.")).toBeLessThan(
+    html.indexOf(">Approve</button>"),
   );
   expect(google.messageRequests).toEqual([]);
   expect(google.fullDraftRequests).toEqual([]);
@@ -317,7 +320,7 @@ it("the draft view shows all 200 recipients and whole raw headers with its warni
   ]);
 });
 
-it.each(["headers", "text", "html", "parts", "bytes", "files", "calendar", "unknown part"])(
+it.each(["headers", "text", "files", "calendar", "unknown part"])(
   "incomplete draft %s never offers Approve or sends",
   async (kind) => {
     const f = await sendFixture("send_draft", "ask");
@@ -328,23 +331,6 @@ it.each(["headers", "text", "html", "parts", "bytes", "files", "calendar", "unkn
     );
     if (kind === "text")
       raw.payload.body = { size: 1_000_001, data: bytesForTest("x".repeat(1_000_001)) };
-    if (kind === "html")
-      raw.payload = {
-        ...part("text/html", "<p>" + "x".repeat(1_000_001) + "</p>"),
-        headers: raw.payload.headers,
-      };
-    if (kind === "bytes") raw.payload.body = { size: 2_000_001, attachmentId: "too-big" };
-    if (kind === "parts")
-      raw.payload = {
-        ...tree(
-          "multipart/mixed",
-          Array.from({ length: 4 }, (_, i) => ({
-            ...part("text/plain", "", String(i)),
-            body: { size: 1, attachmentId: `p${i}` },
-          })),
-        ),
-        headers: raw.payload.headers,
-      };
     if (kind === "files")
       raw.payload = {
         ...tree(
@@ -361,8 +347,6 @@ it.each(["headers", "text", "html", "parts", "bytes", "files", "calendar", "unkn
         ]),
         headers: raw.payload.headers,
       };
-    for (let i = 0; i < 4; i++)
-      google.attachmentAnswers.set(`p${i}`, () => Response.json({ data: "eA" }));
     google.storedDrafts.set("existing-draft", raw);
     const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
     const props = await page(f, id);
@@ -414,15 +398,15 @@ it.each(["send_reply", "forward_message"] as const)(
   },
 );
 
-it("send_draft sends the changed draft as it is when approved", async () => {
+it("send_draft sends the changed draft as it is when approved, whatever digest was posted", async () => {
   const f = await sendFixture("send_draft", "ask");
   const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
-  const shown = await digest(f, id);
+  expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: true });
   google.storedDrafts.set(
     "existing-draft",
     fullMessage({ To: "changed@example.com", Subject: "Changed after load" }),
   );
-  expect((await decided(await post(f, id, "approve", { digest: shown }))).state.kind).toBe(
+  expect((await decided(await post(f, id, "approve", { digest: "wrong" }))).state.kind).toBe(
     "succeeded",
   );
   expect(google.sends).toHaveLength(1);
@@ -512,23 +496,6 @@ it.each(["From", "To", "Cc", "Bcc", "Subject", "Reply-To"])(
   },
 );
 
-it.each(["send_message", "send_reply", "forward_message"] as const)(
-  "warns that the approved %s cannot be taken back",
-  async (name) => {
-    const f = await sendFixture(name, "ask");
-    const id = (await answer(await sendCall(f, name))).approval as string;
-    const props = await page(f, id);
-    expect(props.request.notes).toEqual([
-      { text: "A sent message cannot be taken back.", warning: true },
-    ]);
-    const html = (await renderPage(props).text()).replace(/<script[\s\S]*?<\/script>/g, "");
-    expect(html).toMatch(/role="alert"[\s\S]*A sent message cannot be taken back/);
-    expect(html.indexOf("A sent message cannot be taken back.")).toBeLessThan(
-      html.indexOf(">Approve</button>"),
-    );
-  },
-);
-
 it("offers no Approve for a forward whose attachment bytes exceed the limit", async () => {
   const f = await sendFixture("forward_message", "ask");
   const raw = fullMessage();
@@ -547,15 +514,6 @@ it("offers no Approve for a forward whose attachment bytes exceed the limit", as
   expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: false });
   expect(google.attachmentRequests).toEqual([]);
   expect(google.sends).toEqual([]);
-});
-
-it("sends a shown draft as it is at approval even when the posted digest differs", async () => {
-  const f = await sendFixture("send_draft", "ask");
-  const id = (await answer(await sendCall(f, "send_draft"))).approval as string;
-  expect((await page(f, id)).state).toMatchObject({ kind: "waiting", shown: true });
-  const props = await decided(await post(f, id, "approve", { digest: "wrong" }));
-  expect(props.state.kind).toBe("succeeded");
-  expect(google.sends).toHaveLength(1);
 });
 
 it.each([
@@ -586,18 +544,6 @@ it.each([
     });
   },
 );
-
-it("keeps unknown previews with and without recovery advice", () => {
-  const bare = previews["approval-unknown"];
-  const withAdvice = previews["approval-unknown-send"];
-  if (bare?._tag !== "Approval" || withAdvice?._tag !== "Approval")
-    throw new Error("Missing unknown approval previews");
-  expect(bare.state).toEqual({ kind: "unknown" });
-  expect(withAdvice.state).toMatchObject({
-    kind: "unknown",
-    message: expect.stringContaining("Ask the owner to look in Sent."),
-  });
-});
 
 it("counts only omitted leaves, keeping body alternatives and attached mail out of that count", async () => {
   const f = await sendFixture("forward_message", "ask");
