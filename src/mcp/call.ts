@@ -453,7 +453,10 @@ export async function runCall(
     id = decodeCallId(batch[0]!);
     if (!id) throw new ToolFailure({ code: "server_unavailable" });
     if (oversized)
-      throw new ToolFailure({ code: "invalid_arguments", reason: "arguments_too_large" });
+      throw new ToolFailure({
+        code: "invalid_arguments",
+        said: `The arguments are too large. The limit is ${MAX_ARGUMENTS_BYTES / 1024} KB.`,
+      });
     if (!tool) {
       unknownTool = true;
       outcome = "refused";
