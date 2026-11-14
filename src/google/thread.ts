@@ -10,6 +10,7 @@ import {
   MAX_TEXT,
   MAX_BODY_PARTS,
   PAGE_BODY_BYTES,
+  safeEnd,
   shorten,
 } from "./bounds";
 import { AttachmentBytes, get, notFoundOr } from "./gmail";
@@ -116,14 +117,6 @@ const Drafts = Schema.Struct({
   ),
   nextPageToken: Schema.optionalKey(Schema.String),
 });
-// Offsets count UTF-16 units, but a page must never end between the two halves of a character.
-const safeEnd = (text: string, end: number) =>
-  end > 0 &&
-  end < text.length &&
-  /[\uD800-\uDBFF]/.test(text[end - 1]!) &&
-  /[\uDC00-\uDFFF]/.test(text[end]!)
-    ? end - 1
-    : end;
 
 /** Owns the serialized result's budget, including every field and the continuation value. */
 function fit(

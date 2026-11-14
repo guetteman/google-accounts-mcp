@@ -10,8 +10,14 @@ export const BODY_BYTES_LEFT_OUT =
 const TEXT_LEFT_OUT =
   "[The rest of this message was left out: it is longer than 1,000,000 characters.]";
 
-const safeEnd = (text: string, end: number): number =>
-  /[\uD800-\uDBFF]/.test(text[end - 1]!) && /[\uDC00-\uDFFF]/.test(text[end]!) ? end - 1 : end;
+/** Offsets count UTF-16 units, but a cut must never fall between the two halves of a character. */
+export const safeEnd = (text: string, end: number): number =>
+  end > 0 &&
+  end < text.length &&
+  /[\uD800-\uDBFF]/.test(text[end - 1]!) &&
+  /[\uDC00-\uDFFF]/.test(text[end]!)
+    ? end - 1
+    : end;
 
 export const shorten = (text: string, limit: number): string =>
   text.length > limit ? text.slice(0, safeEnd(text, limit - 1)) + "…" : text;
