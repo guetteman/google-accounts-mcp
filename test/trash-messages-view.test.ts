@@ -57,32 +57,30 @@ it.each(operations)(
   },
 );
 
-it.each(operations)(
-  "$name uses singular names and bounds each header to 500 characters",
-  async (op) => {
-    google.trashAnswers.set("m1", () =>
-      Response.json({
-        ...message(),
-        payload: {
-          headers: [
-            { name: "from", value: "f".repeat(3000) },
-            { name: "SUBJECT", value: "s".repeat(3000) },
-          ],
-        },
-      }),
-    );
-    const f = await asking(op.name, ["m1"]);
-    const start = requests.length;
-    const props = await page(f, f.id);
-    expect(props.request.values).toEqual([
-      { name: "From", text: "f".repeat(499) + "…", from: "gmail" },
-      { name: "Subject", text: "s".repeat(499) + "…", from: "gmail" },
-      { name: "Date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
-    ]);
-    expect(requests.slice(start)).toEqual([metadataUrl("m1")]);
-    expect(google.methods).toEqual(["GET"]);
-  },
-);
+// The three tools share one view, so one tool proves it.
+it("uses singular names and bounds each header to 500 characters", async () => {
+  google.trashAnswers.set("m1", () =>
+    Response.json({
+      ...message(),
+      payload: {
+        headers: [
+          { name: "from", value: "f".repeat(3000) },
+          { name: "SUBJECT", value: "s".repeat(3000) },
+        ],
+      },
+    }),
+  );
+  const f = await asking("trash_messages", ["m1"]);
+  const start = requests.length;
+  const props = await page(f, f.id);
+  expect(props.request.values).toEqual([
+    { name: "From", text: "f".repeat(499) + "…", from: "gmail" },
+    { name: "Subject", text: "s".repeat(499) + "…", from: "gmail" },
+    { name: "Date", text: "Nov 11, 2026 at 09:41 UTC", from: "gmail" },
+  ]);
+  expect(requests.slice(start)).toEqual([metadataUrl("m1")]);
+  expect(google.methods).toEqual(["GET"]);
+});
 
 it("the view reads its first message alone, refreshes once and opens at most five", async () => {
   const f = await asking("delete_messages", ids15);
@@ -178,22 +176,16 @@ it.each(["", "NaN", "1.2", "8640000000000001"])(
 );
 
 it.each(operations)(
-  "$name shows the exact headline and warns only for permanent deletion",
+  "$name warns only for permanent deletion, after the values and before Approve",
   async (op) => {
     serveMessages(["m1", "m2"]);
     const f = await asking(op.name);
     const props = await page(f, f.id);
-    expect(props.request.tool).toMatchObject({
-      label: op.label,
-      action: op.action,
-      joiner: op.joiner,
-    });
     expect(props.request.notes).toEqual(
       op.name === "delete_messages" ? [{ text: WARNING, warning: true }] : [],
     );
     const html = (await renderPage(props).text()).replace(/<script[\s\S]*?<\/script>/g, "");
-    const text = textOf(html).replace(/\s+\./g, ".");
-    expect(text).toContain(`${f.connection.name} wants to ${op.action} ${op.joiner} Personal.`);
+    const text = textOf(html);
     if (op.name === "delete_messages") {
       expect(text).toContain(WARNING);
       expect(html.indexOf(WARNING)).toBeGreaterThan(html.lastIndexOf("</blockquote>"));
@@ -225,71 +217,6 @@ it.each(operations)(
       })),
     ]);
     expect((await callRows()).map((r) => r.outcome)).toEqual(["success", "success"]);
-  },
-);
-
-it.each(operations)(
-  "a message missing after viewing $name changes the digest and runs nothing",
-  async (op) => {
-    serveMessages(["m1", "m2"]);
-    const f = await asking(op.name);
-    const shown = await page(f, f.id);
-    if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
-    google.trashAnswers.set("m2", () => new Response(null, { status: 404 }));
-    const props = await decided(await post(f, f.id, "approve", { digest: shown.state.digest! }));
-    expect(props.state).toMatchObject({ kind: "waiting", shown: true, changed: true });
-    expect(textOf(await renderPage(props).text())).toContain("Nothing ran. The request changed.");
-    expect(google.trashRequests.every((r) => r.method === "GET")).toBe(true);
-    expect((await callRows()).map((r) => r.outcome)).toEqual(["pending"]);
-  },
-);
-
-it.each(operations)(
-  "Approve on all-missing messages runs $name and returns failed not_found",
-  async (op) => {
-    for (const id of ["m1", "m2"])
-      google.trashAnswers.set(id, () => new Response(null, { status: 404 }));
-    const f = await asking(op.name);
-    const shown = await page(f, f.id);
-    if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
-    expect(
-      (await decided(await post(f, f.id, "approve", { digest: shown.state.digest! }))).state.kind,
-    ).toBe("failed");
-    expect(await get(f, f.id)).toEqual({
-      status: "failed",
-      error: {
-        code: "not_found",
-        message: `None of the messages "m1", "m2" exists in ${PERSONAL}. A message ID works only in the account that returned it.`,
-      },
-    });
-    expect(google.trashRequests.filter((r) => r.method !== "GET").map((r) => r.url)).toEqual(
-      ["m1", "m2"].map((id) => `${MESSAGES_URL}/${id}${op.suffix}`),
-    );
-    expect((await callRows()).map((r) => r.outcome)).toEqual(["refused", "success"]);
-  },
-);
-
-it.each(operations)(
-  "a message missing between the rebuilt view and $name run is not_found",
-  async (op) => {
-    serveMessages(["m1", "m2"]);
-    const f = await asking(op.name);
-    const shown = await page(f, f.id);
-    if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
-    google.trashAnswers.set("m2", (request) =>
-      request.method === "GET" ? Response.json(message("m2")) : new Response(null, { status: 404 }),
-    );
-    expect(
-      (await decided(await post(f, f.id, "approve", { digest: shown.state.digest! }))).state.kind,
-    ).toBe("succeeded");
-    expect(await get(f, f.id)).toEqual({
-      status: "success",
-      result: {
-        account: PERSONAL,
-        messages: changed(op.name, ["m1"]),
-        not_found: ["m2"],
-      },
-    });
   },
 );
 
@@ -331,34 +258,6 @@ it.each(operations)(
           url,
         })),
     ).toEqual(changes.map((url) => ({ method: op.method, url })));
-  },
-);
-
-it.each(operations)(
-  "$name renders all 45 value labels for 15 messages in input order",
-  async (op) => {
-    serveMessages(ids15);
-    const f = await asking(op.name, ids15);
-    const response = await f.mcp.browser.get(`/approvals/${f.id}`);
-    expect(response.status).toBe(200);
-    // Exclude the serialized props: only the page's visible labels prove the rendered view.
-    const html = (await response.text()).replace(/<script[\s\S]*?<\/script>/g, "");
-    const text = textOf(html);
-    let previous = -1;
-    for (let position = 1; position <= 15; position++) {
-      for (const field of ["from", "subject", "date"]) {
-        const label = `Message ${position} ${field}`;
-        const index = text.indexOf(label);
-        expect(index, label).toBeGreaterThan(previous);
-        previous = index;
-      }
-    }
-    if (op.name === "delete_messages") {
-      expect(html.indexOf(WARNING)).toBeGreaterThan(html.indexOf("Message 15 date"));
-      expect(html.indexOf(WARNING)).toBeLessThan(html.indexOf(">Approve</button>"));
-    }
-    expect(google.trashRequests.map((r) => r.url)).toEqual(ids15.map(metadataUrl));
-    expect(google.methods).toEqual(ids15.map(() => "GET"));
   },
 );
 

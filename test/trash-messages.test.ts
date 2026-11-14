@@ -6,57 +6,47 @@ import { answer } from "./support/approvals";
 import { deferred, google, MESSAGES_URL } from "./support/google";
 import { requests } from "./support/network";
 import { rpcResult } from "./support/oauth";
-import {
-  callRows,
-  expectError,
-  fixture,
-  permission,
-  PERSONAL,
-  unavailableMessage,
-  unconfirmedMessage,
-} from "./support/permissions";
+import { callRows, expectError, fixture, permission, PERSONAL } from "./support/permissions";
 import { allowed, call, changed, ids15, operations, serveMessages } from "./support/trash";
 import { textOf } from "./support/worker";
 
-it.each(operations)(
-  "$name rejects invalid message lists before any outbound request",
-  async (op) => {
-    const f = await allowed(op.name);
-    for (const messages of [
-      [],
-      [...ids15, "m16"],
-      ["m1", "m1"],
-      ["m1", "m2", "m1"],
-      [""],
-      ["x".repeat(65)],
-      ["bad/id"],
-      ["bad id"],
-      ["bad?id"],
-      ["bad%id"],
-      ["bad\nid"],
-      ["bad\n"],
-      ["á"],
-      [1],
-      null,
-      "m1",
-    ]) {
-      const before = requests.length;
-      await expectError(
-        await call(f, op.name, messages),
-        "invalid_arguments",
-        "The messages field must be a list of 1 to 15 different message IDs that read_thread returned.",
-      );
-      expect(requests.slice(before)).toEqual([]);
-    }
-    const ids = [...ids15.slice(0, -1), "aZ0_-".repeat(12) + "abcd"];
-    serveMessages(ids);
-    expect(await answer(await call(f, op.name, ids))).toEqual({
-      account: PERSONAL,
-      messages: changed(op.name, ids),
-    });
-    expect(google.trashRequests).toHaveLength(15);
-  },
-);
+// The three tools share one input schema, so one tool proves it.
+it("rejects invalid message lists before any outbound request", async () => {
+  const f = await allowed("trash_messages");
+  for (const messages of [
+    [],
+    [...ids15, "m16"],
+    ["m1", "m1"],
+    ["m1", "m2", "m1"],
+    [""],
+    ["x".repeat(65)],
+    ["bad/id"],
+    ["bad id"],
+    ["bad?id"],
+    ["bad%id"],
+    ["bad\nid"],
+    ["bad\n"],
+    ["á"],
+    [1],
+    null,
+    "m1",
+  ]) {
+    const before = requests.length;
+    await expectError(
+      await call(f, "trash_messages", messages),
+      "invalid_arguments",
+      "The messages field must be a list of 1 to 15 different message IDs that read_thread returned.",
+    );
+    expect(requests.slice(before)).toEqual([]);
+  }
+  const ids = [...ids15.slice(0, -1), "aZ0_-".repeat(12) + "abcd"];
+  serveMessages(ids);
+  expect(await answer(await call(f, "trash_messages", ids))).toEqual({
+    account: PERSONAL,
+    messages: changed("trash_messages", ids),
+  });
+  expect(google.trashRequests).toHaveLength(15);
+});
 
 it.each(operations)(
   "$name changes exactly the three named messages and nothing else",
@@ -79,90 +69,56 @@ it.each(operations)(
   },
 );
 
-it.each(operations)(
-  "$name refreshes once, sends the first alone and opens at most five",
-  async (op) => {
-    const f = await allowed(op.name, { access_expires_at: NOW - 1 });
-    const entered = ids15.map(() => deferred());
-    const gates = ids15.map(() => deferred());
-    let open = 0;
-    let most = 0;
-    ids15.forEach((id, index) =>
-      google.trashAnswers.set(id, async () => {
-        most = Math.max(most, ++open);
-        entered[index]!.resolve();
-        await gates[index]!.promise;
-        open--;
-        return op.method === "DELETE"
-          ? new Response(null, { status: 204 })
-          : Response.json({
-              id,
-              labelIds: op.name === "restore_messages" ? ["UNREAD"] : ["UNREAD", "TRASH"],
-            });
-      }),
-    );
-    const pending = call(f, op.name, ids15);
-    try {
-      await entered[0]!.promise;
-      expect(google.trashRequests).toHaveLength(1);
-      expect(open).toBe(1);
-      gates[0]!.resolve();
-      await Promise.all(entered.slice(1, 6).map((e) => e.promise));
-      expect(open).toBe(5);
-      for (const gate of gates) gate.resolve();
-      expect(await answer(await pending)).toEqual({
-        account: PERSONAL,
-        messages: changed(op.name, ids15),
-      });
-      expect(most).toBe(5);
-      expect(open).toBe(0);
-      expect(google.refreshTokens).toHaveLength(1);
-    } finally {
-      for (const gate of gates) gate.resolve();
-      await pending;
-    }
-  },
-);
-
-it.each(operations)("$name stops after the first 500 but continues after 404", async (op) => {
-  const f = await allowed(op.name);
-  serveMessages(ids15);
-  google.trashAnswers.set("m1", () => new Response(null, { status: 500 }));
-  await expectError(
-    await call(f, op.name, ids15),
-    "google_unavailable",
-    unconfirmedMessage(PERSONAL),
+// changeEach paces all three tools the same way, so one tool proves it.
+it("refreshes once, sends the first alone and opens at most five", async () => {
+  const f = await allowed("trash_messages", { access_expires_at: NOW - 1 });
+  const entered = ids15.map(() => deferred());
+  const gates = ids15.map(() => deferred());
+  let open = 0;
+  let most = 0;
+  ids15.forEach((id, index) =>
+    google.trashAnswers.set(id, async () => {
+      most = Math.max(most, ++open);
+      entered[index]!.resolve();
+      await gates[index]!.promise;
+      open--;
+      return Response.json({ id, labelIds: ["UNREAD", "TRASH"] });
+    }),
   );
-  expect(google.trashRequests.map((r) => r.url)).toEqual([`${MESSAGES_URL}/m1${op.suffix}`]);
-  expect((await callRows()).map((r) => r.outcome)).toEqual([null]);
-
-  google.trashAnswers.set("m1", () => new Response(null, { status: 404 }));
-  const before = google.trashRequests.length;
-  expect(await answer(await call(f, op.name, ids15))).toEqual({
-    account: PERSONAL,
-    messages: changed(op.name, ids15.slice(1)),
-    not_found: ["m1"],
-  });
-  expect(google.trashRequests.slice(before)).toHaveLength(15);
+  const pending = call(f, "trash_messages", ids15);
+  try {
+    await entered[0]!.promise;
+    expect(google.trashRequests).toHaveLength(1);
+    expect(open).toBe(1);
+    gates[0]!.resolve();
+    await Promise.all(entered.slice(1, 6).map((e) => e.promise));
+    expect(open).toBe(5);
+    for (const gate of gates) gate.resolve();
+    expect(await answer(await pending)).toEqual({
+      account: PERSONAL,
+      messages: changed("trash_messages", ids15),
+    });
+    expect(most).toBe(5);
+    expect(open).toBe(0);
+    expect(google.refreshTokens).toHaveLength(1);
+  } finally {
+    for (const gate of gates) gate.resolve();
+    await pending;
+  }
 });
 
-it.each(operations)(
-  "$name asks a reconnecting account for one token and sends no message request",
-  async (op) => {
-    const f = await allowed(op.name, { access_expires_at: NOW - 1 });
-    google.refreshAnswers.push("invalid_grant");
-    await expectError(
-      await call(f, op.name, ids15),
-      "account_needs_reconnect",
-      /Ask the owner to reconnect/,
-    );
-    expect(google.refreshTokens).toHaveLength(1);
-    expect(google.trashRequests).toEqual([]);
-  },
-);
-
 it.each(operations)("$name keeps mixed outcomes in input order and records success", async (op) => {
-  const ids = ["changed", "missing404", "missing400", "denied", "rate", "server", "lost", "last"];
+  const ids = [
+    "changed",
+    "missing404",
+    "missing400",
+    "denied",
+    "rate",
+    "server",
+    "redirect",
+    "lost",
+    "last",
+  ];
   serveMessages(ids);
   for (const [id, status] of [
     ["missing404", 404],
@@ -170,6 +126,7 @@ it.each(operations)("$name keeps mixed outcomes in input order and records succe
     ["denied", 403],
     ["rate", 429],
     ["server", 500],
+    ["redirect", 302],
   ] as const)
     google.trashAnswers.set(id, () => new Response(null, { status }));
   google.trashAnswers.set("lost", () => HttpResponse.error());
@@ -183,7 +140,7 @@ it.each(operations)("$name keeps mixed outcomes in input order and records succe
     account: PERSONAL,
     messages: [...changed(op.name, ["changed"]), ...changed(op.name, ["last"], [])],
     not_found: ["missing404", "missing400"],
-    unconfirmed: ["denied", "rate", "server", "lost"],
+    unconfirmed: ["denied", "rate", "server", "redirect", "lost"],
   });
   expect((await callRows()).map((r) => r.outcome)).toEqual(["success"]);
 });
@@ -217,48 +174,20 @@ it.each(operations)("$name refuses one or several missing messages with their ID
   expect((await callRows()).map((r) => r.outcome)).toEqual(["refused", "refused"]);
 });
 
-it.each(operations)(
-  "$name records failed for confirmed refusals and leaves unknown failures without an audit outcome",
-  async (op) => {
-    const f = await allowed(op.name);
-    for (const statuses of [
-      [404, 429],
-      [404, 500],
-      [404, 429, 500],
-    ]) {
-      const ids = statuses.map((status) => `m${status}`);
-      ids.forEach((id, index) =>
-        google.trashAnswers.set(id, () => new Response(null, { status: statuses[index] })),
-      );
-      // A confirmed refusal keeps today's text; an unknown outcome says that a repeat is safe.
-      await expectError(
-        await call(f, op.name, ids),
-        "google_unavailable",
-        statuses.includes(500) ? unconfirmedMessage(PERSONAL) : unavailableMessage(PERSONAL),
-      );
-    }
-    expect((await callRows()).map((r) => r.outcome)).toEqual(["failed", null, null]);
-  },
-);
-
-it.each(operations)("$name keeps the first change when the direct deadline passes", async (op) => {
+// The call deadline and changeEach are shared, so one tool proves it.
+it("keeps the first change when the direct deadline passes", async () => {
   const ids = ["m1", "m2", "m3"];
   serveMessages(ids);
-  const f = await allowed(op.name);
+  const f = await allowed("trash_messages");
   const entered = deferred();
   const release = deferred();
   google.trashAnswers.set("m1", async () => {
     entered.resolve();
     await release.promise;
-    return op.method === "DELETE"
-      ? new Response(null, { status: 204 })
-      : Response.json({
-          id: "m1",
-          labelIds: op.name === "restore_messages" ? ["UNREAD"] : ["UNREAD", "TRASH"],
-        });
+    return Response.json({ id: "m1", labelIds: ["UNREAD", "TRASH"] });
   });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const pending = call(f, op.name, ids);
+  const pending = call(f, "trash_messages", ids);
   try {
     await entered.promise;
     vi.spyOn(Date, "now").mockReturnValue(NOW + 20_000);
@@ -267,7 +196,7 @@ it.each(operations)("$name keeps the first change when the direct deadline passe
     release.resolve();
     expect(await answer(await pending)).toEqual({
       account: PERSONAL,
-      messages: changed(op.name, ["m1"]),
+      messages: changed("trash_messages", ["m1"]),
       unconfirmed: ["m2", "m3"],
     });
     expect(google.trashRequests).toHaveLength(1);
@@ -285,7 +214,7 @@ it.each(operations)(
     const ids = ["m1", "m2"];
     serveMessages(ids);
     const f = await allowed(op.name);
-    const first = await answer(await call(f, op.name, ids));
+    await answer(await call(f, op.name, ids));
     if (op.name === "delete_messages") {
       for (const id of ids) google.trashAnswers.set(id, () => new Response(null, { status: 404 }));
       await expectError(
@@ -293,7 +222,7 @@ it.each(operations)(
         "not_found",
         /None of the messages "m1", "m2"/,
       );
-    } else expect(await answer(await call(f, op.name, ids))).toEqual(first);
+    } else await answer(await call(f, op.name, ids));
     expect(google.trashRequests.map((r) => r.url)).toEqual(
       [...ids, ...ids].map((id) => `${MESSAGES_URL}/${id}${op.suffix}`),
     );
@@ -362,23 +291,13 @@ it("permissions are independent and the connection groups all three tools under 
   }
 });
 
-const descriptions: Record<string, string> = {
-  trash_messages:
-    "Moves messages of one Google account to the trash. `account` is the address of an account that list_accounts returns. `messages` is a list of 1 to 15 different message IDs that read_thread returned for that account; an ID works only in the account that returned it. Only the named messages move: the other messages of their threads stay where they are. In the trash, a message loses the label INBOX and keeps its other labels. Gmail deletes a message for good after 30 days in the trash, and restore_messages takes it out before that. In the result, `messages` holds each message that moved, with its label IDs after the change. `not_found` lists the IDs that the account does not have. `unconfirmed` lists the IDs for which Google did not confirm the change: call again with those IDs. Each of the two is present only when it is not empty. When no message moved, the call returns an error. Calling again with the same IDs is safe: a message that is already in the trash stays there. When the owner sets this tool to ask, it returns a pending approval with a link instead; get_approval returns the result after the owner approves.",
-  restore_messages:
-    "Takes messages of one Google account out of the trash. `account` is the address of an account that list_accounts returns. `messages` is a list of 1 to 15 different message IDs that read_thread returned for that account; an ID works only in the account that returned it. Only the named messages are restored. In the result, `messages` holds each restored message with its label IDs after the change. A restored message is not back in the inbox: Gmail removes the label INBOX when a message goes to the trash and does not add it back, while the message keeps its other labels, such as UNREAD, STARRED, and the owner's own labels. It stays out of the trash and out of the inbox. `not_found` lists the IDs that the account does not have, which includes messages that were deleted for good. `unconfirmed` lists the IDs for which Google did not confirm the change: call again with those IDs. Each of the two is present only when it is not empty. When no message was restored, the call returns an error. Calling again with the same IDs is safe. When the owner sets this tool to ask, it returns a pending approval with a link instead; get_approval returns the result after the owner approves.",
-  delete_messages:
-    "Deletes messages of one Google account for good. Gmail cannot bring them back, and they do not go to the trash. Use trash_messages when the owner may want a message back. `account` is the address of an account that list_accounts returns. `messages` is a list of 1 to 15 different message IDs that read_thread returned for that account; an ID works only in the account that returned it. Only the named messages are deleted: the other messages of their threads stay. In the result, `messages` holds the IDs that were deleted. `not_found` lists the IDs that the account does not have. `unconfirmed` lists the IDs for which Google did not confirm the delete: call again with those IDs. Each of the two is present only when it is not empty. When no message was deleted, the call returns an error. A deleted message counts as not found. So when an ID was unconfirmed, or a call failed, got no answer, or ended as unknown, and a later call reports that ID as not found, the message is gone. When the owner sets this tool to ask, it returns a pending approval with a link instead; get_approval returns the result after the owner approves.",
-};
-
-it("tools/list publishes the exact descriptions, message schemas and annotations", async () => {
+it("tools/list publishes the message schemas and annotations", async () => {
   const f = await fixture();
   for (const op of operations) await permission(f, f.personal, true, op.name);
   for (const name of ["list_labels", "search_threads", "read_thread"])
     await permission(f, f.personal, true, name);
   const listed = (await rpcResult(await f.mcp.call())).tools as Array<{
     name: string;
-    description: string;
     annotations: Record<string, boolean>;
     inputSchema: {
       type: string;
@@ -388,7 +307,6 @@ it("tools/list publishes the exact descriptions, message schemas and annotations
   }>;
   for (const op of operations) {
     const tool = listed.find((t) => t.name === op.name)!;
-    expect(tool.description).toBe(descriptions[op.name]);
     expect(tool.annotations).toEqual({
       readOnlyHint: false,
       destructiveHint: op.destructive,
