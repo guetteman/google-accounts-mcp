@@ -12,7 +12,14 @@ import {
 import { createLink } from "../uploads/store";
 import { UPLOAD_PATH } from "../uploads/link";
 import type { Tool as McpTool } from "@modelcontextprotocol/server";
-import { isoSeconds, viewDate, type ViewNote, type ViewValue } from "../approvals/model";
+import {
+  fileText,
+  filesText,
+  isoSeconds,
+  viewDate,
+  type ViewNote,
+  type ViewValue,
+} from "../approvals/model";
 import { getApproval } from "../approvals/result";
 import { Data, Effect, Result, Schema, SchemaIssue } from "effect";
 import type { Unavailable } from "../db";
@@ -448,16 +455,11 @@ const fileValues = (
   files: ReadonlyArray<{ filename: string; type: string; size: number }>,
 ): ViewValue[] => {
   if (!files.length) return [];
-  const bytes = files.reduce((n, file) => n + file.size, 0);
   return [
-    {
-      name: "Attachments",
-      text: `${files.length} ${files.length === 1 ? "file" : "files"}, ${bytes.toLocaleString("en-US")} ${bytes === 1 ? "byte" : "bytes"} in all`,
-      from: "gmail",
-    },
+    { name: "Attachments", text: filesText(files), from: "gmail" },
     ...files.map((file, i) => ({
       name: `Attachment ${i + 1}`,
-      text: `${file.filename || "(no name)"} (${file.type}, ${file.size.toLocaleString("en-US")} ${file.size === 1 ? "byte" : "bytes"})`,
+      text: fileText(file),
       from: "gmail" as const,
     })),
   ];

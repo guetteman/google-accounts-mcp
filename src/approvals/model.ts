@@ -135,3 +135,11 @@ export const viewDate = (at: number): string => {
   }).format(at);
   return `${date} at ${time} UTC`;
 };
+const byteCount = (bytes: number) =>
+  `${bytes.toLocaleString("en-US")} ${bytes === 1 ? "byte" : "bytes"}`;
+/** Every attachment view sums its files in these words: `2 files, 12 bytes in all`. */
+export const filesText = (files: ReadonlyArray<{ size: number }>) =>
+  `${files.length} ${files.length === 1 ? "file" : "files"}, ${byteCount(files.reduce((n, file) => n + file.size, 0))} in all`;
+/** One attached file as a view shows it: `menu.pdf (application/pdf, 8 bytes)`. */
+export const fileText = (file: { filename: string; type: string; size: number }) =>
+  `${file.filename || "(no name)"} (${file.type}, ${byteCount(file.size)})`;
