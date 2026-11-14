@@ -115,6 +115,18 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
     expect(await dump()).toEqual(afterFirst);
   });
 
+  it("keeps an owner who signed in after the reset read an unpinned row", async () => {
+    const plan = resetPlan(await readForPlan());
+    const owner = new Browser();
+    await owner.authenticate();
+    expect((await owner.get("/accounts")).status).toBe(200);
+    expect(await ownerRow()).toMatchObject({ state: "pinned", generation: 1 });
+    const before = await dump();
+
+    expect(resetOutcome(plan, await runAll(plan.statements))).toBe("overtaken");
+    expect(await dump()).toEqual(before);
+  });
+
   it("changes nothing when it arrives after another reset finished and a new owner signed in", async () => {
     await pinnedOwner(1);
     const delayed = resetPlan(await readForPlan());
