@@ -221,7 +221,8 @@ it("stores an empty file and a file exactly at the limit without changing their 
   ).toBe(Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex"));
   const empty = await upload(f, new Uint8Array(), "empty", "application/octet-stream");
   expect(empty.size).toBe(0);
-});
+  // Encrypting and encoding 25 MB took 3.7 s and 6 s on CI runners, against the 5 s default.
+}, 30_000);
 it.each(["kv", "db"])("returns no ID after a %s storage failure", async (where) => {
   const made = await link(await attaching());
   const workerEnv =
