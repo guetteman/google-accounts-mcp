@@ -186,7 +186,6 @@ type AccountDefinition<A extends DecodedArgs> = {
   view: {
     action: string;
     joiner: string;
-    empty: string;
     /** Only send_draft may disable the digest equality check and send the current Gmail draft. */
     asItIs?: true;
     /** Sentences that the page says about this call, from its arguments alone. */
@@ -200,7 +199,15 @@ type AccountDefinition<A extends DecodedArgs> = {
 } & AccountExecution<A>;
 // The runner passes a tool only the arguments that the tool's own input decoded.
 const accountTool = <A extends DecodedArgs>(definition: AccountDefinition<A>) =>
-  ({ kind: "account", ...definition }) as unknown as Extract<Tool, { kind: "account" }>;
+  ({
+    kind: "account",
+    ...definition,
+    // The page shows this when a call has no values beyond its sentence; every tool says the same.
+    view: {
+      ...definition.view,
+      empty: "This call has no other values. The sentence above is the whole call.",
+    },
+  }) as unknown as Extract<Tool, { kind: "account" }>;
 /** The field that fails a tool's input, or null when the arguments are not an object. */
 export const decodeArgs = (
   tool: Extract<Tool, { kind: "account" }>,
@@ -518,7 +525,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "list the Gmail labels",
       joiner: "of",
-      empty: "This call has no other values. The sentence above is the whole call.",
       values: () => Effect.succeed([]),
     },
     run: (send, account) =>
@@ -551,7 +557,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "search the mail",
       joiner: "of",
-      empty: "This call has no other values. The sentence above is the whole call.",
       // The page marks every value as the agent's text, so each one is a value of the call.
       values: (args) =>
         Effect.succeed([
@@ -596,7 +601,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "read a thread",
       joiner: "in",
-      empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, send) =>
         Effect.gen(function* () {
           const summary = yield* threadSummary(send, args.thread);
@@ -661,7 +665,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "add or remove labels on threads",
       joiner: "in",
-      empty: "This call has no other values. The sentence above is the whole call.",
       notes: (args) => labelChangeNotes(labelChange(args)),
       values: (args, send) => labelChangeValues(send, labelChange(args)),
     },
@@ -695,7 +698,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "create a draft",
       joiner: "in",
-      empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, send, sources) =>
         Effect.gen(function* () {
           const boxes = draftRecipients(args);
@@ -754,7 +756,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "move messages to the trash",
       joiner: "in",
-      empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, send) => messageValues(send, args.messages),
     },
     run: (send, account, args) =>
@@ -774,7 +775,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "take messages out of the trash",
       joiner: "in",
-      empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, send) => messageValues(send, args.messages),
     },
     run: (send, account, args) =>
@@ -794,7 +794,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "delete messages permanently",
       joiner: "from",
-      empty: "This call has no other values. The sentence above is the whole call.",
       notes: () => [
         {
           text: "These messages cannot be recovered. They do not go to the trash: Gmail deletes them at once and for good.",
@@ -832,7 +831,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "download an attachment",
       joiner: "from",
-      empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, send) =>
         Effect.gen(function* () {
           const found = yield* findAttachment(send, args);
@@ -911,7 +909,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
       action: "send a message",
       notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
       joiner: "from",
-      empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, _send, sources) =>
         Effect.gen(function* () {
           const boxes = draftRecipients(args);
@@ -960,7 +957,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
       action: "send a reply",
       notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
       joiner: "from",
-      empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, send, sources) =>
         Effect.gen(function* () {
           const plan = yield* sendReplyPlan(send, args);
@@ -1021,7 +1017,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
       action: "forward a message",
       notes: () => [{ text: "A sent message cannot be taken back.", warning: true }],
       joiner: "from",
-      empty: "This call has no other values. The sentence above is the whole call.",
       values: (args, send) =>
         Effect.gen(function* () {
           const plan = yield* forwardPlan(send, args.message);
@@ -1097,7 +1092,6 @@ export const TOOLS: ReadonlyArray<Tool> = [
     view: {
       action: "send a draft",
       joiner: "from",
-      empty: "This call has no other values. The sentence above is the whole call.",
       notes: () => [{ text: draftNote, warning: true }],
       asItIs: true,
       values: (args, send) =>
