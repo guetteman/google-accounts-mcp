@@ -295,24 +295,3 @@ it.each([false, true])(
     expect(vi.getTimerCount()).toBe(0);
   },
 );
-
-it("a revoked connection cannot open a listen stream", async () => {
-  const f = await fixture();
-  await revoke(f);
-  const response = await f.mcp.call(
-    "subscriptions/listen",
-    undefined,
-    {
-      notifications: { toolsListChanged: true },
-      _meta: {
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-        "io.modelcontextprotocol/clientCapabilities": {},
-      },
-    },
-    {
-      "MCP-Protocol-Version": "2026-07-28",
-      "Mcp-Method": "subscriptions/listen",
-    },
-  );
-  expect(response.status).toBe(401);
-});

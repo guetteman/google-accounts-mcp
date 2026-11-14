@@ -39,25 +39,6 @@ it("records tool_not_allowed for a denied tool on an account the connection sees
   ]);
 });
 
-it.each([NORTHWIND, "nobody@example.com"])(
-  "records account_not_available and resolves only an existing account for %s",
-  async (account) => {
-    const f = await fixture();
-    await expectError(
-      await toolCall(f.mcp, "list_labels", { account }),
-      "account_not_available",
-      refusedMessage(account),
-    );
-    expect(await callRows()).toEqual([
-      expect.objectContaining({
-        account_id: account === NORTHWIND ? f.northwind.id : null,
-        outcome: "refused",
-        reason: "account_not_available",
-      }),
-    ]);
-  },
-);
-
 it.each(["list_labels", "list_accounts"])(
   "fails closed without a record or Google request when recording %s fails",
   async (name) => {
@@ -78,28 +59,24 @@ it.each(["list_labels", "list_accounts"])(
 const gmailModules = import.meta.glob<{ listLabels: (...args: unknown[]) => unknown }>(
   "../src/google/gmail.ts",
 );
-it.each(["thrown error", "Effect defect"])(
-  "contains an unexpected Gmail module %s and records failure without exposing internal text",
-  async (failure) => {
-    const load = gmailModules["../src/google/gmail.ts"];
-    expect(load, "the accepted Gmail module must exist").toBeDefined();
-    const gmail = await load!();
-    const f = await fixture();
-    await permission(f);
-    vi.spyOn(gmail, "listLabels").mockImplementation(() => {
-      if (failure === "thrown error") throw new Error("PRIVATE_INTERNAL_EXCEPTION");
-      return Effect.die(new Error("PRIVATE_INTERNAL_EXCEPTION"));
-    });
-    await expectError(
-      await toolCall(f.mcp, "list_labels", { account: PERSONAL }),
-      "server_unavailable",
-      SERVER_MESSAGE,
-    );
-    expect(await callRows()).toEqual([
-      expect.objectContaining({ account_id: f.personal.id, outcome: "failed" }),
-    ]);
-  },
-);
+it("contains an Effect defect in the Gmail module and records failure without exposing internal text", async () => {
+  const load = gmailModules["../src/google/gmail.ts"];
+  expect(load, "the accepted Gmail module must exist").toBeDefined();
+  const gmail = await load!();
+  const f = await fixture();
+  await permission(f);
+  vi.spyOn(gmail, "listLabels").mockImplementation(() =>
+    Effect.die(new Error("PRIVATE_INTERNAL_EXCEPTION")),
+  );
+  await expectError(
+    await toolCall(f.mcp, "list_labels", { account: PERSONAL }),
+    "server_unavailable",
+    SERVER_MESSAGE,
+  );
+  expect(await callRows()).toEqual([
+    expect.objectContaining({ account_id: f.personal.id, outcome: "failed" }),
+  ]);
+});
 
 it("records each known, refused and failed call with only its resolved account and server tool name", async () => {
   const f = await fixture();

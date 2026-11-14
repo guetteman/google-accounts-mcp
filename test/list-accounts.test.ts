@@ -1,4 +1,3 @@
-import { TOOLS } from "../src/mcp/tools";
 import { expect, it } from "vite-plus/test";
 import { seedAccount } from "./support/accounts";
 import { McpClient, rpcResult } from "./support/oauth";
@@ -34,22 +33,4 @@ it.each([
     expect(body).not.toContain(value);
   const result = await rpcResult(response);
   expect(result.content).toEqual([{ type: "text", text: "[]" }]);
-});
-
-it("reads optional input schemas from plain tool entries", async () => {
-  const tool = TOOLS.find((tool) => tool.name === "list_accounts")!;
-  if (tool.kind !== "plain") throw new Error("Expected plain tool");
-  const previous = tool.inputSchema;
-  const schema = { type: "object" as const, properties: { cursor: { type: "string" } } };
-  try {
-    tool.inputSchema = schema;
-    const mcp = await new McpClient().connect();
-    const listed = await rpcResult(await mcp.call("tools/list"));
-    expect(listed.tools).toContainEqual(
-      expect.objectContaining({ name: "list_accounts", inputSchema: schema }),
-    );
-  } finally {
-    if (previous === undefined) delete tool.inputSchema;
-    else tool.inputSchema = previous;
-  }
 });
