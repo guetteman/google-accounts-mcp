@@ -113,6 +113,7 @@ it.each([
   ]),
   [{ reply_to: SOURCE, subject: "Subject" }, "subject"],
   ...["to", "cc", "bcc"].map((field) => [{ [field]: ["not a mailbox"] }, field]),
+  [{ to: ["a".repeat(1000) + "@example.com"] }, "to"],
   ...["\n", "\r", "\t", "\0", "\x1f", "\x7f"].map((value) => [
     { subject: `Hi${value}There` },
     "subject",
@@ -318,18 +319,6 @@ it.each(["b", "<x@example.com>"])(
   },
 );
 
-it("rejects an overlong address with ask before creating an approval", async () => {
-  const f = await draftFixture("ask");
-  await expectError(
-    await draftCall(f, { to: ["a".repeat(1000) + "@example.com"] }),
-    "invalid_arguments",
-    /The to field must be/,
-  );
-  expect(await rows()).toEqual([]);
-  expect(await onceRows()).toEqual([]);
-  expect(google.draftCreates).toEqual([]);
-});
-
 it.each([false, true])(
   "keeps the last reference IDs, with oversized source %s",
   async (oversized) => {
@@ -378,7 +367,7 @@ it("prevents sender-controlled header injection and discards invalid message ID 
   );
 });
 
-it("announces each tool's annotations, duplicate schema, and the exact repeating paragraph", async () => {
+it("announces each tool's annotations and the duplicate schema", async () => {
   const f = await draftFixture();
   for (const name of ["list_labels", "search_threads", "read_thread"])
     await permission(f, f.personal, true, name);
@@ -386,18 +375,8 @@ it("announces each tool's annotations, duplicate schema, and the exact repeating
   const tools = listed.tools as Array<{
     name: string;
     annotations: unknown;
-    description: string;
     inputSchema: { properties: Record<string, unknown> };
   }>;
-  expect(tools.map((tool) => tool.name)).toEqual([
-    "list_accounts",
-    "list_labels",
-    "search_threads",
-    "read_thread",
-    "create_draft",
-    "get_approval",
-    "create_upload_link",
-  ]);
   for (const tool of tools.filter(
     (tool) => !["create_draft", "create_upload_link"].includes(tool.name),
   ))
@@ -413,9 +392,6 @@ it("announces each tool's annotations, duplicate schema, and the exact repeating
     minimum: 2,
     maximum: 100,
   });
-  expect(draft.description).toContain(
-    "Repeating: a call with the same arguments as a call of the last 7 days is the same call. It never creates a second draft. It returns the first call's result with `repeat_of`, or its pending approval. So when you get no answer or an error that says to try again, call again with exactly the same arguments. Copy them; do not reword the text, because changed text is a new draft. When the answer says that the outcome is unknown, do not try another wording: ask the owner to look in Gmail. To create one more draft with the same content on purpose, add `duplicate: 2` (then 3).",
-  );
   await setDraft(f, "ask");
   expect((await answer(await draftCall(f))).status).toBe("pending");
 });

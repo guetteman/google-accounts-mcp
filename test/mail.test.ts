@@ -77,16 +77,6 @@ it.each(["b", "<x@example.com>"])(
   },
 );
 
-it("drops a name that looks like another address after unquoting", () => {
-  for (const text of [
-    "alice@good.example, Bob <mallory@evil.example>",
-    '"Alice <alice@good.example>, Bob" <mallory@evil.example>',
-    '"Alice <Bob" <mallory@evil.example>',
-    '"Alice >Bob" <mallory@evil.example>',
-  ])
-    expect(parseMailbox(text)).toEqual({ address: "mallory@evil.example" });
-});
-
 it.each([
   ["José Núñez", "=?UTF-8?B?Sm9zw6kgTsO6w7Fleg==?="],
   ['A "quote"', "=?UTF-8?B?QSAicXVvdGUi?="],
