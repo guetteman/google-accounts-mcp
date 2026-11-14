@@ -28,7 +28,7 @@ import { listVisibleAccounts } from "../accounts/store";
 import { findAttachment, partBytes } from "../google/attachment";
 import { MAX_ATTACHMENT_BYTES, WithFile, type Takes } from "./file";
 import { BodyBudget, LIMIT, placeOf, readThread, textOf } from "../google/thread";
-import { listLabels, MAX_ITEMS, searchThreads, threadSummary } from "../google/gmail";
+import { GmailId, listLabels, MAX_ITEMS, searchThreads, threadSummary } from "../google/gmail";
 import {
   changeLabels,
   labelChangeNotes,
@@ -243,10 +243,6 @@ export const DEFAULT_LIMIT = 10;
 export const MAX_LIMIT = 25;
 const MAX_QUERY = 2000;
 const MAX_PAGE = 500;
-const ThreadId = Schema.String.check(
-  Schema.isBetweenLength(1, 64),
-  Schema.isPattern(/^[A-Za-z0-9_-]+$/),
-);
 const LabelIds = Schema.Array(
   Schema.String.check(
     Schema.isBetweenLength(1, 100),
@@ -267,10 +263,6 @@ const Subject = Schema.String.check(
   // oxlint-disable-next-line no-control-regex -- Input subjects cannot contain header controls.
   Schema.isPattern(/^[^\u0000-\u001f\u007f]*$/),
 );
-const MessageId = Schema.String.check(
-  Schema.isBetweenLength(1, 64),
-  Schema.isPattern(/^[A-Za-z0-9_-]+$/),
-);
 const DraftInput = Schema.Struct({
   account: Schema.String,
   to: Schema.optionalKey(Mailboxes),
@@ -279,9 +271,7 @@ const DraftInput = Schema.Struct({
   subject: Schema.optionalKey(Subject),
   body: Schema.String,
   attachments: Schema.optionalKey(Attachments),
-  reply_to: Schema.optionalKey(
-    Schema.String.check(Schema.isBetweenLength(1, 64), Schema.isPattern(/^[A-Za-z0-9_-]+$/)),
-  ),
+  reply_to: Schema.optionalKey(GmailId),
   reply_all: Schema.optionalKey(Schema.Boolean),
   duplicate: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 2, maximum: 100 }))),
 }).check(
@@ -318,9 +308,11 @@ const draftMail = (
 });
 const MessagesInput = Schema.Struct({
   account: Schema.String,
-  messages: Schema.Array(
-    Schema.String.check(Schema.isBetweenLength(1, 64), Schema.isPattern(/^[A-Za-z0-9_-]+$/u)),
-  ).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_ITEMS), Schema.isUnique()),
+  messages: Schema.Array(GmailId).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(MAX_ITEMS),
+    Schema.isUnique(),
+  ),
 });
 const messagesExpects = {
   account: "a string",
@@ -585,7 +577,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     description: `Returns the messages of one thread of one Google account, oldest first, as plain text. \`account\` is the address of an account that list_accounts returns. \`thread\` is a thread ID that search_threads returned for that account; an ID works only in the account that returned it. \`message_count\` is the number of messages in the thread. Each message has its ID, its position in the thread, \`from\`, \`to\`, \`cc\`, its date, its label IDs, its text, and its attachments. When a message has Reply-To, \`reply_to\` is that header, unfolded and shortened to ${MAX_REPLY_HEADER} characters; a reply goes there instead of to \`from\` when it is not empty. A reply to the account's own message goes to that message's To. \`bcc\` is present when the message has that header, which is normally mail that the account wrote. A message that is a draft has \`draft\`, its draft ID. HTML mail is converted to plain text, and a link keeps its address in parentheses. An attachment has an ID, a file name, a media type, and a size in bytes; the result holds no file. \`inline: true\` marks an image that stands inside the body; converted HTML says \`[image: name]\` where it stood. A very long field is shortened: a list of recipients ends with \`… and N more\`, and \`attachments_left_out\` counts the attachments that are not listed. A result has at most ${LIMIT.toLocaleString("en-US")} characters. When it has \`next_page\`, it stops before the end of the thread: send the same call with \`page\` set to that value to get the rest. A message with \`text_cut\` does not hold its whole text: \`end\` means that the next page continues it, \`start\` that it continues the page before, and \`both\` means both. Reading changes nothing in Gmail: unread mail stays unread. When the owner sets this tool to ask, it returns a pending approval with a link instead of messages; get_approval returns the messages after the owner approves.`,
     input: Schema.Struct({
       account: Schema.String,
-      thread: ThreadId,
+      thread: GmailId,
       page: Schema.optionalKey(
         Schema.String.check(
           Schema.isBetweenLength(1, 100),
@@ -638,10 +630,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     description: `Adds and removes labels on threads of one Google account. \`account\` is the address of an account that list_accounts returns. \`threads\` is a list of 1 to ${MAX_ITEMS} thread IDs that search_threads returned for that account. \`add\` and \`remove\` are lists of label IDs that list_labels returned for that account, at most ${MAX_LABELS} each; the call needs at least one label, and no label in both lists. The change applies to every message of each thread. To archive a thread, remove \`INBOX\`. The tool cannot add \`INBOX\`, because that would also take mail out of the trash or spam. To mark it as read, remove \`UNREAD\`; to mark it as unread, add \`UNREAD\`. To star it, add \`STARRED\`. Of the system labels, the tool accepts only \`UNREAD\`, \`STARRED\`, \`IMPORTANT\`, and the five \`CATEGORY_\` labels, and \`INBOX\` in \`remove\`: it does not move mail to the trash or to spam or take it out, and it creates no label. The result's \`threads\` has one entry for each thread that changed: its ID and \`labels\`, the IDs of the labels that at least one of its messages has after the change. \`not_found\` lists the threads that the account does not have. \`unconfirmed\` lists the threads whose change Google did not confirm: send the call again with those threads, because repeating a change is safe. Each of the two is left out when it is empty. The call fails as a whole only when no thread is confirmed changed. When it fails with a message that Google did not confirm the request, a thread may have changed, and sending the same call again is safe. When the owner sets this tool to ask, it returns a pending approval with a link instead of a result; get_approval returns the result after the owner approves.`,
     input: Schema.Struct({
       account: Schema.String,
-      threads: Schema.Array(ThreadId).check(
-        Schema.isBetweenLength(1, MAX_ITEMS),
-        Schema.isUnique(),
-      ),
+      threads: Schema.Array(GmailId).check(Schema.isBetweenLength(1, MAX_ITEMS), Schema.isUnique()),
       add: Schema.optionalKey(
         LabelIds.check(Schema.makeFilter((ids) => !ids.some((id) => REFUSED_ADD.has(id)))),
       ),
@@ -817,10 +806,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
       "Returns one attachment of a message of one Google account. `account` is the address of an account that list_accounts returns. `message` is a message ID and `attachment` an attachment ID that read_thread returned for that account; both work only in that account. The result has two parts. The first is JSON with the account, the message, the attachment, and the file's name, media type, and size in bytes. The second is the file. In Claude Code the file comes as an embedded resource of any type: Claude Code saves it to disk and gives its path. In other clients an image (PNG, JPEG, GIF, or WebP) comes as an image and a text file as text, and any other file, such as a PDF, returns attachment_not_readable: tell the owner that Claude Code can open it. An attachment larger than 12 MB returns attachment_too_large with its size. Downloading changes nothing in Gmail. When the owner sets this tool to ask, it returns a pending approval with a link instead of the file; get_approval returns the file after the owner approves, for one hour.",
     input: Schema.Struct({
       account: Schema.String,
-      message: Schema.String.check(
-        Schema.isBetweenLength(1, 64),
-        Schema.isPattern(/^[A-Za-z0-9_-]+$/u),
-      ),
+      message: GmailId,
       attachment: Schema.String.check(Schema.isMaxLength(64), Schema.isPattern(/^\d+(\.\d+)*$/u)),
     }),
     expects: {
@@ -935,7 +921,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     description: `Sends a plain text reply in a message's thread. A sent reply cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The recipients and subject come from that message, as in create_draft with reply_to and no given recipients: Reply-To (the reply_to field of read_thread) or From, or To for the account's own message, and Re: when needed. \`reply_all: true\` adds the message's other To and Cc recipients, without the account's own address or repeated addresses; it defaults to false. \`body\` is required plain text and may be empty. The body holds no quote unless you write one. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.\n\n${attachmentsDescription}`,
     input: Schema.Struct({
       account: DraftInput.fields.account,
-      message: MessageId,
+      message: GmailId,
       body: DraftInput.fields.body,
       reply_all: DraftInput.fields.reply_all,
       duplicate: DraftInput.fields.duplicate,
@@ -995,7 +981,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     description: `Forwards a message's original text and every attachment, including inline images, as plain text with files. A sent message cannot be taken back. \`account\` is the address of an account that list_accounts returns. \`message\` is a message ID from read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. \`to\` is a required non-empty list of mailboxes, each an address or Name <address>; \`cc\` and \`bcc\` are optional lists. \`body\` is an optional plain text note before the forwarded text, empty by default. The forward stays in the original's thread in this account and adds Fwd: to its subject when needed. The limit is ${MAX_FORWARD_BYTES.toLocaleString("en-US")} bytes of attachments and text, and ${MAX_FORWARD_FILES} attachments. The original's text must fit ${PAGE_BODY_BYTES.toLocaleString("en-US")} bytes of body, ${MAX_TEXT.toLocaleString("en-US")} characters, and ${MAX_BODY_PARTS} body parts that Gmail gives apart; if it cannot be forwarded whole, nothing is sent. Parts that are neither plain/HTML text nor attachments are omitted, such as a calendar invitation without a file name or attachment ID. It needs only forward_message's setting. \`duplicate\` is an optional whole number from 2 to 100 for a deliberate copy. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}${deliberateSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
     input: Schema.Struct({
       account: DraftInput.fields.account,
-      message: MessageId,
+      message: GmailId,
       to: Mailboxes.check(Schema.isMinLength(1)),
       cc: DraftInput.fields.cc,
       bcc: DraftInput.fields.bcc,
@@ -1081,7 +1067,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
       "Send a draft that exists in this account, as it is in Gmail at that moment. It cannot be taken back.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     description: `Sends an existing draft as it is in Gmail at that moment, including changes made there. With ask, a draft that the page cannot show whole cannot be approved: more than ${MAX_DRAFT_FILES} attachments, text that cannot be shown whole (${PAGE_BODY_BYTES.toLocaleString("en-US")} bytes of body, ${MAX_TEXT.toLocaleString("en-US")} characters, or ${MAX_BODY_PARTS} body parts that Gmail gives apart, or HTML that could not be converted), more than ${MAX_DRAFT_HEADERS.toLocaleString("en-US")} characters in its From, To, Cc, Bcc, and Subject, a repeated From, To, Cc, Bcc, Subject or Reply-To header, or a part that is neither text nor a file. A sent message cannot be taken back, and the draft is gone from Drafts afterwards. \`account\` is the address of an account that list_accounts returns. \`draft\` is a draft ID from create_draft or read_thread for this account, 1 to 64 letters, digits, hyphens, or underscores. The result has account, message, and thread, the IDs of the sent message and its thread.\n\n${repeatSend}\n\nWith ask, a send that cannot be built appears on the owner's page, not in your answer. When the owner sets this tool to ask, it returns a pending approval with a link instead of sending; get_approval returns the result after the owner approves.`,
-    input: Schema.Struct({ account: DraftInput.fields.account, draft: MessageId }),
+    input: Schema.Struct({ account: DraftInput.fields.account, draft: GmailId }),
     expects: {
       account: draftExpects.account,
       draft: "a draft ID of 1 to 64 letters, digits, hyphens, or underscores from this account",

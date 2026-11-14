@@ -39,6 +39,15 @@ export const get = <A>(
     return yield* Schema.decodeUnknownEffect(schema)(body).pipe(Effect.mapError(unavailable));
   });
 
+/**
+ * A thread, message, or draft ID as a tool accepts it: 1 to 64 URL-safe characters. Effect
+ * publishes a pattern in the tool's JSON Schema only for a regular expression with the u flag.
+ */
+export const GmailId = Schema.String.check(
+  Schema.isBetweenLength(1, 64),
+  Schema.isPattern(/^[A-Za-z0-9_-]+$/u),
+);
+
 /** Shared answer shape for attachments.get, including read_thread's deferred body parts. */
 export const AttachmentBytes = Schema.Struct({ data: Schema.String });
 

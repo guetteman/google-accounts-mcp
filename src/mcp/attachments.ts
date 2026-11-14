@@ -3,7 +3,7 @@ import { fileText, filesText, viewDate, type ViewValue } from "../approvals/mode
 import { findAttachment, partBytes } from "../google/attachment";
 import { shorten } from "../google/bounds";
 import { MAX_FORWARD_BYTES } from "../google/forward";
-import { REQUESTS_AT_ONCE } from "../google/gmail";
+import { GmailId, REQUESTS_AT_ONCE } from "../google/gmail";
 import { fileFields, type FilePart } from "../google/mail";
 import { normalizeEmail } from "../owner/owner";
 import { parseUploadId } from "../uploads/store";
@@ -13,10 +13,9 @@ import { TOOLS, type Sources } from "./tools";
 // An approved reply with six refreshed source accounts uses 46 requests:
 // 29 outside requests, 17 D1 operations, and no KV reads or writes.
 export const MAX_ATTACHMENTS = 6;
-const Id = Schema.String.check(Schema.isBetweenLength(1, 64), Schema.isPattern(/^[A-Za-z0-9_-]+$/));
 const Copy = Schema.Struct({
   account: Schema.String,
-  message: Id,
+  message: GmailId,
   attachment: Schema.String.check(
     Schema.isBetweenLength(1, 64),
     Schema.isPattern(/^[0-9]+(?:\.[0-9]+)*$/),
