@@ -439,6 +439,7 @@ it("exposes saving and unconfirmed controls as disabled to assistive technology"
 
 it.each([
   ["unavailable", "ok", unavailable],
+  ["unavailable", "already_ended", unavailable],
   ["unknown", "unavailable", unknown],
 ])(
   "keeps the %s notice when another save already in flight then answers %s",
