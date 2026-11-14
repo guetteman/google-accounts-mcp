@@ -495,6 +495,50 @@ it("refuses an approval when a direct call reserves its upload just before the i
   expect(google.uploads).toHaveLength(1);
   expect(await uploads()).toEqual([]);
 });
+it("refuses an approval whose upload read missed an upload that becomes free before the insert", async () => {
+  const f = await attaching();
+  await setTool(f, "create_draft", "ask");
+  const free = await upload(f);
+  const reserved = await upload(f);
+  const held = hold(google.uploadAnswers, new Response(null, { status: 400 }));
+  const direct = attachCall(f, [{ upload: reserved.upload }]);
+  await held.entered;
+  let released = false;
+  const db = observeStatements(env.DB, async (sql) => {
+    if (!released && sql.startsWith("INSERT INTO approvals")) {
+      released = true;
+      held.release();
+      await expectError(await direct, "message_not_sendable", /Gmail refused/);
+    }
+  });
+  try {
+    await expectError(
+      await attachCall(
+        f,
+        [{ upload: free.upload }, { upload: reserved.upload }],
+        {},
+        "create_draft",
+        testEnv({ DB: db }),
+      ),
+      "account_not_available",
+      /No account/,
+    );
+    expect(released).toBe(true);
+    expect(await rows()).toEqual([]);
+    expect(await env.DB.prepare("SELECT identity FROM uploads").all()).toMatchObject({
+      results: [{ identity: null }, { identity: null }],
+    });
+  } finally {
+    held.release();
+    await direct;
+  }
+  await answer(
+    await attachCall(f, [{ upload: free.upload }, { upload: reserved.upload }], {
+      body: "Corrected",
+    }),
+  );
+  expect(google.sends).toHaveLength(1);
+});
 it("reserves none of a set containing a held upload even when releasing marks fails", async () => {
   const f = await attaching();
   const free = await upload(f, new Uint8Array([1]), "free.pdf");
