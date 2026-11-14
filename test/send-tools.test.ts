@@ -101,7 +101,11 @@ it("names message and the draft workaround when reply recipients cannot be fille
 it.each([
   { name: "send_message", args: { to: [] }, field: "to" },
   { name: "forward_message", args: { to: [] }, field: "to" },
+  { name: "send_message", args: { to: undefined }, field: "to" },
+  { name: "forward_message", args: { to: undefined }, field: "to" },
   { name: "send_message", args: { subject: "" }, field: "subject" },
+  { name: "send_message", args: { subject: undefined }, field: "subject" },
+  { name: "send_message", args: { subject: "x".repeat(999) }, field: "subject" },
   { name: "send_reply", args: { message: "id/path" }, field: "message" },
   { name: "forward_message", args: { message: "" }, field: "message" },
   { name: "send_draft", args: { draft: "x".repeat(65) }, field: "draft" },
