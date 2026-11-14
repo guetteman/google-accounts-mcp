@@ -236,17 +236,6 @@ export function committedConnectionFailureDb(real: D1Database = env.DB): D1Datab
   );
 }
 
-export function responseLostConnectionWriteDb(real: D1Database = env.DB): D1Database {
-  return observeStatements(
-    real,
-    () => {},
-    (sql) => {
-      if (/^\s*UPDATE\s+connections\b/i.test(sql))
-        throw new Error("D1_ERROR: response lost after commit");
-    },
-  );
-}
-
 /** Change the owner after requireOwner returned, immediately before a connection action writes. */
 export function racingConnectionWriteDb(
   changeOwner: () => Promise<void>,
