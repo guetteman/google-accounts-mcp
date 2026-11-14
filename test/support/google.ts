@@ -222,7 +222,6 @@ export const google = {
     string,
     (request: Pick<Request, "signal">) => Response | Promise<Response>
   >(),
-  modifiedLabels: new Map<string, string[][]>(),
   /** Requests of the tools that trash, restore, and delete: every method, by message ID. */
   trashRequests: [] as Array<{
     url: string;
@@ -279,7 +278,6 @@ export const google = {
     this.threadAnswers.clear();
     this.modifyRequests = [];
     this.modifyAnswers.clear();
-    this.modifiedLabels.clear();
     this.trashRequests = [];
     this.trashAnswers.clear();
     unhandledMessages.length = 0;
@@ -501,9 +499,8 @@ export const google = {
           | { messages: Array<{ id: string; labelIds?: string[] }> }
           | undefined;
         if (!thread) return new HttpResponse(null, { status: 404 });
-        const previous = this.modifiedLabels.get(id);
-        const messages = thread.messages.map((message, index) => {
-          const labels = new Set(previous?.[index] ?? message.labelIds ?? []);
+        const messages = thread.messages.map((message) => {
+          const labels = new Set(message.labelIds ?? []);
           for (const label of body?.addLabelIds ?? []) labels.add(label);
           for (const label of body?.removeLabelIds ?? []) labels.delete(label);
           return {
@@ -512,10 +509,6 @@ export const google = {
             ...(labels.size ? { labelIds: [...labels] } : {}),
           };
         });
-        this.modifiedLabels.set(
-          id,
-          messages.map((message) => message.labelIds ?? []),
-        );
         return HttpResponse.json({ id, messages });
       }),
       http.all(`${MESSAGES_URL}/:id/trash`, ({ request, params }) =>

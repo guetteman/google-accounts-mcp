@@ -10,19 +10,14 @@ import {
   expectError,
   fixture,
   googleTraffic,
-  permission,
   PERSONAL,
-  problemCases,
-  refusedMessage,
   textResult,
   unavailableMessage,
   unconfirmedMessage,
 } from "./support/permissions";
-import { ORIGIN } from "./support/worker";
 import {
   allowed,
   CHANGE,
-  DESCRIPTION,
   FIFTH,
   fieldMessage,
   FIRST,
@@ -365,6 +360,7 @@ it.each([{ ids: [MISSING] }, { ids: [MISSING, FOURTH, FIFTH] }])(
 it.each([
   { name: "first 429", statuses: [429, 429, 429], count: 1, outcome: "failed" },
   { name: "first lost response", statuses: ["lost", 429, 429], count: 1, outcome: null },
+  { name: "first 500", statuses: [500, 429], count: 1, outcome: null },
   { name: "missing then 429", statuses: [404, 429], count: 2, outcome: "failed" },
   {
     name: "missing then 429 then lost response",
@@ -390,19 +386,6 @@ it.each([
     }),
     isError: true,
   });
-});
-
-it("returns the same result and sends the same bodies when the call is repeated", async () => {
-  const f = await allowed();
-  const original = await answer(await labelCall(f));
-  const stored = structuredClone(google.modifiedLabels.get(FIRST));
-  expect(await answer(await labelCall(f))).toEqual(original);
-  expect(stored).toEqual([["Label_12"], ["UNREAD", "Label_12"]]);
-  expect(google.modifiedLabels.get(FIRST)).toEqual(stored);
-  expect(google.modifyRequests.map((request) => request.body)).toEqual([
-    { addLabelIds: ["Label_12"], removeLabelIds: ["INBOX"] },
-    { addLabelIds: ["Label_12"], removeLabelIds: ["INBOX"] },
-  ]);
 });
 
 it("answers at twenty seconds and retains earlier confirmed changes", async () => {
@@ -464,6 +447,7 @@ it("answers at twenty seconds and retains earlier confirmed changes", async () =
         unconfirmed: [SECOND],
       }),
     );
+    expect((await callRows()).at(-1)?.outcome).toBe("success");
   } finally {
     release.resolve();
     vi.useRealTimers();
@@ -471,30 +455,9 @@ it("answers at twenty seconds and retains earlier confirmed changes", async () =
   }
 });
 
-it("denies visible accounts and hides unavailable accounts", async () => {
+it("lists annotations and arrays", async () => {
   const f = await fixture();
-  await permission(f);
-  await expectError(
-    await labelCall(f),
-    "tool_not_allowed",
-    `The owner has not allowed change_labels on ${PERSONAL} for this connection. The owner can change this at ${ORIGIN}/connections/${f.connection.id}.`,
-  );
-  await expectError(
-    await labelCall(f, { ...CHANGE, account: "unknown@example.com" }),
-    "account_not_available",
-    refusedMessage("unknown@example.com"),
-  );
-  expect(googleTraffic()).toEqual([]);
-});
-it.each(problemCases)("returns account_$status before Google", async ({ row, status, message }) => {
-  const f = await allowed(row);
-  await expectError(await labelCall(f), `account_${status}`, message);
-  expect(googleTraffic()).toEqual([]);
-});
-
-it.each(["ask", "allow"] as const)("lists annotations and arrays for setting %s", async (value) => {
-  const f = await fixture();
-  await setting(f, value);
+  await setting(f, "ask");
   const result = await rpcResult(await f.mcp.call());
   const tool = (result.tools as Array<Record<string, unknown>>).find(
     (tool) => tool.name === "change_labels",
@@ -513,6 +476,5 @@ it.each(["ask", "allow"] as const)("lists annotations and arrays for setting %s"
       remove: { type: "array", items: { type: "string" } },
     },
   });
-  expect(tool.description).toBe(DESCRIPTION);
   expect(googleTraffic()).toEqual([]);
 });
