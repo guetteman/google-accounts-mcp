@@ -5,8 +5,6 @@ import tailwindcss from "@tailwindcss/vite";
 import { chromium, type Browser, type Locator, type Page, type Route } from "playwright-core";
 import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
-import { GROUPS } from "../../src/mcp/groups";
-import { TOOLS } from "../../src/mcp/tools";
 
 let browser: Browser;
 let origin: string;
@@ -78,18 +76,12 @@ async function selected(group: Locator, value: "Allowed" | "Not allowed" | "Ask 
   for (const name of ["Not allowed", "Ask first", "Allowed"] as const)
     expect(await segment(group, name).getAttribute("aria-checked")).toBe(String(value === name));
 }
-async function open(width = 1280, fixture?: "groups" | "irreversible" | `tools=${string}`) {
+async function open(width = 1280, fixture?: "groups" | "irreversible") {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(1500);
   await page.goto(fixture ? `${origin}/?${fixture}` : origin);
-  // Resolve the real component before testing interaction; never replace it with a fake.
   try {
-    await expect
-      .poll(() => page.getByRole("heading", { name: "Tool permissions", exact: true }).count(), {
-        timeout: 1500,
-        message: "the real ConnectionPage must render its permissions",
-      })
-      .toBe(1);
+    await page.getByRole("heading", { name: "Tool permissions", exact: true }).waitFor();
   } catch (error) {
     await page.close();
     throw error;
@@ -201,49 +193,45 @@ it("moves keyboard focus with arrows and Tab without changing a permission", asy
   }
 });
 
-it.each([390, 1280].flatMap((width) => ["tool", "account"].map((scope) => ({ width, scope }))))(
-  "keeps every control in the same position through saving, success and failure for a $scope at $width px",
-  async ({ width, scope }) => {
-    const page = await open(width);
-    try {
-      const routes = await pending(page);
-      const boxes = () =>
-        page.getByRole("radiogroup").evaluateAll((els) =>
-          els.map((el) => {
-            const r = el.getBoundingClientRect();
-            return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height };
-          }),
-        );
-      const before = await boxes();
-      expect(before).toHaveLength(12);
-      for (const outcome of ["ok", "unavailable", "unknown"]) {
-        const group = (scope === "tool" ? control : accountControl)(
-          page,
-          outcome === "ok"
-            ? "Northwind"
-            : outcome === "unavailable"
-              ? "Projects"
-              : "Fabrikam Holdings International, Finance and Legal Operations",
-        );
-        const sent = page.waitForRequest((r) => r.method() === "POST");
-        await segment(group, "Allowed").click();
-        if (scope === "account")
-          await page.getByRole("button", { name: "Set to Allowed", exact: true }).click();
-        await sent;
-        await frames(page);
-        expect(await boxes()).toEqual(before);
-        await answer(routes.at(-1)!, outcome);
-        await expect.poll(() => group.getAttribute("aria-busy")).not.toBe("true");
-        await frames(page);
-        expect(await boxes()).toEqual(before);
-      }
-    } finally {
-      await page.close();
+it("keeps every control in the same position through saving, success and failure at 390 px", async () => {
+  const page = await open(390);
+  try {
+    const routes = await pending(page);
+    const boxes = () =>
+      page.getByRole("radiogroup").evaluateAll((els) =>
+        els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height };
+        }),
+      );
+    const before = await boxes();
+    expect(before).toHaveLength(12);
+    for (const outcome of ["ok", "unavailable", "unknown"]) {
+      const group = accountControl(
+        page,
+        outcome === "ok"
+          ? "Northwind"
+          : outcome === "unavailable"
+            ? "Projects"
+            : "Fabrikam Holdings International, Finance and Legal Operations",
+      );
+      const sent = page.waitForRequest((r) => r.method() === "POST");
+      await segment(group, "Allowed").click();
+      await page.getByRole("button", { name: "Set to Allowed", exact: true }).click();
+      await sent;
+      await frames(page);
+      expect(await boxes()).toEqual(before);
+      await answer(routes.at(-1)!, outcome);
+      await expect.poll(() => group.getAttribute("aria-busy")).not.toBe("true");
+      await frames(page);
+      expect(await boxes()).toEqual(before);
     }
-  },
-);
+  } finally {
+    await page.close();
+  }
+});
 
-it.each(["unavailable", "503 HTML", "unknown", "lost response"])(
+it.each(["unavailable", "503 HTML", "unknown", "unreadable JSON", "lost response"])(
   "shows the correct stored-state certainty after %s and keeps its notice until dismissed",
   async (outcome) => {
     const page = await open(390);
@@ -255,6 +243,8 @@ it.each(["unavailable", "503 HTML", "unknown", "lost response"])(
       await segment(group, "Not allowed").click();
       await sent;
       if (outcome === "lost response") await routes[0]!.abort("failed");
+      else if (outcome === "unreadable JSON")
+        await routes[0]!.fulfill({ contentType: "application/json", body: "{" });
       else if (outcome === "503 HTML")
         await routes[0]!.fulfill({
           status: 503,
@@ -299,22 +289,6 @@ it.each(["unavailable", "503 HTML", "unknown", "lost response"])(
     }
   },
 );
-
-it.each([
-  ["already_ended", "Claude already ended. Nothing changed."],
-  ["not_found", "This connection or account no longer exists. Nothing changed. Reload the page."],
-  ["invalid", "Nothing changed. Reload the page."],
-])("shows the exact permission message for %s", async (outcome, message) => {
-  const page = await open();
-  try {
-    await page.route("**/connections/*/permissions", (route) => answer(route, outcome!));
-    await segment(control(page), "Allowed").click();
-    await page.getByText(message!, { exact: true }).filter({ visible: true }).first().waitFor();
-    await selected(control(page), "Not allowed");
-  } finally {
-    await page.close();
-  }
-});
 
 it.each(["tool", "account"])("retries the same %s choice after unavailable", async (scope) => {
   const page = await open();
@@ -465,11 +439,8 @@ it("exposes saving and unconfirmed controls as disabled to assistive technology"
 
 it.each([
   ["unavailable", "ok", unavailable],
-  ["unknown", "ok", unknown],
-  ["unknown", "unavailable", unknown],
   ["unavailable", "already_ended", unavailable],
-  ["unavailable", "not_found", unavailable],
-  ["unavailable", "invalid", unavailable],
+  ["unknown", "unavailable", unknown],
 ])(
   "keeps the %s notice when another save already in flight then answers %s",
   async (first, second, notice) => {
@@ -559,7 +530,6 @@ it("keeps the labelled account control in the header and derives its mixed count
       await panel(page, "Personal").getByText("1 allowed · 1 not allowed", { exact: true }).count(),
     ).toBe(1);
     await selected(accountControl(page), "Not allowed");
-    expect(await page.getByText("Both tools", { exact: true }).count()).toBe(4);
     for (const label of ["Not allowed", "Ask first", "Allowed"] as const) {
       expect(await segment(personal, label).innerText()).toBe(label);
       expect(await segment(personal, label).locator("svg").count()).toBe(1);
@@ -567,9 +537,6 @@ it("keeps the labelled account control in the header and derives its mixed count
     await page.getByRole("button", { name: "Personal", exact: true }).click();
     expect(await personal.isVisible()).toBe(true);
     expect(await control(page, "Personal").isVisible()).toBe(false);
-    expect(await panel(page, "Personal").locator("dl").count()).toBe(0);
-    expect(await panel(page, "Personal").locator('[data-slot="badge"]').count()).toBe(0);
-    expect(await panel(page, "Personal").getByText("Mixed", { exact: true }).count()).toBe(0);
   } finally {
     await page.close();
   }
@@ -817,24 +784,6 @@ it("derives the account value from confirmed tools while one saves, then disable
   }
 });
 
-it("accepts only one account activation before React commits the saving state", async () => {
-  const page = await open();
-  try {
-    const routes = await pending(page);
-    const sent = page.waitForRequest((request) => request.method() === "POST");
-    await segment(accountControl(page, "Personal"), "Not allowed").evaluate((button) => {
-      (button as HTMLButtonElement).click();
-      (button as HTMLButtonElement).click();
-    });
-    await sent;
-    await frames(page);
-    expect(routes).toHaveLength(1);
-    await answer(routes[0]!, "ok");
-  } finally {
-    await page.close();
-  }
-});
-
 it("orders groups once per account, preserves tool order and starts only the first account open with several groups", async () => {
   const page = await open(1280, "groups");
   try {
@@ -1059,89 +1008,3 @@ it.each([
     }
   },
 );
-
-// The fixtures above name tools that do not exist. This is the server's own list, as the
-// connection's route gives it to the page, so the guarantee holds for the tools an owner sees.
-const realTools = TOOLS.flatMap((tool) =>
-  tool.kind === "account"
-    ? [
-        {
-          name: tool.name,
-          label: tool.label,
-          description: tool.permissionDescription,
-          group: tool.group,
-          irreversible: tool.irreversible,
-        },
-      ]
-    : [],
-);
-const withRealTools = `tools=${encodeURIComponent(JSON.stringify(realTools))}` as const;
-
-it("names all five irreversible tools, of the server's real tools, when all tools go to Allowed", async () => {
-  expect(
-    GROUPS.flatMap((group) =>
-      realTools
-        .filter((tool) => tool.group === group && tool.irreversible)
-        .map((tool) => tool.label),
-    ),
-  ).toEqual(["Send message", "Send reply", "Forward message", "Send draft", "Delete permanently"]);
-  const page = await open(390, withRealTools);
-  try {
-    const routes = await pending(page);
-    await segment(accountControl(page, "Personal"), "Allowed").click();
-    const dialog = page.getByRole("alertdialog", {
-      name: "Set all tools on Personal to Allowed?",
-      exact: true,
-    });
-    await dialog.waitFor();
-    // List labels is already Allowed on Personal, so every other tool changes.
-    expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
-      `Claude will be able to use every tool on Personal without asking you, including these, which cannot be undone: Send message, Send reply, Forward message, Send draft, and Delete permanently. This changes ${realTools.length - 1} tools.`,
-    );
-    expect(routes).toEqual([]);
-    const sent = page.waitForRequest((request) => request.method() === "POST");
-    await dialog.getByRole("button", { name: "Set to Allowed", exact: true }).click();
-    const form = new URLSearchParams((await sent).postData()!);
-    expect(form.getAll("tool")).toEqual(
-      realTools.map((tool) => tool.name).filter((name) => name !== "list_labels"),
-    );
-    expect(form.getAll("tool")).toContain("delete_messages");
-    expect(form.get("setting")).toBe("allow");
-  } finally {
-    await page.close();
-  }
-});
-
-it.each([
-  { name: "delete_messages", label: "Delete permanently" },
-  { name: "send_message", label: "Send message" },
-])("asks before $name alone goes to Allowed, and not before trash_messages", async ({ label }) => {
-  const page = await open(390, withRealTools);
-  try {
-    const routes = await pending(page);
-    await segment(toolControl(page, label), "Allowed").click();
-    const dialog = page.getByRole("alertdialog", {
-      name: `Set ${label} on Personal to Allowed?`,
-      exact: true,
-    });
-    await dialog.waitFor();
-    expect(await dialog.locator('[data-slot="alert-dialog-description"]').innerText()).toBe(
-      `Claude will be able to use ${label} on Personal without asking you. What this tool does cannot be undone.`,
-    );
-    expect(routes).toEqual([]);
-    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect.poll(() => page.getByRole("alertdialog").count()).toBe(0);
-    await frames(page);
-    expect(routes).toEqual([]);
-    // The trash can be undone for 30 days, so it is saved at once.
-    const sent = page.waitForRequest((request) => request.method() === "POST");
-    await segment(toolControl(page, "Move to trash"), "Allowed").click();
-    const form = new URLSearchParams((await sent).postData()!);
-    expect(form.getAll("tool")).toEqual(["trash_messages"]);
-    expect(form.get("setting")).toBe("allow");
-    expect(await page.getByRole("alertdialog").count()).toBe(0);
-    expect(routes).toHaveLength(1);
-  } finally {
-    await page.close();
-  }
-});

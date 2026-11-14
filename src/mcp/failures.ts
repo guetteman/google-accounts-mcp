@@ -173,7 +173,6 @@ type FailureData = {
   unsendable?: { draft: string | null };
   said?: string;
   missing?: { kind: Missing; id: string | readonly string[] };
-  reason?: "arguments_too_large";
   /** The field that is wrong, with what it must be. */
   field?: { name: string; expects: string };
 } & (
@@ -241,7 +240,7 @@ export function classify(
     failure.code === "google_unavailable" &&
     failure.unknown &&
     text.annotations?.readOnlyHint === false
-      ? `Google did not confirm the request for ${text.email}. It may have taken effect.${text.annotations.idempotentHint ? " Sending the same call again is safe." : ""}`
+      ? `Google did not confirm the request for ${text.email}. It may have taken effect. Sending the same call again is safe.`
       : entry.message(text.input, text.email, text.origin, text.tool, text.connection);
   const describe = (message: string) => {
     if (!failure.leftover) return message;
@@ -266,23 +265,21 @@ export function classify(
             message: describe(
               failure.said ??
                 fileMessage ??
-                (failure.reason === "arguments_too_large"
-                  ? "The arguments are too large. The limit is 256 KB."
-                  : failure.field
-                    ? `The ${failure.field.name} field must be ${failure.field.expects}.`
-                    : failure.missing
-                      ? missingMessage(failure.missing, text.email)
-                      : failure.over
-                        ? "text" in failure.over
-                          ? "The text of the original message cannot be carried whole: it is too large, or its HTML could not be converted."
-                          : "bytes" in failure.over
-                            ? `This message would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is ${failure.over.limit.toLocaleString("en-US")} bytes.`
-                            : `This message would have ${failure.over.attachments} attachments. The limit is ${failure.over.limit}.`
-                        : failure.unsendable
-                          ? failure.unsendable.draft === null
-                            ? `Gmail refused this message from ${text.email}. The usual cause is an address that is not valid.`
-                            : `Gmail refused to send draft "${failure.unsendable.draft}" from ${text.email}. The usual cause is a draft with no recipient or with an address that is not valid. The owner can complete it in Gmail.`
-                          : message),
+                (failure.field
+                  ? `The ${failure.field.name} field must be ${failure.field.expects}.`
+                  : failure.missing
+                    ? missingMessage(failure.missing, text.email)
+                    : failure.over
+                      ? "text" in failure.over
+                        ? "The text of the original message cannot be carried whole: it is too large, or its HTML could not be converted."
+                        : "bytes" in failure.over
+                          ? `This message would have ${failure.over.bytes.toLocaleString("en-US")} bytes of attachments and text. The limit is ${failure.over.limit.toLocaleString("en-US")} bytes.`
+                          : `This message would have ${failure.over.attachments} attachments. The limit is ${failure.over.limit}.`
+                      : failure.unsendable
+                        ? failure.unsendable.draft === null
+                          ? `Gmail refused this message from ${text.email}. The usual cause is an address that is not valid.`
+                          : `Gmail refused to send draft "${failure.unsendable.draft}" from ${text.email}. The usual cause is a draft with no recipient or with an address that is not valid. The owner can complete it in Gmail.`
+                        : message),
             ),
           },
   };

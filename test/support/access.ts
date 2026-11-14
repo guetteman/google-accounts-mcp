@@ -52,7 +52,6 @@ export const access = {
     | "junk"
     | "invalid-key"
     | "weak-key"
-    | "no-kty"
     | "short-key"
     | "invalid-json"
     | "redirect",
@@ -85,10 +84,6 @@ export const access = {
             return HttpResponse.json({ keys: [{ kid: KEY_ID, kty: "RSA", n: "!", e: "!" }] });
           if (this.mode === "weak-key") return HttpResponse.json(await weakJwks());
           if (this.mode === "short-key") return HttpResponse.json(await shortJwks());
-          if (this.mode === "no-kty") {
-            const { keys } = await accessJwks();
-            return HttpResponse.json({ keys: keys.map(({ kty: _kty, ...key }) => key) });
-          }
           if (this.mode === "invalid-json") return new HttpResponse("not json");
           if (this.mode === "redirect")
             return new HttpResponse(null, {

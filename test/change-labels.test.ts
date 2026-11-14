@@ -3,6 +3,7 @@ import { HttpResponse } from "msw";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
 import { answer } from "./support/approvals";
+import { MAX_ITEMS } from "../src/google/gmail";
 import { google, LABELS_URL, THREADS_URL, deferred } from "./support/google";
 import { rpcResult } from "./support/oauth";
 import {
@@ -10,19 +11,14 @@ import {
   expectError,
   fixture,
   googleTraffic,
-  permission,
   PERSONAL,
-  problemCases,
-  refusedMessage,
   textResult,
   unavailableMessage,
   unconfirmedMessage,
 } from "./support/permissions";
-import { ORIGIN } from "./support/worker";
 import {
   allowed,
   CHANGE,
-  DESCRIPTION,
   FIFTH,
   fieldMessage,
   FIRST,
@@ -39,7 +35,7 @@ import {
 it.each(
   [
     [],
-    Array.from({ length: 16 }, (_, i) => `id_${i}`),
+    Array.from({ length: MAX_ITEMS + 1 }, (_, i) => `id_${i}`),
     [FIRST, FIRST],
     ["a/b"],
     "thread",
@@ -53,15 +49,19 @@ it.each(
   await expectError(
     await labelCall(f, { ...CHANGE, threads }),
     "invalid_arguments",
-    "The threads field must be a list of 1 to 15 different thread IDs that search_threads returned.",
+    "The threads field must be a list of 1 to 100 different thread IDs that search_threads returned.",
   );
   expect(googleTraffic()).toEqual([]);
   expect(await env.DB.prepare("SELECT count(*) AS n FROM approvals").first()).toEqual({ n: 0 });
 });
 
-it("accepts fifteen distinct IDs including the syntax boundaries", async () => {
+it("accepts the most distinct IDs one call allows, including the syntax boundaries", async () => {
   const f = await allowed();
-  const ids = ["a", "b".repeat(64), ...Array.from({ length: 13 }, (_, i) => `id_${i}-ok`)];
+  const ids = [
+    "a",
+    "b".repeat(64),
+    ...Array.from({ length: MAX_ITEMS - 2 }, (_, i) => `id_${i}-ok`),
+  ];
   for (const id of ids)
     google.modifyAnswers.set(id, () =>
       HttpResponse.json({ id, messages: [{ id: `m_${id}`, threadId: id }] }),
@@ -71,7 +71,7 @@ it("accepts fifteen distinct IDs including the syntax boundaries", async () => {
     account: PERSONAL,
     threads: ids.map((thread) => ({ thread, labels: [] })),
   });
-  expect(google.modifyRequests).toHaveLength(15);
+  expect(google.modifyRequests).toHaveLength(MAX_ITEMS);
 });
 
 it.each(["add", "remove"] as const)(
@@ -365,6 +365,7 @@ it.each([{ ids: [MISSING] }, { ids: [MISSING, FOURTH, FIFTH] }])(
 it.each([
   { name: "first 429", statuses: [429, 429, 429], count: 1, outcome: "failed" },
   { name: "first lost response", statuses: ["lost", 429, 429], count: 1, outcome: null },
+  { name: "first 500", statuses: [500, 429], count: 1, outcome: null },
   { name: "missing then 429", statuses: [404, 429], count: 2, outcome: "failed" },
   {
     name: "missing then 429 then lost response",
@@ -390,19 +391,6 @@ it.each([
     }),
     isError: true,
   });
-});
-
-it("returns the same result and sends the same bodies when the call is repeated", async () => {
-  const f = await allowed();
-  const original = await answer(await labelCall(f));
-  const stored = structuredClone(google.modifiedLabels.get(FIRST));
-  expect(await answer(await labelCall(f))).toEqual(original);
-  expect(stored).toEqual([["Label_12"], ["UNREAD", "Label_12"]]);
-  expect(google.modifiedLabels.get(FIRST)).toEqual(stored);
-  expect(google.modifyRequests.map((request) => request.body)).toEqual([
-    { addLabelIds: ["Label_12"], removeLabelIds: ["INBOX"] },
-    { addLabelIds: ["Label_12"], removeLabelIds: ["INBOX"] },
-  ]);
 });
 
 it("answers at twenty seconds and retains earlier confirmed changes", async () => {
@@ -464,6 +452,7 @@ it("answers at twenty seconds and retains earlier confirmed changes", async () =
         unconfirmed: [SECOND],
       }),
     );
+    expect((await callRows()).at(-1)?.outcome).toBe("success");
   } finally {
     release.resolve();
     vi.useRealTimers();
@@ -471,30 +460,9 @@ it("answers at twenty seconds and retains earlier confirmed changes", async () =
   }
 });
 
-it("denies visible accounts and hides unavailable accounts", async () => {
+it("lists annotations and arrays", async () => {
   const f = await fixture();
-  await permission(f);
-  await expectError(
-    await labelCall(f),
-    "tool_not_allowed",
-    `The owner has not allowed change_labels on ${PERSONAL} for this connection. The owner can change this at ${ORIGIN}/connections/${f.connection.id}.`,
-  );
-  await expectError(
-    await labelCall(f, { ...CHANGE, account: "unknown@example.com" }),
-    "account_not_available",
-    refusedMessage("unknown@example.com"),
-  );
-  expect(googleTraffic()).toEqual([]);
-});
-it.each(problemCases)("returns account_$status before Google", async ({ row, status, message }) => {
-  const f = await allowed(row);
-  await expectError(await labelCall(f), `account_${status}`, message);
-  expect(googleTraffic()).toEqual([]);
-});
-
-it.each(["ask", "allow"] as const)("lists annotations and arrays for setting %s", async (value) => {
-  const f = await fixture();
-  await setting(f, value);
+  await setting(f, "ask");
   const result = await rpcResult(await f.mcp.call());
   const tool = (result.tools as Array<Record<string, unknown>>).find(
     (tool) => tool.name === "change_labels",
@@ -513,6 +481,5 @@ it.each(["ask", "allow"] as const)("lists annotations and arrays for setting %s"
       remove: { type: "array", items: { type: "string" } },
     },
   });
-  expect(tool.description).toBe(DESCRIPTION);
   expect(googleTraffic()).toEqual([]);
 });

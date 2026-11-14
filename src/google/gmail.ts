@@ -8,6 +8,9 @@ import { shorten } from "./bounds";
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const unavailable = () => new ToolFailure({ code: "google_unavailable" });
+/** Gmail answers 404 or 400 for an ID the account does not have; any other refusal is unavailable. */
+export const notFoundOr = (kind: Missing, id: string) => (status: number) =>
+  status === 404 || status === 400 ? notFound(kind, id) : unavailable();
 /** One GET as the account. Any status outside 200 to 299 goes to refused, with its status. */
 export const get = <A>(
   send: Send,
@@ -36,13 +39,22 @@ export const get = <A>(
     return yield* Schema.decodeUnknownEffect(schema)(body).pipe(Effect.mapError(unavailable));
   });
 
+/**
+ * A thread, message, or draft ID as a tool accepts it: 1 to 64 URL-safe characters. Effect
+ * publishes a pattern in the tool's JSON Schema only for a regular expression with the u flag.
+ */
+export const GmailId = Schema.String.check(
+  Schema.isBetweenLength(1, 64),
+  Schema.isPattern(/^[A-Za-z0-9_-]+$/u),
+);
+
 /** Shared answer shape for attachments.get, including read_thread's deferred body parts. */
 export const AttachmentBytes = Schema.Struct({ data: Schema.String });
 
 /** One change as the account. Only a 4xx response confirms that Google refused it. */
 export const change = <A>(
   send: Send,
-  method: "POST" | "PUT" | "DELETE",
+  method: "POST" | "DELETE",
   path: string,
   schema: Schema.Codec<A, unknown> | null,
   refused: (status: number) => ToolFailure,
@@ -105,12 +117,11 @@ const changed = <A>(
   });
 
 /**
- * The most threads or messages that one call which changes mail may name. Approving a call of
- * 15 makes about 34 requests to Google and Cloudflare Access (rebuilding the view, running,
- * one token refresh, Access's keys on a cold Worker) plus about 8 D1 queries: about 42, inside
- * the 50 subrequests of the Workers Free plan however D1 is counted.
+ * The most threads or messages that one call which changes mail may name. Each item costs one
+ * Gmail request when the call runs and one when the approval page shows it; at five requests at
+ * a time, 100 items stay well inside Gmail's per-user rate and the call deadlines (CALL_DEADLINE, RUN_DEADLINE).
  */
-export const MAX_ITEMS = 15;
+export const MAX_ITEMS = 100;
 
 /**
  * Send the first item alone so a session without a token acquires it once, and a failure other
@@ -193,7 +204,7 @@ export const threadSummary = (
     send,
     `threads/${encodeURIComponent(thread)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`,
     Thread,
-    (status) => (status === 404 || status === 400 ? notFound("thread", thread) : unavailable()),
+    notFoundOr("thread", thread),
   ).pipe(
     Effect.flatMap((value) =>
       Effect.gen(function* () {
@@ -229,7 +240,7 @@ export const messageSummary = (
       internalDate: InternalDate,
       payload: Schema.optionalKey(Schema.Struct({ headers: Schema.optionalKey(Headers) })),
     }),
-    (status) => (status === 404 || status === 400 ? notFound("message", message) : unavailable()),
+    notFoundOr("message", message),
   ).pipe(
     Effect.map((value) => ({
       from: shorten(header(value.payload?.headers, "From"), 500),

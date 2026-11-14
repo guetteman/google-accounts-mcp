@@ -89,13 +89,14 @@ it("rejects invalid and oversized decoded arguments before creating an approval"
   const f = await fixture();
   await setting(f, "ask");
   const before = googleTraffic().length;
-  for (const args of [
-    undefined,
-    {},
-    { account: 42 },
-    { account: "a".repeat(256 * 1024) + "@example.com" },
-  ])
+  for (const args of [undefined, {}, { account: 42 }])
     await expectError(await toolCall(f.mcp, "list_labels", args), "invalid_arguments", /./);
+  // Oversized arguments are explained by their size, not misreported as a schema mismatch.
+  await expectError(
+    await toolCall(f.mcp, "list_labels", { account: "a".repeat(256 * 1024) + "@example.com" }),
+    "invalid_arguments",
+    /^The arguments are too large\. The limit is 256 KB\.$/,
+  );
   expect(await rows()).toEqual([]);
   expect(googleTraffic().slice(before)).toEqual([]);
 });
@@ -224,36 +225,3 @@ it("does not count expired approvals toward the waiting limit", async () => {
   );
   expect((await rows()).filter((row) => row.state === "waiting")).toHaveLength(1);
 });
-
-it.each([0, 1, null, 2, "0"])(
-  "runs without approval only for the numeric allow setting, ask=%s",
-  async (askValue) => {
-    const f = await fixture();
-    await setting(f, "allow");
-    const db = new Proxy(env.DB, {
-      get(target, key) {
-        if (key === "batch")
-          return async (statements: D1PreparedStatement[]) => {
-            const results = await target.batch<Record<string, unknown>>(statements);
-            for (const batch of results)
-              for (const row of batch.results) if (Object.hasOwn(row, "ask")) row.ask = askValue;
-            return results;
-          };
-        const value = Reflect.get(target, key);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
-    const before = googleTraffic().length;
-    const result = await answer(
-      await toolCall(f.mcp, "list_labels", { account: PERSONAL }, testEnv({ DB: db })),
-    );
-    if (askValue === 0) {
-      expect(result).toHaveProperty("labels");
-      expect(await rows()).toEqual([]);
-    } else {
-      expect(result.status).toBe("pending");
-      expect(await rows()).toHaveLength(1);
-      expect(googleTraffic().slice(before)).toEqual([]);
-    }
-  },
-);

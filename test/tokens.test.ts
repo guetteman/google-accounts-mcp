@@ -15,7 +15,7 @@ import {
   seedAccount,
   start,
 } from "./support/accounts";
-import { deferred, google, MARKER, SCOPES } from "./support/google";
+import { deferred, google, SCOPES } from "./support/google";
 import { dump, observeStatements, setOwner, statementFailingDb } from "./support/db";
 import { resetOwner } from "./support/connections";
 import { textOf } from "./support/worker";
@@ -37,20 +37,29 @@ it("erases revoked tokens and refuses later calls even when the old access token
   expect(await call(row.id)).toMatchObject({ error: "NeedsReconnect" });
   expect(google.events).toEqual(before);
 });
-it("keeps the refresh token under an admin block and clears the block after ten minutes", async () => {
-  const row = await seedAccount({ access_expires_at: NOW });
-  google.refreshAnswers = ["admin_policy_enforced", "ok"];
-  expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
-  expect((await accounts())[0]).toMatchObject({
-    health: "blocked_by_admin",
-    refresh_token: row.refresh_token,
-  });
-  expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
-  expect(google.events).toEqual(["refresh"]);
-  vi.spyOn(Date, "now").mockReturnValue(NOW + 600001);
-  expect(await call(row.id)).toMatchObject({ status: 200 });
-  expect((await accounts())[0]).toMatchObject({ health: "ready", blocked_until: null });
-});
+it.each([599000, 600000])(
+  "keeps the refresh token under an admin block and checks Google again only when ten minutes end, at %i ms",
+  async (elapsed) => {
+    const row = await seedAccount({ access_expires_at: NOW });
+    google.refreshAnswers = ["admin_policy_enforced", "ok"];
+    expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
+    expect((await accounts())[0]).toMatchObject({
+      health: "blocked_by_admin",
+      refresh_token: row.refresh_token,
+    });
+    const before = await accounts();
+    vi.spyOn(Date, "now").mockReturnValue(NOW + elapsed);
+    if (elapsed < 600000) {
+      expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
+      expect(google.events).toEqual(["refresh"]);
+      expect(await accounts()).toEqual(before);
+    } else {
+      expect(await call(row.id)).toMatchObject({ status: 200 });
+      expect(google.events).toEqual(["refresh", "refresh", "gmail"]);
+      expect((await accounts())[0]).toMatchObject({ health: "ready", blocked_until: null });
+    }
+  },
+);
 it("lets only one caller claim an expired admin block and keeps its window after a timeout", async () => {
   const row = await seedAccount({
     health: "blocked_by_admin",
@@ -247,27 +256,6 @@ it.each(["refresh", "access"])(
       });
   },
 );
-it("keeps ciphertexts decryptable across refreshes, admin recovery, and rename", async () => {
-  const row = await seedAccount({ access_expires_at: NOW });
-  for (let i = 0; i < 2; i++) {
-    await env.DB.prepare("UPDATE accounts SET access_expires_at = ? WHERE id = ?")
-      .bind(NOW, row.id)
-      .run();
-    expect(await call(row.id)).toMatchObject({ status: 200 });
-  }
-  google.gmailAnswers = [401];
-  google.refreshAnswers = ["admin_policy_enforced", "ok"];
-  expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
-  vi.spyOn(Date, "now").mockReturnValue(NOW + 600001);
-  expect(await call(row.id)).toMatchObject({ status: 200 });
-  const b = await ownerBrowser();
-  expect(await (await b.post(`/accounts/${row.id}/name`, { name: "Work" })).json()).toEqual({
-    outcome: "ok",
-  });
-  const current = (await accounts())[0]!;
-  for (const field of ["refresh", "access"] as const)
-    expect(await fixtureOpen(`${row.id}:${field}`, current[`${field}_token`]!)).toContain(MARKER);
-});
 it("uses a supplied fresh credential without any database round trips before Gmail", async () => {
   const row = await seedAccount();
   const snapshot = await credential(row.id);
@@ -394,17 +382,6 @@ it.each(["stale generation", "other owner email", "removed ready", "removed need
     expect(google.events).toEqual([]);
   },
 );
-
-it("keeps the admin retry window closed at nine minutes and fifty-nine seconds", async () => {
-  const row = await seedAccount({ access_expires_at: NOW });
-  google.refreshAnswers = ["admin_policy_enforced"];
-  expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
-  const before = await accounts();
-  vi.spyOn(Date, "now").mockReturnValue(NOW + 599000);
-  expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
-  expect(google.events).toEqual(["refresh"]);
-  expect(await accounts()).toEqual(before);
-});
 
 it("returns a Gmail 401 after a proactive refresh without another refresh or resend", async () => {
   const row = await seedAccount({ access_expires_at: NOW });

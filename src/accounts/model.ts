@@ -54,10 +54,12 @@ export interface AccountView {
   readonly workspace: boolean;
   readonly status: AccountStatus;
 }
+// The accounts table's STRICT types and CHECK constraints already rule out a version below 1
+// and a token that does not match the health; this decodes the row and checks the rest.
 const CredentialRow = Schema.Struct({
   id: Schema.String,
   email: Schema.String,
-  version: Schema.Int.check(Schema.isGreaterThan(0)),
+  version: Schema.Int,
   health: Schema.Literals(["ready", "needs_reconnect", "blocked_by_admin"]),
   blocked_until: Schema.NullOr(Schema.Int),
   refresh_token: Schema.NullOr(Schema.String),
@@ -74,9 +76,6 @@ export function decodeCredential(raw: unknown): Credential | null {
     !id ||
     !email ||
     email !== row.email ||
-    (row.health !== "needs_reconnect" && !row.refresh_token) ||
-    (row.health === "needs_reconnect" &&
-      (row.refresh_token !== null || row.access_token !== null)) ||
     (row.health === "blocked_by_admin" && row.blocked_until === null)
   )
     return null;

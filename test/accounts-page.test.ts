@@ -207,7 +207,8 @@ it.each([
   { health: "needs_reconnect" as const, access_token: null },
   { health: "ready" as const, refresh_token: null },
   { health: "blocked_by_admin" as const, refresh_token: null },
-])("rejects account rows that violate the persisted token contract: %j", async (invalid) => {
+  { version: 0 },
+])("rejects account rows that violate the persisted contract: %j", async (invalid) => {
   await expect(seedAccount(invalid)).rejects.toThrow(/CHECK constraint failed/);
   expect(await accounts()).toEqual([]);
 });

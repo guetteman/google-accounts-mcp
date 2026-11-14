@@ -188,17 +188,24 @@ it("gives one refusal for an approval that is not the calling connection's", asy
   const { approval } = await ask(f);
   const other = await new McpClient().connect("Work laptop");
   const texts = new Set<string>();
-  for (const [mcp, value] of [
-    [other, approval],
-    [f.mcp, crypto.randomUUID()],
-    [f.mcp, "not an ID"],
-    [f.mcp, 7],
-  ] as const)
-    texts.add(await expectError(await getApproval(mcp, value), "approval_not_available", /./));
+  const cases: [McpClient, Record<string, unknown> | undefined][] = [
+    [other, { approval }],
+    [f.mcp, { approval: crypto.randomUUID() }],
+    [f.mcp, { approval: "not an ID" }],
+    [f.mcp, { approval: 7 }],
+    [f.mcp, { approval: null }],
+    [f.mcp, { approval: [] }],
+    [f.mcp, {}],
+    [f.mcp, undefined],
+  ];
+  for (const [mcp, args] of cases)
+    texts.add(
+      await expectError(await toolCall(mcp, "get_approval", args), "approval_not_available", /./),
+    );
   expect(texts.size, "the refusal never says why").toBe(1);
   expect(
     (await callRows()).filter((row) => row.tool === "get_approval").map((row) => row.outcome),
-  ).toEqual(["refused", "refused", "refused", "refused"]);
+  ).toEqual(Array(cases.length).fill("refused"));
 });
 
 it("lets only the signed-in owner decide", async () => {
@@ -214,16 +221,13 @@ it("lets only the signed-in owner decide", async () => {
   for (const browser of [stranger, other])
     for (const action of ["approve", "reject"] as const)
       expect((await browser.post(`/approvals/${approval}/${action}`, { digest })).status).toBe(403);
-  // A cross-site request from the owner's own browser is refused too.
-  expect(
-    (
-      await f.mcp.browser.post(
-        `/approvals/${approval}/approve`,
-        { digest },
-        { origin: "https://evil.example" },
-      )
-    ).status,
-  ).toBe(403);
+  // A cross-site or origin-less request from the owner's own browser is refused too.
+  for (const action of ["approve", "reject"] as const)
+    for (const origin of [null, "https://evil.example"])
+      expect(
+        (await f.mcp.browser.post(`/approvals/${approval}/${action}`, { digest }, { origin }))
+          .status,
+      ).toBe(403);
   expect((await stranger.get(`/approvals/${approval}`)).status).toBe(403);
   expect((await f.mcp.browser.get(`/approvals/${crypto.randomUUID()}`)).status).toBe(404);
   expect(googleTraffic().slice(before)).toEqual([]);

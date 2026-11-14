@@ -18,13 +18,11 @@ const StoredOwner = Schema.Struct({
   state: Schema.Literals(["unpinned", "pinned", "resetting"]),
   generation: GenerationSchema,
   email: Schema.NullOr(Schema.String),
-  instance: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 });
 export interface OwnerRow {
   readonly state: "unpinned" | "pinned" | "resetting";
   readonly generation: Generation;
   readonly email: OwnerEmail | null;
-  readonly instance: number;
 }
 export interface Owner {
   readonly generation: Generation;
@@ -32,15 +30,12 @@ export interface Owner {
 }
 export class NotOwner extends Data.TaggedError("NotOwner")<{ readonly email: string }> {}
 export class Locked extends Data.TaggedError("Locked") {}
-export type Standing =
-  | { readonly _tag: "Open"; readonly row: OwnerRow }
-  | { readonly _tag: "Locked"; readonly reason: "mismatch" | "resetting" };
 
 export const readOwner = (db: D1Database) =>
   Effect.gen(function* () {
     const raw = yield* first<unknown>(
       db,
-      "SELECT state, generation, email, instance FROM owner WHERE id = 1",
+      "SELECT state, generation, email FROM owner WHERE id = 1",
     );
     const row = yield* Schema.decodeUnknownEffect(StoredOwner)(raw).pipe(
       Effect.mapError(() => new Unavailable()),
@@ -55,11 +50,9 @@ export const readOwner = (db: D1Database) =>
     return { ...row, email } satisfies OwnerRow;
   });
 
-export function standing(row: OwnerRow, config: Config): Standing {
-  if (row.state === "resetting") return { _tag: "Locked", reason: "resetting" };
-  if (row.state === "pinned" && row.email !== config.ownerEmail)
-    return { _tag: "Locked", reason: "mismatch" };
-  return { _tag: "Open", row };
+/** During a reset, or while OWNER_EMAIL differs from the pinned owner, nothing runs. */
+export function isLocked(row: OwnerRow, config: Config): boolean {
+  return row.state === "resetting" || (row.state === "pinned" && row.email !== config.ownerEmail);
 }
 
 export const pinOwner = (db: D1Database, email: OwnerEmail, observedGeneration: Generation) =>

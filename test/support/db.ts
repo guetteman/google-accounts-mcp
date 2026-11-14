@@ -43,15 +43,6 @@ export async function ownerRow(): Promise<OwnerRowValues | null> {
   ).first<OwnerRowValues>();
 }
 
-/** The random number the migration gave this database's owner row; the reset guards on it. */
-export async function ownerInstance(): Promise<number> {
-  const row = await env.DB.prepare("SELECT instance FROM owner WHERE id = 1").first<{
-    instance: number;
-  }>();
-  if (row === null) throw new Error("no owner row");
-  return row.instance;
-}
-
 export async function setOwner(row: OwnerRowValues): Promise<void> {
   await env.DB.prepare("UPDATE owner SET state = ?, generation = ?, email = ? WHERE id = 1")
     .bind(row.state, row.generation, row.email)
@@ -98,22 +89,15 @@ export function observeStatements(
       get(target, key) {
         if (key === "bind") return (...values: unknown[]) => wrap(target.bind(...values), sql);
         const value: unknown = Reflect.get(target, key);
-        if (key === "run" || key === "all" || key === "first" || key === "raw") {
+        if (key === "run" || key === "all" || key === "first") {
           return async (...args: unknown[]) => {
             await before(sql);
-            if (onResult && (key === "first" || key === "raw")) {
+            if (onResult && key === "first") {
               const result = await target.all();
               onResult(sql, result);
               after(sql);
-              if (key === "first") {
-                const row = result.results[0] ?? null;
-                return typeof args[0] === "string" && row !== null ? row[args[0]] : row;
-              }
-              const columns = Object.keys(result.results[0] ?? {});
-              const rows = result.results.map((row) => columns.map((column) => row[column]));
-              return (args[0] as { columnNames?: boolean } | undefined)?.columnNames
-                ? [columns, ...rows]
-                : rows;
+              const row = result.results[0] ?? null;
+              return typeof args[0] === "string" && row !== null ? row[args[0]] : row;
             }
             const result = await Reflect.apply(
               value as (...args: unknown[]) => unknown,
@@ -151,12 +135,6 @@ export function observeStatements(
             after(sql);
           });
           return results;
-        };
-      }
-      if (key === "exec") {
-        return async (sql: string) => {
-          for (const statement of sql.split(/[;\n]/)) await before(statement);
-          return target.exec(sql);
         };
       }
       const value: unknown = Reflect.get(target, key);
@@ -245,17 +223,6 @@ export function committedConnectionFailureDb(real: D1Database = env.DB): D1Datab
         failed = true;
         throw new Error("D1_ERROR: response lost after commit");
       }
-    },
-  );
-}
-
-export function responseLostConnectionWriteDb(real: D1Database = env.DB): D1Database {
-  return observeStatements(
-    real,
-    () => {},
-    (sql) => {
-      if (/^\s*UPDATE\s+connections\b/i.test(sql))
-        throw new Error("D1_ERROR: response lost after commit");
     },
   );
 }

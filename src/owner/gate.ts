@@ -2,7 +2,7 @@ import { Effect, Result } from "effect";
 import { readConfig } from "../config";
 import type { Page } from "../pages/page";
 import { renderPage } from "../pages/render";
-import { readOwner, standing, type Generation } from "./owner";
+import { isLocked, readOwner, type Generation } from "./owner";
 
 export type GatedEnv = Env & { readonly ownerGeneration: Generation };
 
@@ -37,7 +37,6 @@ export const withOwnerGate =
       return refuse(request, { _tag: "SetupIncomplete", names: config.failure.names });
     const owner = await Effect.runPromise(Effect.result(readOwner(env.DB)));
     if (Result.isFailure(owner)) return refuse(request, { _tag: "Unavailable" });
-    if (standing(owner.success, config.success)._tag === "Locked")
-      return refuse(request, { _tag: "Mismatch" });
+    if (isLocked(owner.success, config.success)) return refuse(request, { _tag: "Mismatch" });
     return inner(request, { ...env, ownerGeneration: owner.success.generation }, ctx);
   };

@@ -1,8 +1,8 @@
 import { Effect, Schema } from "effect";
-import { messageTooLarge, notFound, ToolFailure } from "../mcp/failures";
+import { messageTooLarge, ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
 import { shorten, unfold } from "./bounds";
-import { get } from "./gmail";
+import { get, notFoundOr } from "./gmail";
 import {
   attachmentParts,
   header,
@@ -16,11 +16,8 @@ import { charsetOf, partBytes } from "./attachment";
 import { fileFields, type FilePart } from "./mail";
 
 export const MAX_FORWARD_BYTES = 25_000_000;
-/**
- * Two original reads + up to 2 × 3 body parts + 20 attachments + one upload + one send +
- * one cleanup + one token refresh + 11 D1 round trips = 43, within the Workers Free limit of 50.
- */
-export const MAX_FORWARD_FILES = 20;
+/** Each attachment is one Gmail read; 100 reads fit within a call deadline (CALL_DEADLINE, RUN_DEADLINE). */
+export const MAX_FORWARD_FILES = 100;
 export type ForwardPlan = {
   thread: string;
   subject: string;
@@ -35,10 +32,7 @@ export const forwardPlan = (send: Send, message: string): Effect.Effect<ForwardP
       send,
       `messages/${message}?format=full`,
       Schema.Struct({ ...RawMessage.fields, threadId: Schema.String }),
-      (status) =>
-        status === 404 || status === 400
-          ? notFound("message", message)
-          : new ToolFailure({ code: "google_unavailable" }),
+      notFoundOr("message", message),
     );
     const parsed = yield* Effect.try({
       try: () => readMessage(raw),

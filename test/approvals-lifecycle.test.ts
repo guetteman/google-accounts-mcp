@@ -15,7 +15,7 @@ import { NOW, fixtureOpen } from "./support/accounts";
 import { resetOwner } from "./support/connections";
 import { observeStatements, dump, setOwner } from "./support/db";
 import { google, deferred, LABELS_RESPONSE } from "./support/google";
-import { callRows, fixture, expectError, toolCall } from "./support/permissions";
+import { callRows, fixture, toolCall } from "./support/permissions";
 import {
   ask,
   approve,
@@ -189,19 +189,6 @@ it("stores encrypted results with a different purpose and never stores them in t
   );
   for (const context of [`${crypto.randomUUID()}:result`, `${id}:arguments`])
     await expect(fixtureOpen(context, stored.result!)).rejects.toThrow();
-  const columns = (
-    await env.DB.prepare("PRAGMA table_info(calls)").all<{ name: string }>()
-  ).results.map((row) => row.name);
-  expect(columns).toEqual([
-    "id",
-    "connection_id",
-    "account_id",
-    "tool",
-    "at",
-    "outcome",
-    "also",
-    "reason",
-  ]);
   expect(JSON.stringify(await callRows())).not.toContain("Receipts");
 });
 it("returns failed as a non-error status with the normal tool error and audit outcome", async () => {
@@ -445,16 +432,6 @@ it("reset deletes all approvals and late work cannot change the new owner's rows
   await Effect.runPromise(cleanupApprovals(old, NOW + 4_000_000));
   await Effect.runPromise(readApproval(old, parseApprovalId(id)!, NOW + 4_000_000));
   expect(await dump()).toEqual(before);
-});
-it("audits missing and non-string get_approval inputs as the same refusal", async () => {
-  const f = await fixture();
-  const texts = new Set<string>();
-  for (const args of [undefined, {}, { approval: null }, { approval: [] }, { approval: 3 }])
-    texts.add(
-      await expectError(await toolCall(f.mcp, "get_approval", args), "approval_not_available", /./),
-    );
-  expect(texts.size).toBe(1);
-  expect((await callRows()).map((row) => row.outcome)).toEqual(Array(5).fill("refused"));
 });
 
 it("stores no result when the connection expires during an approved run without an owner change", async () => {

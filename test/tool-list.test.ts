@@ -231,7 +231,8 @@ it("keeps a tool out of the list of a connection that holds another stored tool 
   await permission(f);
   const other = await new McpClient().connect("Other laptop");
   const otherConnection = (await rows()).find((row) => row.id !== f.connection.id)!;
-  // No page can store a second account tool yet, and a stored name the server lacks is not listed.
+  // Each list reads only its own connection's rows. A permission of the other connection on the
+  // same account must not reach this list, and this connection's list_labels must not reach that one.
   await env.DB.prepare("INSERT INTO permissions (connection_id, account_id, tool) VALUES (?, ?, ?)")
     .bind(otherConnection.id, f.personal.id, "another_tool")
     .run();

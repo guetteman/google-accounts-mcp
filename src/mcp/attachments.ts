@@ -1,22 +1,20 @@
 import { Effect, Schema } from "effect";
-import { viewDate, type ViewValue } from "../approvals/model";
+import { fileText, filesText, viewDate, type ViewValue } from "../approvals/model";
 import { findAttachment, partBytes } from "../google/attachment";
 import { shorten } from "../google/bounds";
 import { MAX_FORWARD_BYTES } from "../google/forward";
-import { REQUESTS_AT_ONCE } from "../google/gmail";
+import { GmailId, REQUESTS_AT_ONCE } from "../google/gmail";
 import { fileFields, type FilePart } from "../google/mail";
 import { normalizeEmail } from "../owner/owner";
 import { parseUploadId } from "../uploads/store";
 import { messageTooLarge, ToolFailure, uploadNotAvailable } from "./failures";
 import { TOOLS, type Sources } from "./tools";
 
-// An approved reply with six refreshed source accounts uses 46 requests:
-// 29 outside requests, 17 D1 operations, and no KV reads or writes.
-export const MAX_ATTACHMENTS = 6;
-const Id = Schema.String.check(Schema.isBetweenLength(1, 64), Schema.isPattern(/^[A-Za-z0-9_-]+$/));
+/** Each copy is one Gmail read and each upload one KV read; 100 fit within a call deadline (CALL_DEADLINE, RUN_DEADLINE). */
+export const MAX_ATTACHMENTS = 100;
 const Copy = Schema.Struct({
   account: Schema.String,
-  message: Id,
+  message: GmailId,
   attachment: Schema.String.check(
     Schema.isBetweenLength(1, 64),
     Schema.isPattern(/^[0-9]+(?:\.[0-9]+)*$/),
@@ -103,7 +101,7 @@ const plan = (items: readonly Item[], sources: Sources): Effect.Effect<Planned[]
         if ("upload" in item) {
           const file = sources.uploads.get(item.upload);
           if (!file) return yield* Effect.fail(uploadNotAvailable(item.upload));
-          return { ...file, ...fileFields(file), source: { kind: "upload" as const } };
+          return { ...file, source: { kind: "upload" as const } };
         }
         const about = {
           input: item.account,
@@ -135,11 +133,10 @@ export const attachmentValues = (items: readonly Item[], sources: Sources) =>
   Effect.gen(function* () {
     if (!items.length) return [];
     const files = yield* plan(items, sources);
-    const bytes = files.reduce((sum, file) => sum + file.size, 0);
     const values: ViewValue[] = [
       {
         name: "Attachments",
-        text: `${files.length} ${files.length === 1 ? "file" : "files"}, ${bytes.toLocaleString("en-US")} ${bytes === 1 ? "byte" : "bytes"} in all`,
+        text: filesText(files),
         from: files.some((file) => file.source.kind === "upload") ? "agent" : "gmail",
       },
     ];
@@ -148,7 +145,7 @@ export const attachmentValues = (items: readonly Item[], sources: Sources) =>
       const copied = file.source.kind === "copy";
       values.push({
         name: `${prefix} (${copied ? "copied" : "sent to a link of this connection"})`,
-        text: `${file.filename || "(no name)"} (${file.type}, ${file.size.toLocaleString("en-US")} ${file.size === 1 ? "byte" : "bytes"})`,
+        text: fileText(file),
         from: copied ? "gmail" : "agent",
       });
       if (file.source.kind === "copy")
@@ -195,7 +192,5 @@ export const attachedFiles = (
     );
     return parts;
   });
-export const attachmentsDescription =
-  "`attachments` is an optional list of at most 6 files. An item is `{ account, message, attachment }`, which copies an attachment that read_thread listed for a message, from any account you can use; the file goes from Gmail into this mail and never appears in a result. It needs the owner's setting for get_attachment on that account. Or an item is `{ upload }`, which names a local file by the `upload` ID that the link of create_upload_link answered. An upload goes into one message: repeating this call with the same arguments is safe, and once the mail exists any other call needs a new upload. The attachments and the text together can have at most 25 MB.";
-export const attachmentsExpect =
-  "a list of at most 6 files, each { account, message, attachment } or { upload }, with no repeated upload";
+export const attachmentsDescription = `\`attachments\` is an optional list of at most ${MAX_ATTACHMENTS} files. An item is \`{ account, message, attachment }\`, which copies an attachment that read_thread listed for a message, from any account you can use; the file goes from Gmail into this mail and never appears in a result. It needs the owner's setting for get_attachment on that account. Or an item is \`{ upload }\`, which names a local file by the \`upload\` ID that the link of create_upload_link answered. An upload goes into one message: repeating this call with the same arguments is safe, and once the mail exists any other call needs a new upload. The attachments and the text together can have at most 25 MB.`;
+export const attachmentsExpect = `a list of at most ${MAX_ATTACHMENTS} files, each { account, message, attachment } or { upload }, with no repeated upload`;

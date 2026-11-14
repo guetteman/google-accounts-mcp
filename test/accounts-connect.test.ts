@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vite-plus/test";
-import "./support/account-checks";
+import { recordedConsole } from "./support/account-checks";
 import { Browser } from "./support/browser";
 import {
   accounts,
@@ -73,9 +73,7 @@ it.each([0, 2])("counts only the %s granted Gmail permissions", async (count) =>
       ...SCOPES.slice(0, count),
     ].join(" "),
   });
-  expect(result.text).toContain(
-    `Missing access. Google granted ${count} of the 5 permissions Gmail needs. Reconnect and check every box.`,
-  );
+  expect(result.text).toContain(`Google granted ${count} of the 5 permissions`);
   expect(await accounts()).toHaveLength(1);
 });
 it.each([
@@ -204,12 +202,17 @@ it.each([
   { iss: "https://other.example" },
   { aud: "other-client" },
   { exp: Math.floor(NOW / 1000) - 1 },
+  { iss: "https://evil.example/accounts.google.com" },
+  { aud: [testEnv().GOOGLE_CLIENT_ID] },
+  { sub: "" },
+  { exp: String(Math.floor(NOW / 1000) + 3600) },
 ])("refuses invalid identity claims %j", async (claims) => {
   const b = await ownerBrowser();
   const before = await dump();
   expect((await finish(b, (await start(b)).url, { claims })).text).toContain(
     "Google refused this server's OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Nothing changed.",
   );
+  expect(recordedConsole()).toHaveLength(1);
   expect(await dump()).toEqual(before);
 });
 it.each([false, true])(

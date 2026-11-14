@@ -12,8 +12,6 @@ export const operations = [
     suffix: "/trash",
     label: "Move to trash",
     permission: "Move messages to the trash. Gmail deletes a message for good after 30 days there.",
-    action: "move messages to the trash",
-    joiner: "in",
     destructive: true,
   },
   {
@@ -22,8 +20,6 @@ export const operations = [
     suffix: "/untrash",
     label: "Restore from trash",
     permission: "Take messages out of the trash.",
-    action: "take messages out of the trash",
-    joiner: "in",
     destructive: false,
   },
   {
@@ -32,8 +28,6 @@ export const operations = [
     suffix: "",
     label: "Delete permanently",
     permission: "Delete messages for good, without the trash. Nobody can recover them.",
-    action: "delete messages permanently",
-    joiner: "from",
     destructive: true,
   },
 ] as const;

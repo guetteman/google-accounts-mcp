@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { Effect } from "effect";
 import { notFound, ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
-import { AttachmentBytes, get } from "./gmail";
+import { AttachmentBytes, get, notFoundOr } from "./gmail";
 import {
   attachmentFields,
   attachmentPart,
@@ -61,8 +61,7 @@ export const findAttachment = (
       send,
       `messages/${encodeURIComponent(input.message)}?format=full`,
       RawMessage,
-      (status) =>
-        status === 404 || status === 400 ? notFound("message", input.message) : unavailable(),
+      notFoundOr("message", input.message),
     );
     const part = attachmentPart(raw, input.attachment);
     if (part === null) return yield* Effect.fail(notFound("attachment", input.attachment));

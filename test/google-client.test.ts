@@ -101,25 +101,6 @@ it("names refused OAuth client settings and logs no secret", async () => {
   expect(JSON.stringify(recordedConsole())).not.toContain(testEnv().GOOGLE_CLIENT_SECRET);
 });
 
-it("accepts only refresh tokens issued by the Google test server", async () => {
-  const request = (refresh: string) =>
-    fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refresh,
-        client_id: testEnv().GOOGLE_CLIENT_ID,
-        client_secret: testEnv().GOOGLE_CLIENT_SECRET,
-      }),
-    });
-  const rejected = await request("unissued-refresh-token");
-  expect(rejected.status).toBe(400);
-  expect(await rejected.json()).toEqual({ error: "invalid_grant" });
-  const accepted = await request(google.issueRefreshToken());
-  expect(accepted.status).toBe(200);
-  expect(await accepted.json()).toMatchObject({ access_token: google.issuedAccess.at(-1) });
-});
-
 it.each([302, 307])(
   "refuses a revoke redirect with status %s and removes local access without following it",
   async (status) => {

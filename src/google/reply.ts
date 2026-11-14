@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect";
-import { notFound, ToolFailure } from "../mcp/failures";
+import { ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
-import { get } from "./gmail";
+import { get, notFoundOr } from "./gmail";
 import { MAX_REPLY_HEADER, unfold } from "./bounds";
 import { Headers, InternalDate, header } from "./message";
 import { MAX_SUBJECT, envelopeLines, messageIds, parseAddressList, type Mailbox } from "./mail";
@@ -42,10 +42,11 @@ export const replyPlan = (
     const params = new URLSearchParams({ format: "metadata" });
     for (const name of ["From", "Reply-To", "To", "Cc", "Subject", "Message-ID", "References"])
       params.append("metadataHeaders", name);
-    const message = yield* get(send, `messages/${input.message}?${params}`, Message, (status) =>
-      status === 404 || status === 400
-        ? notFound("message", input.message)
-        : new ToolFailure({ code: "google_unavailable" }),
+    const message = yield* get(
+      send,
+      `messages/${input.message}?${params}`,
+      Message,
+      notFoundOr("message", input.message),
     );
     const source = (name: string) => header(message.payload.headers, name);
     const value = (name: string) => unfold(source(name));

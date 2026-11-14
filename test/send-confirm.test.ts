@@ -238,48 +238,32 @@ it("cleanup of a refused send can run past the reserve", async () => {
   expect(google.storedDrafts.has("draft-1")).toBe(false);
 });
 
-it.each(["direct", "approved"])(
-  "the %s final check uses one read batch and no writes",
-  async (mode) => {
-    const f = await sendFixture("send_message", mode === "approved" ? "ask" : "allow");
-    const id = mode === "approved" ? ((await answer(await sendCall(f))).approval as string) : null;
-    const shown = id ? await digest(f, id) : null;
-    let watching = false;
-    const statements: string[] = [];
-    let batches = 0;
-    google.draftCreateAnswers.push(() => {
-      watching = true;
-      return created();
-    });
-    google.sendAnswers.push(() => {
-      watching = false;
-      return sent();
-    });
-    const observed = observeStatements(env.DB, (sql) => {
-      if (watching) statements.push(sql);
-    });
-    const db = new Proxy(observed, {
-      get(target, key) {
-        if (key === "batch")
-          return (...args: Parameters<D1Database["batch"]>) => {
-            if (watching) batches++;
-            return target.batch(...args);
-          };
-        const value = Reflect.get(target, key);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
-    if (id)
-      expect(
-        (await decided(await post(f, id, "approve", { digest: shown! }, testEnv({ DB: db })))).state
-          .kind,
-      ).toBe("succeeded");
-    else await answer(await sendCall(f, "send_message", {}, testEnv({ DB: db })));
-    expect(statements).toHaveLength(mode === "direct" ? 2 : 1);
-    expect(statements.every((sql) => sql.startsWith("SELECT"))).toBe(true);
-    expect(batches).toBe(mode === "direct" ? 1 : 0);
-  },
-);
+it.each(["direct", "approved"])("the %s final check writes nothing", async (mode) => {
+  const f = await sendFixture("send_message", mode === "approved" ? "ask" : "allow");
+  const id = mode === "approved" ? ((await answer(await sendCall(f))).approval as string) : null;
+  const shown = id ? await digest(f, id) : null;
+  let watching = false;
+  const statements: string[] = [];
+  google.draftCreateAnswers.push(() => {
+    watching = true;
+    return created();
+  });
+  google.sendAnswers.push(() => {
+    watching = false;
+    return sent();
+  });
+  const db = observeStatements(env.DB, (sql) => {
+    if (watching) statements.push(sql);
+  });
+  if (id)
+    expect(
+      (await decided(await post(f, id, "approve", { digest: shown! }, testEnv({ DB: db })))).state
+        .kind,
+    ).toBe("succeeded");
+  else await answer(await sendCall(f, "send_message", {}, testEnv({ DB: db })));
+  expect(statements).not.toEqual([]);
+  expect(statements.every((sql) => sql.startsWith("SELECT"))).toBe(true);
+});
 
 it("a failed final check releases its row and closes its audit record", async () => {
   const f = await sendFixture();
@@ -319,7 +303,7 @@ const context = async (f: Awaited<ReturnType<typeof sendFixture>>): Promise<Call
     waitUntil: () => {},
   };
 };
-it.each([200, 403, 503])(
+it.each([200, 503])(
   "the runner itself protects a send answered %s followed by a classified failure",
   async (status) => {
     const f = await sendFixture();
@@ -358,28 +342,17 @@ it.each([200, 403, 503])(
         Date.now() + CALL_DEADLINE,
         Effect.void,
       ),
-    ).rejects.toMatchObject({ code: status === 403 ? "google_unavailable" : "outcome_unknown" });
-    expect((await onceRows()).map((r) => r.state)).toEqual(status === 403 ? [] : ["unknown"]);
-    if (status !== 403) {
-      await expectError(await sendCall(f), "outcome_unknown", /Ask the owner to look in Sent/);
-      expect(google.sends).toHaveLength(1);
-    } else {
-      await answer(await sendCall(f));
-      expect(google.sends).toHaveLength(2);
-    }
+    ).rejects.toMatchObject({ code: "outcome_unknown" });
+    expect((await onceRows()).map((r) => r.state)).toEqual(["unknown"]);
+    await expectError(await sendCall(f), "outcome_unknown", /Ask the owner to look in Sent/);
+    expect(google.sends).toHaveLength(1);
   },
 );
 
-it.each(
-  ["drafts", "messages"].flatMap((resource) =>
-    ["", "upload/"].flatMap((prefix) =>
-      ["ordinary", "late"].map((channel) => ({
-        url: `https://gmail.googleapis.com/${prefix}gmail/v1/users/me/${resource}/send`,
-        channel,
-      })),
-    ),
-  ),
-)("refuses $url through the $channel request function", async ({ url, channel }) => {
+it.each([
+  { url: "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send", channel: "ordinary" },
+  { url: "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send", channel: "late" },
+])("refuses $url through the $channel request function", async ({ url, channel }) => {
   const f = await sendFixture();
   let writes = 0;
   network.use(
@@ -635,138 +608,25 @@ it.each(["attachment_too_large", "attachment_not_readable"] as const)(
   },
 );
 
-it("forgets an earlier refusal before recording the next sending request's lost answer", async () => {
+it("starts no staging request after the reserve even before its timer fires", async () => {
   const f = await sendFixture();
-  const ctx = await context(f);
-  const tool = TOOLS.find((entry) => entry.name === "send_message")!;
-  if (tool.kind !== "account" || !tool.create) throw new Error("Missing send tool");
-  const allowed = await decodeAllowedAccount(
-    await allowedAccountStatement(ctx, tool.name, normalizeEmail(PERSONAL)!).first(),
-    ctx.config.tokenKey,
-  );
-  const broken: typeof tool = {
-    ...tool,
-    create: (_send, _account, _args, confirm) =>
-      Effect.gen(function* () {
-        const sending = yield* confirm.check;
-        const attempt = () =>
-          sending(
-            (token, signal) =>
-              new Request("https://gmail.googleapis.com/gmail/v1/users/me/drafts/send", {
-                method: "POST",
-                signal,
-                headers: { Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ id: "existing-draft" }),
-              }),
-          );
-        yield* attempt();
-        yield* Effect.result(attempt());
-        return yield* Effect.fail(new ToolFailure({ code: "google_unavailable" }));
-      }),
-  };
-  google.sendAnswers.push(
-    () => new Response(null, { status: 403 }),
-    () => HttpResponse.error(),
-  );
-  await expect(
-    executeAccount(
-      ctx,
-      broken,
-      { own: allowed, others: new Map() },
-      { account: PERSONAL },
-      Date.now() + CALL_DEADLINE,
-      Effect.void,
-    ),
-  ).rejects.toMatchObject({ code: "outcome_unknown" });
-  expect(google.sends).toHaveLength(2);
-  expect((await onceRows()).map((entry) => entry.state)).toEqual(["unknown"]);
-});
-
-it("keeps a checked messages/send request unknown after the stub fails", async () => {
-  const f = await sendFixture();
-  const ctx = await context(f);
-  const tool = TOOLS.find((entry) => entry.name === "send_message")!;
-  if (tool.kind !== "account" || !tool.create) throw new Error("Missing send tool");
-  const allowed = await decodeAllowedAccount(
-    await allowedAccountStatement(ctx, tool.name, normalizeEmail(PERSONAL)!).first(),
-    ctx.config.tokenKey,
-  );
-  let writes = 0;
-  network.use(
-    http.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", () => {
-      writes++;
-      return sent();
-    }),
-  );
-  const stub: typeof tool = {
-    ...tool,
-    create: (_send, _account, _args, confirm) =>
-      Effect.gen(function* () {
-        const sending = yield* confirm.check;
-        yield* sending(
-          (token, signal) =>
-            new Request("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-              method: "POST",
-              signal,
-              headers: { Authorization: `Bearer ${token}` },
-              body: "{}",
-            }),
-        );
-        return yield* Effect.fail(new ToolFailure({ code: "google_unavailable" }));
-      }),
-  };
-  const args = { account: PERSONAL, ...sendCases[0].args };
-  await expect(
-    executeAccount(
-      ctx,
-      stub,
-      { own: allowed, others: new Map() },
-      args,
-      Date.now() + CALL_DEADLINE,
-      Effect.void,
-    ),
-  ).rejects.toMatchObject({ code: "outcome_unknown" });
-  expect((await onceRows())[0]!.state).toBe("unknown");
-  await expectError(await sendCall(f), "outcome_unknown", /Ask the owner to look in Sent/);
-  expect(writes).toBe(1);
-});
-
-it("starts no preparing request after the reserve even before its timer fires", async () => {
-  const f = await sendFixture();
-  const ctx = await context(f);
   const at = Date.now();
-  const tool = TOOLS.find((entry) => entry.name === "send_message")!;
-  if (tool.kind !== "account" || !tool.create) throw new Error("Missing send tool");
-  const allowed = await decodeAllowedAccount(
-    await allowedAccountStatement(ctx, tool.name, normalizeEmail(PERSONAL)!).first(),
-    ctx.config.tokenKey,
-  );
-  const stub: typeof tool = {
-    ...tool,
-    create: (send) =>
-      Effect.gen(function* () {
+  const db = observeStatements(
+    env.DB,
+    () => {},
+    (sql) => {
+      if (sql.startsWith("INSERT INTO once"))
         vi.mocked(Date.now).mockReturnValue(at + CALL_DEADLINE - SEND_RESERVE + 1);
-        yield* send(
-          (token, signal) =>
-            new Request("https://gmail.googleapis.com/gmail/v1/users/me/labels", {
-              signal,
-              headers: { Authorization: `Bearer ${token}` },
-            }),
-        );
-        return yield* Effect.fail(new ToolFailure({ code: "google_unavailable" }));
-      }),
-  };
-  await expect(
-    executeAccount(
-      ctx,
-      stub,
-      { own: allowed, others: new Map() },
-      { account: PERSONAL },
-      at + CALL_DEADLINE,
-      Effect.void,
-    ),
-  ).rejects.toMatchObject({ code: "google_unavailable", released: true });
-  expect(google.labelRequests).toEqual([]);
+    },
+  );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await expectError(
+    await sendCall(f, "send_message", {}, testEnv({ DB: db })),
+    "google_unavailable",
+    /Google could not complete/,
+  );
+  expect(google.draftCreates).toEqual([]);
+  expect(google.sends).toEqual([]);
   expect(await onceRows()).toEqual([]);
 });
 

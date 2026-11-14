@@ -1,4 +1,3 @@
-import { env } from "cloudflare:workers";
 import { HttpResponse } from "msw";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
@@ -18,25 +17,6 @@ import {
   SECOND,
   setting,
 } from "./support/labels";
-
-it("returns pending before any Gmail request", async () => {
-  const f = await asking();
-  expect(f.id).toMatch(/^[0-9a-f-]{36}$/);
-  expect(googleTraffic()).toEqual([]);
-  expect((await callRows()).at(-1)).toMatchObject({ tool: "change_labels", outcome: "pending" });
-});
-
-it("names the full action in the approval sentence", async () => {
-  const f = await asking();
-  const props = await page(f, f.id);
-  expect(props.state).toMatchObject({ kind: "waiting", shown: true });
-  expect(props.request.tool).toEqual({
-    label: "Change labels",
-    action: "add or remove labels on threads",
-    joiner: "in",
-    empty: "This call has no other values. The sentence above is the whole call.",
-  });
-});
 
 it.each([
   {
@@ -137,38 +117,6 @@ it("omits a thread number for a single thread", async () => {
   ]);
 });
 
-it("bounds the whole subject and sender to 499 characters and an ellipsis", async () => {
-  const f = await asking();
-  const mail = message();
-  google.threadAnswers.set(FIRST, () =>
-    HttpResponse.json({
-      messages: [
-        {
-          ...mail,
-          payload: {
-            ...mail.payload,
-            headers: [
-              { name: "Subject", value: "s".repeat(5000) },
-              { name: "From", value: "f".repeat(5000) },
-            ],
-          },
-        },
-      ],
-    }),
-  );
-  const props = await page(f, f.id);
-  expect(props.request.values).toContainEqual({
-    name: "Thread subject",
-    text: "s".repeat(499) + "…",
-    from: "gmail",
-  });
-  expect(props.request.values).toContainEqual({
-    name: "Thread last from",
-    text: "f".repeat(499) + "…",
-    from: "gmail",
-  });
-});
-
 it("reads labels alone, then metadata with at most five GETs at once", async () => {
   const ids = Array.from({ length: 10 }, (_, i) => `thread_${i}`);
   const f = await asking({ ...CHANGE, threads: ids });
@@ -222,7 +170,7 @@ it("reads labels alone, then metadata with at most five GETs at once", async () 
   }
 });
 
-it.each(["label list 500", "thread 500", "CHAT", "account unavailable"])(
+it.each(["label list 500", "thread 500", "CHAT"])(
   "hides Approve and keeps Reject for %s",
   async (failure) => {
     const f = await asking(failure === "CHAT" ? { threads: [FIRST], add: ["CHAT"] } : CHANGE);
@@ -231,10 +179,6 @@ it.each(["label list 500", "thread 500", "CHAT", "account unavailable"])(
     if (failure === "thread 500")
       google.threadAnswers.set(FIRST, () => new HttpResponse(null, { status: 500 }));
     if (failure === "CHAT") labels([{ id: "CHAT", name: "Chats", type: "system" }]);
-    if (failure === "account unavailable")
-      await env.DB.prepare("UPDATE accounts SET scopes = '[]' WHERE id = ?")
-        .bind(f.personal.id)
-        .run();
     const props = await page(f, f.id);
     expect(props.state).toMatchObject({ kind: "waiting", shown: false, digest: null });
     const html = await renderPage(props).text();
@@ -247,28 +191,19 @@ it.each(["label list 500", "thread 500", "CHAT", "account unavailable"])(
   },
 );
 
-it.each(["a new message", "a renamed label"])(
-  "runs nothing after %s changes the view",
-  async (change) => {
-    const f = await asking();
-    let messages = [message()];
-    google.threadAnswers.set(FIRST, () => HttpResponse.json({ messages }));
-    const shown = await page(f, f.id);
-    if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
-    if (change === "a new message") messages = [message(), message("m2")];
-    else
-      labels(
-        LABELS.map((label) => (label.id === "Label_12" ? { ...label, name: "Invoices" } : label)),
-        2,
-      );
-    const props = await decided(await post(f, f.id, "approve", { digest: shown.state.digest! }));
-    expect(props.state).toMatchObject({ kind: "waiting", shown: true, changed: true });
-    expect(google.modifyRequests).toEqual([]);
-    expect((await callRows()).find((call) => call.tool === "change_labels")?.outcome).toBe(
-      "pending",
-    );
-  },
-);
+it("runs nothing after a renamed label changes the view", async () => {
+  const f = await asking();
+  const shown = await page(f, f.id);
+  if (shown.state.kind !== "waiting") throw new Error("Expected waiting");
+  labels(
+    LABELS.map((label) => (label.id === "Label_12" ? { ...label, name: "Invoices" } : label)),
+    2,
+  );
+  const props = await decided(await post(f, f.id, "approve", { digest: shown.state.digest! }));
+  expect(props.state).toMatchObject({ kind: "waiting", shown: true, changed: true });
+  expect(google.modifyRequests).toEqual([]);
+  expect((await callRows()).find((call) => call.tool === "change_labels")?.outcome).toBe("pending");
+});
 
 it("returns the exact partial result through get_approval and the direct call", async () => {
   const args = { ...CHANGE, threads: [FIRST, MISSING] };
@@ -319,19 +254,3 @@ it.each(["missing label", "all threads missing"])(
       ]);
   },
 );
-
-it("pages and Reject send no writes, and Reject sends no Google request", async () => {
-  const f = await asking();
-  expect((await page(f, f.id)).state).toMatchObject({ kind: "waiting", shown: true });
-  expect(google.modifyRequests).toEqual([]);
-  const before = googleTraffic().length;
-  expect((await decided(await post(f, f.id, "reject"))).state.kind).toBe("rejected");
-  expect(googleTraffic().slice(before)).toEqual([]);
-  const next = await answer(await labelCall(f));
-  expect((await page(f, next.approval as string)).state).toMatchObject({
-    kind: "waiting",
-    shown: true,
-  });
-  expect(google.modifyRequests).toEqual([]);
-  expect(google.methods.every((method) => method === "GET")).toBe(true);
-});

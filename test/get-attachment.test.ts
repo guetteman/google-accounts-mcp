@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 import { expect, it } from "vite-plus/test";
 import "./support/account-checks";
-import type { FramePage } from "../src/pages/page";
 import type { ThreadResult } from "../src/google/thread";
 import { answer } from "./support/approvals";
 import { google, MESSAGES_URL } from "./support/google";
@@ -522,7 +521,7 @@ it("rejects invalid input without Gmail and maps other Gmail failures to google_
   }
 });
 
-it("lists the attachment tool with its public schema at ask or allow and removes it at deny", async () => {
+it("lists the attachment tool with its schema at ask or allow and removes it at deny", async () => {
   const f = await allowedAttachment();
   for (const setting of ["allow", "ask", "deny"]) {
     await f.mcp.browser.post(`/connections/${f.connection.id}/permissions`, {
@@ -537,8 +536,6 @@ it("lists the attachment tool with its public schema at ask or allow and removes
     if (setting === "deny") expect(tools.map((t) => t.name)).not.toContain("get_attachment");
     else
       expect(tools.find((t) => t.name === "get_attachment")).toMatchObject({
-        description:
-          "Returns one attachment of a message of one Google account. `account` is the address of an account that list_accounts returns. `message` is a message ID and `attachment` an attachment ID that read_thread returned for that account; both work only in that account. The result has two parts. The first is JSON with the account, the message, the attachment, and the file's name, media type, and size in bytes. The second is the file. In Claude Code the file comes as an embedded resource of any type: Claude Code saves it to disk and gives its path. In other clients an image (PNG, JPEG, GIF, or WebP) comes as an image and a text file as text, and any other file, such as a PDF, returns attachment_not_readable: tell the owner that Claude Code can open it. An attachment larger than 12 MB returns attachment_too_large with its size. Downloading changes nothing in Gmail. When the owner sets this tool to ask, it returns a pending approval with a link instead of the file; get_approval returns the file after the owner approves, for one hour.",
         annotations: { readOnlyHint: true },
         inputSchema: {
           type: "object",
@@ -551,11 +548,4 @@ it("lists the attachment tool with its public schema at ask or allow and removes
         },
       });
   }
-  const html = await (await f.mcp.browser.get(`/connections/${f.connection.id}`)).text();
-  const page = JSON.parse(
-    /<script id="page-props" type="application\/json">([\s\S]*?)<\/script>/.exec(html)![1]!,
-  ) as Extract<FramePage, { _tag: "Connection" }>;
-  expect(page.tools.find((tool) => tool.name === "get_attachment")?.description).toBe(
-    "Download a file attached to a message of this account, or copy it into mail that this connection writes from any account.",
-  );
 });

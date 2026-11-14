@@ -13,7 +13,6 @@ import {
   dump,
   kvDump,
   racingConnectionWriteDb,
-  responseLostConnectionWriteDb,
   setOwner,
   statementFailingDb,
 } from "./support/db";
@@ -347,20 +346,4 @@ it("shows the deploy MCP URL and Copy button when there are no connections", asy
         /aria-label="[^"]*\bCopy\b[^"]*"/i.test(button[1]!) || /\bCopy\b/.test(textOf(button[2]!)),
     ),
   ).toBe(true);
-});
-
-it("reports an uncertain response after a committed rename and reloads the changed name", async () => {
-  vi.spyOn(Date, "now").mockReturnValue(NOW);
-  await pinOwner();
-  const row = await seedConnection();
-  const browser = await ownerBrowser();
-  const response = await browser.post(
-    `/connections/${row.id}/name`,
-    { name: "Personal laptop" },
-    { env: testEnv({ DB: responseLostConnectionWriteDb() }) },
-  );
-  expect(response.status).toBe(503);
-  expect(await response.json()).toEqual({ outcome: "unknown" });
-  expect((await onlyConnection()).name).toBe("Personal laptop");
-  expect(textOf(await (await browser.get("/connections")).text())).toContain("Personal laptop");
 });

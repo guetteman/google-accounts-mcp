@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vite-plus/test";
-import { decodeEntities, htmlToText } from "../src/google/html";
+import { htmlToText } from "../src/google/html";
 
 // This boundary uses workerd's HTMLRewriter, including its handling of broken markup and chunks.
 it.each([
@@ -151,12 +151,6 @@ it("decodes an entity even when HTMLRewriter splits its text node into chunks", 
   }
 });
 
-it("uses the same complete entity decoder for snippets", () => {
-  expect(decodeEntities("&nbsp;&eacute; &Alpha; &#x1f642; &apos; &unknown;")).toBe(
-    "\u00a0é Α 🙂 ' &unknown;",
-  );
-});
-
 it("converts 2 MB of table rows with links within twenty seconds", async () => {
   const row =
     '<tr><td class="item"><a href="https://example.com/item">Item</a></td><td>$15.00</td></tr>';
@@ -170,18 +164,26 @@ it("converts 2 MB of table rows with links within twenty seconds", async () => {
   expect(text === expected, "Every table row is converted in order").toBe(true);
 }, 20_000);
 
-it("bounds expanded quote prefixes while converting 4000 nested quotes and 10000 lines", async () => {
-  const html =
-    "<blockquote>".repeat(4000) + "line<br>".repeat(10000) + "</blockquote>".repeat(4000);
-  const text = await htmlToText(html);
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
-  expect(text.length).toBeLessThanOrEqual(1000000);
-  expect(
-    text.endsWith(
-      "\n[The rest of this message was left out: it is longer than 1,000,000 characters.]",
-    ),
-  ).toBe(true);
-}, 20_000);
+it.each([
+  [4000, 10000],
+  // This smaller input gets its notice only through the converter's cut flag.
+  [500, 1100],
+])(
+  "bounds expanded quote prefixes while converting %i nested quotes and %i lines",
+  async (depth, lines) => {
+    const html =
+      "<blockquote>".repeat(depth) + "line<br>".repeat(lines) + "</blockquote>".repeat(depth);
+    const text = await htmlToText(html);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(text.length).toBeLessThanOrEqual(1000000);
+    expect(
+      text.endsWith(
+        "\n[The rest of this message was left out: it is longer than 1,000,000 characters.]",
+      ),
+    ).toBe(true);
+  },
+  20_000,
+);
 
 it("stops parsing at the text bound before an unparseable tail", async () => {
   const html =

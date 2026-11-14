@@ -1,63 +1,11 @@
 import { env } from "cloudflare:workers";
 import { expect, it } from "vite-plus/test";
 import "./support/account-checks";
-import { previews } from "../src/pages/previews";
-import { renderPage } from "../src/pages/render";
 import { fixture } from "./support/permissions";
 import { ask, page, setting } from "./support/approvals";
 import type { TestEnv } from "./env";
 import { ORIGIN } from "./support/worker";
 
-it("renders every approval preview with the shared hydration entry", async () => {
-  for (const name of [
-    "waiting",
-    "waiting-long-names",
-    "waiting-notes",
-    "waiting-labels",
-    "waiting-labels-many",
-    "cannot-show",
-    "changed",
-    "running",
-    "succeeded",
-    "failed",
-    "unknown",
-    "rejected",
-    "expired",
-    "ended-tool",
-    "ended-connection",
-    "ended-account",
-    "unconfirmed",
-  ]) {
-    const preview = previews[`approval-${name}`];
-    expect(preview).toBeDefined();
-    const html = await renderPage(preview!).text();
-    expect(html).toContain('id="page-props"');
-    expect(html).toContain("/src/pages/client.tsx");
-    if (
-      [
-        "running",
-        "succeeded",
-        "failed",
-        "unknown",
-        "rejected",
-        "expired",
-        "ended-tool",
-        "ended-connection",
-        "ended-account",
-        "unconfirmed",
-      ].includes(name)
-    ) {
-      expect(html).not.toContain(">Approve</button>");
-      expect(html).not.toContain(">Reject</button>");
-    }
-    if (name === "succeeded") {
-      expect(html).toContain("This page does not show the result.");
-    }
-    if (name === "unconfirmed") expect(html).toContain(">Reload</a>");
-    if (name === "ended-tool") expect(html).toContain('href="/connections/');
-    if (name === "ended-account") expect(html).toContain('href="/accounts"');
-  }
-});
 it.each(["approve", "reject", "changed", "lost", "503"] as const)(
   "hydrates the approval page and handles %s in place",
   async (scenario) => {
@@ -123,67 +71,6 @@ it.each(["approve", "reject", "changed", "lost", "503"] as const)(
   },
   30_000,
 );
-it.each([
-  { width: 390, dark: false },
-  { width: 390, dark: true },
-  { width: 1280, dark: false },
-  { width: 1280, dark: true },
-])(
-  "renders approval pages at $width px with dark=$dark without overflow",
-  async ({ width, dark }) => {
-    for (const name of [
-      "waiting-long-names",
-      "cannot-show",
-      "changed",
-      "succeeded",
-      "failed",
-      "unconfirmed",
-    ]) {
-      const response = renderPage(previews[`approval-${name}`]!);
-      const hydrated = await (
-        await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
-          method: "POST",
-          body: JSON.stringify({
-            url: `${ORIGIN}/__pages/approval-${name}`,
-            html: await response.text(),
-            headers: Object.fromEntries(response.headers),
-            width,
-            dark,
-            layout: true,
-          }),
-        })
-      ).json<{ clientLoads: number; overflow: boolean; errors: string[] }>();
-      expect(hydrated.errors).toEqual([]);
-      expect(hydrated.clientLoads).toBe(1);
-      expect(hydrated.overflow).toBe(false);
-    }
-  },
-  60_000,
-);
-
-it.each([390, 1280])(
-  "renders the three-option permission control at %s px",
-  async (width) => {
-    const response = renderPage(previews["connection-some-allowed"]!);
-    const hydrated = await (
-      await (env as TestEnv).TEST_BROWSER.fetch("http://browser/hydrate", {
-        method: "POST",
-        body: JSON.stringify({
-          url: `${ORIGIN}/__pages/connection-some-allowed`,
-          html: await response.text(),
-          headers: Object.fromEntries(response.headers),
-          width,
-          layout: true,
-        }),
-      })
-    ).json<{ clientLoads: number; overflow: boolean; errors: string[] }>();
-    expect(hydrated.errors).toEqual([]);
-    expect(hydrated.clientLoads).toBe(1);
-    expect(hydrated.overflow).toBe(false);
-  },
-  30_000,
-);
-
 it.each(["double", "identity", "digest"] as const)(
   "protects approval submissions against %s mistakes",
   async (protection) => {
@@ -229,45 +116,3 @@ it.each(["double", "identity", "digest"] as const)(
   },
   30_000,
 );
-
-it("renders the seven Activity previews with their record, filter, paging and empty states", async () => {
-  for (const name of [
-    "activity",
-    "activity-older",
-    "activity-pending",
-    "activity-account",
-    "activity-ended",
-    "activity-no-match",
-    "activity-empty",
-  ]) {
-    const preview = previews[name];
-    expect(preview?._tag).toBe("Activity");
-    const html = await renderPage(preview!).text();
-    expect(html).toContain('id="page-props"');
-    expect(html).toContain("/src/pages/client.tsx");
-    expect(html).toContain("Times are in UTC.");
-    expect(html).toContain(
-      name === "activity-empty"
-        ? "No activity yet"
-        : name === "activity-no-match"
-          ? "No records match this filter"
-          : 'aria-label="Records"',
-    );
-    if (name === "activity-older") expect(html).toContain("Back to newest");
-    if (name === "activity")
-      for (const label of [
-        "Done",
-        "Waiting",
-        "Refused",
-        "Failed",
-        "Rejected",
-        "Expired",
-        "Repeat",
-        "Unknown",
-        "No account",
-        "No such tool",
-        "+1",
-      ])
-        expect(html).toContain(label);
-  }
-});

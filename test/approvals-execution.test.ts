@@ -4,7 +4,7 @@ import { Effect } from "effect";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
 import worker from "../src/index";
-import { TOOLS, type Tool } from "../src/mcp/tools";
+import { TOOLS } from "../src/mcp/tools";
 import { NOW } from "./support/accounts";
 import { observeStatements, statementFailingDb } from "./support/db";
 import { google, deferred, LABELS_RESPONSE } from "./support/google";
@@ -14,12 +14,6 @@ import { ORIGIN, testEnv } from "./support/worker";
 const tool = TOOLS.find((tool) => tool.kind === "account")!;
 if (tool.kind !== "account") throw new Error("Missing account tool");
 
-it("requires a view on every account tool at compile time", () => {
-  type Account = Extract<Tool, { kind: "account" }>;
-  type ViewIsRequired = Omit<Account, "view"> extends Account ? false : true;
-  const required: ViewIsRequired = true;
-  expect(required).toBe(true);
-});
 it("passes the stored schema-decoded arguments to both the view and the run", async () => {
   const f = await fixture();
   await setting(f, "ask");

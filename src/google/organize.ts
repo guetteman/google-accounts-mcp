@@ -2,7 +2,14 @@ import { Effect, Result, Schema } from "effect";
 import type { Send } from "../mcp/tools";
 import { notFound, ToolFailure } from "../mcp/failures";
 import { viewDate, type ViewNote, type ViewValue } from "../approvals/model";
-import { change, changeEach, listLabels, REQUESTS_AT_ONCE, threadSummary } from "./gmail";
+import {
+  change,
+  changeEach,
+  listLabels,
+  notFoundOr,
+  REQUESTS_AT_ONCE,
+  threadSummary,
+} from "./gmail";
 
 export const MAX_LABELS = 100;
 /** Moving mail to the trash or spam is not this tool's job; Gmail sets SENT and DRAFT itself. */
@@ -68,10 +75,7 @@ const modify = (send: Send, thread: string, input: LabelChange) =>
     "POST",
     `threads/${encodeURIComponent(thread)}/modify`,
     Modified,
-    (status) =>
-      status === 404 || status === 400
-        ? notFound("thread", thread)
-        : new ToolFailure({ code: "google_unavailable" }),
+    notFoundOr("thread", thread),
     {
       ...(input.add.length ? { addLabelIds: input.add } : {}),
       ...(input.remove.length ? { removeLabelIds: input.remove } : {}),

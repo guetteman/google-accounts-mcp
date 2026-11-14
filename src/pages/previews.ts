@@ -2,7 +2,6 @@ import type { ApprovalPageProps } from "../approvals/model";
 import { TOOLS } from "../mcp/tools";
 import { GMAIL_SCOPES } from "../google/client";
 import { MAX_ITEMS } from "../google/gmail";
-import { acceptAuthorize } from "../oauth/clients";
 import type { ConnectionView } from "../connections/model";
 import type { Page } from "./page";
 
@@ -93,16 +92,9 @@ const permissionTools = TOOLS.filter((tool) => tool.kind === "account").map((too
 }));
 const connectionPreview = (scenario: string): Page => {
   const accounts = ["no-accounts", "ended-connection"].includes(scenario) ? [] : permissionAccounts;
-  const allowed = accounts.filter(
-    (_, i) =>
-      scenario === "all-allowed" ||
-      (["some-allowed", "save-failed"].includes(scenario) && [0, 2].includes(i)),
-  );
+  const allowed = accounts.filter((_, i) => scenario === "some-allowed" && [0, 2].includes(i));
   return {
     _tag: "Connection",
-    ...(scenario === "save-failed"
-      ? { permissionNotice: "Couldn't reach the database. Nothing changed. Try again in a minute." }
-      : {}),
     frame: { host, ownerEmail: "owner@example.com", current: "connections" },
     connection: {
       ...connections[scenario === "ended-connection" ? 4 : 1]!,
@@ -111,12 +103,9 @@ const connectionPreview = (scenario: string): Page => {
     accounts,
     settings: Object.fromEntries(
       allowed.flatMap((a, i) =>
-        (scenario === "all-allowed" || i === 0
-          ? permissionTools.map((tool) => tool.name)
-          : ["list_labels"]
-        ).map((tool) => [
+        (i === 0 ? permissionTools.map((tool) => tool.name) : ["list_labels"]).map((tool) => [
           `${a.id}:${tool}`,
-          scenario !== "all-allowed" && i === 0 ? "ask" : "allow",
+          i === 0 ? "ask" : "allow",
         ]),
       ),
     ),
@@ -199,46 +188,6 @@ const attachmentPreview: ApprovalPageProps = {
 };
 const approvalPreviews: Readonly<Record<string, ApprovalPageProps>> = {
   "approval-waiting-attachments": attachmentPreview,
-  "approval-succeeded-attachments": { ...attachmentPreview, state: { kind: "succeeded" } },
-  "approval-waiting-attachments-many": {
-    ...attachmentPreview,
-    request: {
-      ...attachmentPreview.request,
-      values: [
-        ...attachmentPreview.request.values.slice(0, 2),
-        { name: "Attachments", text: "6 files, 750,000 bytes in all", from: "agent" },
-        ...Array.from({ length: 6 }, (_, i) => [
-          {
-            name: `Attachment ${i + 1} (copied)`,
-            text: `${"Northwind project budget and invoice details for the international workshop ".repeat(2)}${i + 1}.pdf (application/pdf, 125,000 bytes)`,
-            from: "gmail" as const,
-          },
-          {
-            name: `Attachment ${i + 1} is copied from`,
-            text: "alex@northwind.example",
-            from: "agent" as const,
-          },
-          {
-            name: `Attachment ${i + 1} message from`,
-            text: "Northwind international workshop planning team <workshops@northwind.example>",
-            from: "gmail" as const,
-          },
-          {
-            name: `Attachment ${i + 1} message subject`,
-            text: "Project budget, invoices, and planning notes for the November workshop",
-            from: "gmail" as const,
-          },
-          {
-            name: `Attachment ${i + 1} message date`,
-            text: "Nov 11, 2026 at 09:41 UTC",
-            from: "gmail" as const,
-          },
-        ]).flat(),
-        attachmentPreview.request.values.at(-1)!,
-      ],
-    },
-  },
-  "approval-ended-tool-two": { ...attachmentPreview, state: { kind: "ended", by: "tool" } },
   "approval-waiting": approvalBase,
   "approval-waiting-long-names": {
     ...approvalBase,
@@ -847,21 +796,16 @@ export const previews: Readonly<Record<string, Page>> = {
     },
   },
   ...Object.fromEntries(
-    [
-      "new-connection",
-      "some-allowed",
-      "all-allowed",
-      "no-accounts",
-      "ended-connection",
-      "save-failed",
-    ].map((scenario) => [`connection-${scenario}`, connectionPreview(scenario)]),
+    ["some-allowed", "no-accounts", "ended-connection"].map((scenario) => [
+      `connection-${scenario}`,
+      connectionPreview(scenario),
+    ]),
   ),
   "access-refused": { _tag: "AccessRefused", host },
   "access-unavailable": { _tag: "AccessUnavailable" },
   "not-owner": { _tag: "NotOwner", host, address: "someone.else@example.net" },
   mismatch: { _tag: "Mismatch" },
   "setup-incomplete": { _tag: "SetupIncomplete", names: ["ACCESS_AUDIENCE"] },
-  "setup-incomplete-two": { _tag: "SetupIncomplete", names: ["OWNER_EMAIL", "ACCESS_ISSUER"] },
   unavailable: { _tag: "Unavailable" },
   accounts: {
     accounts: [
@@ -906,50 +850,7 @@ export const previews: Readonly<Record<string, Page>> = {
     requiredGmailScopes: GMAIL_SCOPES.length,
     frame: { host, ownerEmail: "owner@example.com", current: "accounts" },
   },
-  "accounts-empty": {
-    _tag: "Accounts",
-    requiredGmailScopes: GMAIL_SCOPES.length,
-    frame: { host, ownerEmail: "owner@example.com", current: "accounts" },
-    accounts: [],
-    alert: null,
-  },
-  "client-refused": { _tag: "ClientRefused" },
   "consent-expired": { _tag: "ConsentExpired" },
-  ...Object.fromEntries(
-    [
-      [
-        "claude-code",
-        "https://claude.ai/oauth/claude-code-client-metadata",
-        "http://localhost:3118/callback",
-      ],
-      [
-        "claude",
-        "https://claude.ai/oauth/mcp-oauth-client-metadata",
-        "https://claude.ai/api/mcp/auth_callback",
-      ],
-      [
-        "chatgpt",
-        "https://chatgpt.com/oauth/client.json",
-        "https://chatgpt.com/connector_platform_oauth_redirect",
-      ],
-    ].map(([id, clientId, callback]) => [
-      `consent-${id}`,
-      {
-        _tag: "Consent" as const,
-        host,
-        ownerEmail: "owner@example.com",
-        client: acceptAuthorize(clientId!, callback!)!,
-        handle: "preview",
-        generation: 1,
-      },
-    ]),
-  ),
-  "connections-empty": {
-    _tag: "Connections",
-    frame: { host, ownerEmail: "owner@example.com", current: "connections" },
-    connections: [],
-    mcpUrl: `https://${host}/mcp`,
-  },
   connections: {
     _tag: "Connections",
     connections,

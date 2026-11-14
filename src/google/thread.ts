@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { notFound, ToolFailure } from "../mcp/failures";
+import { ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
 import {
   boundedAttachments,
@@ -10,9 +10,10 @@ import {
   MAX_TEXT,
   MAX_BODY_PARTS,
   PAGE_BODY_BYTES,
+  safeEnd,
   shorten,
 } from "./bounds";
-import { AttachmentBytes, get } from "./gmail";
+import { AttachmentBytes, get, notFoundOr } from "./gmail";
 import { htmlToText, referencedContentIds } from "./html";
 import {
   decodeBody,
@@ -116,14 +117,6 @@ const Drafts = Schema.Struct({
   ),
   nextPageToken: Schema.optionalKey(Schema.String),
 });
-// Offsets count UTF-16 units, but a page must never end between the two halves of a character.
-const safeEnd = (text: string, end: number) =>
-  end > 0 &&
-  end < text.length &&
-  /[\uD800-\uDBFF]/.test(text[end - 1]!) &&
-  /[\uDC00-\uDFFF]/.test(text[end]!)
-    ? end - 1
-    : end;
 
 /** Owns the serialized result's budget, including every field and the continuation value. */
 function fit(
@@ -296,10 +289,7 @@ export const readThread = (
       send,
       `threads/${encodeURIComponent(input.thread)}?format=full`,
       FullThread,
-      (status) =>
-        status === 404 || status === 400
-          ? notFound("thread", input.thread)
-          : new ToolFailure({ code: "google_unavailable" }),
+      notFoundOr("thread", input.thread),
     );
     const place = input.page === undefined ? null : placeOf(input.page);
     const start = place ? thread.messages.findIndex((m) => m.id === place.message) : 0;

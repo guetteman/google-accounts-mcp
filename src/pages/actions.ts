@@ -6,10 +6,9 @@ export interface ActionResult {
 export async function postAction(
   url: string,
   fields: Record<string, string> | [string, string][] = {},
-  send: typeof fetch = fetch,
 ): Promise<ActionResult> {
   try {
-    const response = await send(url, {
+    const response = await fetch(url, {
       method: "POST",
       body: new URLSearchParams(fields),
       headers: { Accept: "application/json" },

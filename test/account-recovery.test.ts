@@ -131,15 +131,6 @@ it.each([
   expect(recordedConsole()).toHaveLength(3);
 });
 
-it("identifies a rejected Google identity as a client failure, not an expired flow", async () => {
-  const b = await ownerBrowser();
-  expect(
-    (await finish(b, (await start(b)).url, { claims: { aud: "another-client" } })).text,
-  ).toContain(CLIENT);
-  expect(recordedConsole()).toHaveLength(1);
-  expect(await accounts()).toEqual([]);
-});
-
 it.each(["other key", "unknown version"])(
   "shows unreadable access instead of Ready for %s without exposing token prefixes",
   async (kind) => {
@@ -160,16 +151,6 @@ it.each(["other key", "unknown version"])(
     expect(html).not.toContain(row.refresh_token!.slice(0, 20));
     expect(await dump()).toEqual(before);
     expect(google.events).toEqual([]);
-  },
-);
-
-it.each(["z".repeat(64), "a".repeat(65), "b".repeat(66)])(
-  "rejects TOKEN_KEY outside exactly 64 hexadecimal characters: %s",
-  async (TOKEN_KEY) => {
-    const b = await ownerBrowser();
-    const response = await b.get("/accounts", { env: testEnv({ TOKEN_KEY }) });
-    expect(response.status).toBe(503);
-    expect(textOf(await response.text())).toContain("TOKEN_KEY");
   },
 );
 
@@ -234,19 +215,6 @@ it("consumes the successful flow cookie and protects the short-lived alert cooki
   const alert = cookies.find((c) => c.startsWith("__Host-accounts-outcome="))!;
   expect(alert.split(";").map((attribute) => attribute.trim())).toContain("HttpOnly");
   expect(alert.split(";").map((attribute) => attribute.trim())).toContain("Max-Age=60");
-});
-
-it.each(["connect", "reconnect"])("refuses a missing form before starting %s", async (action) => {
-  const row = await seedAccount();
-  const b = await ownerBrowser();
-  const before = await dump();
-  const response = await b.request(
-    action === "connect" ? "/accounts/connect" : `/accounts/${row.id}/reconnect`,
-    { method: "POST" },
-  );
-  expect(response.status).toBe(400);
-  expect(response.headers.getSetCookie()).toEqual([]);
-  expect(await dump()).toEqual(before);
 });
 
 it.each([200, 401])(

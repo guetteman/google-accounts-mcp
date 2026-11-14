@@ -1,9 +1,20 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vite-plus/test";
+import "./support/account-checks";
 import { DAY, NOW, onlyConnection, resetOwner, rows } from "./support/connections";
 import { brokenDb, dump, failingKv, kvDump, restoreKv, statementFailingDb } from "./support/db";
-import { clients, expectOAuthError, McpClient, rpcResult } from "./support/oauth";
-import { callWorker, ORIGIN, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
+import { clients, expectOAuthError, McpClient } from "./support/oauth";
+import { callRows, PERSONAL } from "./support/permissions";
+import {
+  allowedAttachment,
+  blocks,
+  CONTENT,
+  fileError,
+  MESSAGE,
+  resourceBytes,
+  serveAttachment,
+} from "./support/attachment";
+import { callWorker, ORIGIN, testEnv, textOf } from "./support/worker";
 
 it("refuses a revoked connection even with stale KV while another connection keeps working", async () => {
   const revoked = await new McpClient().connect("Work laptop");
@@ -46,17 +57,6 @@ describe("ninety days without refreshing", () => {
     },
   );
 
-  it("keeps a client that refreshes every twenty days working on day two hundred", async () => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
-    const mcp = await new McpClient().connect();
-    for (let day = 20; day <= 200; day += 20) {
-      clock.mockReturnValue(NOW + day * DAY);
-      await mcp.keepTokens(await mcp.refresh());
-      expect((await onlyConnection()).expires_at).toBe(NOW + (day + 90) * DAY);
-    }
-    expect((await mcp.call()).status).toBe(200);
-  });
-
   it("refuses an expired D1 connection while its access token and KV grant remain valid", async () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const mcp = await new McpClient().connect();
@@ -88,60 +88,42 @@ describe("ninety days without refreshing", () => {
   });
 });
 
-// This is the only observation seam: calls still enter the Worker's default fetch. Spy on the
-// actual factory, retaining its implementation, so #15's input is observable without a fake tool.
-const mcpModules = import.meta.glob<{ createMcpServer: (...args: unknown[]) => unknown }>(
-  "../src/mcp/server.ts",
-);
 it.each(clients)(
-  "initializes plain tools and passes the stored $app identity in the call context",
+  "takes the $app identity from the stored connection, never from the request",
   async (client) => {
-    const mcp = await new McpClient(client).connect();
-    const row = await onlyConnection();
-    const load = mcpModules["../src/mcp/server.ts"];
-    expect(load, "MCP factory must exist for tool registration").toBeDefined();
-    const factory = await load!();
-    const spy = vi.spyOn(factory, "createMcpServer");
-    const initialized = await rpcResult(
-      await mcp.call("initialize", undefined, undefined, {
-        "X-App": "forged-app",
-        "X-Connection-Id": crypto.randomUUID(),
-      }),
-    );
-    expect(initialized).toHaveProperty("protocolVersion");
-    expect(initialized).toHaveProperty("serverInfo");
-    expect(initialized.capabilities).toHaveProperty("tools");
-    const listed = await rpcResult(
-      await mcp.call("tools/list", undefined, {
-        app: "forged-app",
-        connectionId: crypto.randomUUID(),
-      }),
-    );
-    expect(listed.tools).toEqual([
-      expect.objectContaining({ name: "list_accounts" }),
-      expect.objectContaining({ name: "get_approval" }),
-      expect.objectContaining({ name: "create_upload_link" }),
-    ]);
-    expect(spy).toHaveBeenCalledTimes(2);
-    for (const args of spy.mock.calls)
-      expect(args[0]).toEqual(
-        expect.objectContaining({
-          connection: { connectionId: row.id, app: client.app },
-          db: expect.anything(),
-          config: expect.anything(),
-          owner: expect.objectContaining({ generation: 1, email: OWNER_EMAIL }),
-          origin: ORIGIN,
-          now: expect.any(Function),
-        }),
+    const f = await allowedAttachment(client);
+    serveAttachment();
+    await new McpClient().connect("Other laptop");
+    const other = (await rows()).find((row) => row.id !== f.connection.id)!;
+    // A forged identity names the other connection and the client that receives any file.
+    const download = () =>
+      f.mcp.call(
+        "tools/call",
+        undefined,
+        {
+          name: "get_attachment",
+          arguments: { account: PERSONAL, message: MESSAGE, attachment: "2" },
+          app: "claude-code",
+          connectionId: other.id,
+        },
+        { "X-App": "claude-code", "X-Connection-Id": other.id },
       );
-    const changedApp = client.app === "chatgpt" ? "claude-code" : "chatgpt";
+    const expectForm = async (app: string) => {
+      const response = await download();
+      if (app === "claude-code") expect(resourceBytes(await blocks(response))).toEqual(CONTENT);
+      else
+        await fileError(response, "attachment_not_readable", /This client cannot read "menu.pdf"/);
+    };
+    await expectForm(client.app);
+    const changedApp = client.app === "claude-code" ? "chatgpt" : "claude-code";
     await env.DB.prepare("UPDATE connections SET app = ? WHERE id = ?")
-      .bind(changedApp, row.id)
+      .bind(changedApp, f.connection.id)
       .run();
-    expect((await mcp.call("tools/list", undefined, { app: client.app })).status).toBe(200);
-    expect(spy).toHaveBeenLastCalledWith(
-      expect.objectContaining({ connection: { connectionId: row.id, app: changedApp } }),
-    );
+    await expectForm(changedApp);
+    expect(await callRows()).toEqual([
+      expect.objectContaining({ connection_id: f.connection.id, tool: "get_attachment" }),
+      expect.objectContaining({ connection_id: f.connection.id, tool: "get_attachment" }),
+    ]);
   },
 );
 

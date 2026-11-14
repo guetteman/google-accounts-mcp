@@ -17,7 +17,7 @@ import { seal } from "../src/seal";
 import { readConfig } from "../src/config";
 import { Result } from "effect";
 import { NOW } from "./support/accounts";
-import { fixture, callRows, toolCall, PERSONAL, expectError } from "./support/permissions";
+import { fixture, callRows, toolCall, expectError } from "./support/permissions";
 import { ask, page, post, get, row, setting } from "./support/approvals";
 import { testEnv } from "./support/worker";
 import { McpClient, rpcResult } from "./support/oauth";
@@ -233,16 +233,6 @@ it("shows every setting in a multi-account view and requires its digest before A
   await post(f, id, "approve");
   expect((await row(id))!.state).toBe("waiting");
   expect(google.labelRequests).toEqual([]);
-});
-
-it("explains oversized arguments without misreporting their schema", async () => {
-  const f = await fixture();
-  await setting(f, "ask");
-  await expectError(
-    await toolCall(f.mcp, "list_labels", { account: "x".repeat(256 * 1024) + PERSONAL }),
-    "invalid_arguments",
-    /^The arguments are too large\. The limit is 256 KB\.$/,
-  );
 });
 
 it("requires a decision-issued Won to finish an approval at compile time", async () => {

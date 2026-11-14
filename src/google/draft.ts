@@ -1,9 +1,9 @@
 import { Effect, Schema } from "effect";
 import type { Send } from "../mcp/tools";
-import { messageTooLarge, notFound, notSendable, ToolFailure } from "../mcp/failures";
+import { messageTooLarge, notSendable, ToolFailure } from "../mcp/failures";
 import type { Created } from "../once/store";
 import { RawMessage } from "./message";
-import { change, get, upload } from "./gmail";
+import { change, get, notFoundOr, upload } from "./gmail";
 
 export type CreatedDraft = Created & { draft: string };
 
@@ -29,12 +29,6 @@ export const createDraft = (
 export const uploadDraft = (
   send: Send,
   input: { message: Blob; thread?: string },
-  refused: (status: number) => ToolFailure = (status) =>
-    status === 413
-      ? messageTooLarge(null)
-      : status === 400
-        ? notSendable(null)
-        : new ToolFailure({ code: "google_unavailable" }),
 ): Effect.Effect<CreatedDraft, ToolFailure> => {
   const boundary = `related-${crypto.randomUUID()}`;
   const metadata = input.thread === undefined ? {} : { message: { threadId: input.thread } };
@@ -48,7 +42,12 @@ export const uploadDraft = (
     send,
     "drafts?uploadType=multipart",
     Draft,
-    refused,
+    (status) =>
+      status === 413
+        ? messageTooLarge(null)
+        : status === 400
+          ? notSendable(null)
+          : new ToolFailure({ code: "google_unavailable" }),
     body,
     `multipart/related; boundary=${boundary}`,
   ).pipe(
@@ -60,8 +59,9 @@ export const uploadDraft = (
   );
 };
 export const readDraft = (send: Send, draft: string): Effect.Effect<RawMessage, ToolFailure> =>
-  get(send, `drafts/${draft}?format=full`, Schema.Struct({ message: RawMessage }), (status) =>
-    status === 404 || status === 400
-      ? notFound("draft", draft)
-      : new ToolFailure({ code: "google_unavailable" }),
+  get(
+    send,
+    `drafts/${draft}?format=full`,
+    Schema.Struct({ message: RawMessage }),
+    notFoundOr("draft", draft),
   ).pipe(Effect.map((draft) => draft.message));

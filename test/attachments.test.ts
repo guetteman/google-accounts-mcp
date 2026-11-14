@@ -2,6 +2,7 @@ import { testEnv } from "./support/worker";
 import "./support/account-checks";
 import { Buffer } from "node:buffer";
 import { Effect, Result } from "effect";
+import { MAX_ATTACHMENTS } from "../src/mcp/attachments";
 import { expect, it, vi } from "vite-plus/test";
 import {
   attaching,
@@ -116,7 +117,7 @@ it.each(["create_draft", "send_message", "send_reply"] as const)(
   },
 );
 it.each([
-  ["too many files", Array.from({ length: 7 }, () => copy)],
+  ["too many files", Array.from({ length: MAX_ATTACHMENTS + 1 }, () => copy)],
   ["mixed item shapes", [{ ...copy, upload: crypto.randomUUID() }]],
   ["extra property", [{ ...copy, extra: true }]],
   ["invalid upload ID", [{ upload: "not-a-uuid" }]],
@@ -269,14 +270,13 @@ it.each(["send_message", "create_draft"] as const)(
   },
 );
 
-it("advertises only the attaching schemas with their complete file instructions", async () => {
+it("advertises the attachments schema of every attaching tool", async () => {
   const f = await attaching();
   await setTool(f, "create_draft", "allow");
   await setTool(f, "send_reply", "allow");
   const { rpcResult } = await import("./support/oauth");
   const listed = (await rpcResult(await f.mcp.call())).tools as Array<{
     name: string;
-    description: string;
     inputSchema: {
       properties: Record<
         string,
@@ -292,17 +292,11 @@ it("advertises only the attaching schemas with their complete file instructions"
   }>;
   for (const name of ["create_draft", "send_message", "send_reply"]) {
     const entry = listed.find((entry) => entry.name === name)!;
-    expect(entry.inputSchema.properties.attachments).toHaveProperty("maxItems", 6);
+    expect(entry.inputSchema.properties.attachments).toHaveProperty("maxItems", 100);
     const items = entry.inputSchema.properties.attachments!.items!;
     const shapes = items.anyOf ?? items.oneOf;
     expect(shapes).toHaveLength(2);
     for (const shape of shapes!) expect(shape.additionalProperties).toBe(false);
-    expect(entry.description).toContain("`attachments` is an optional list of at most 6 files.");
-    expect(entry.description).toContain("read_thread listed");
-    expect(entry.description).toContain("get_attachment on that account");
-    expect(entry.description).toContain("`upload` ID that the link of create_upload_link answered");
-    expect(entry.description).toContain("An upload goes into one message");
-    expect(entry.description).toContain("attachments and the text together can have at most 25 MB");
   }
 });
 

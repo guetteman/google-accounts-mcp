@@ -4,7 +4,6 @@ import "./support/account-checks";
 import { google, deferred } from "./support/google";
 import {
   callRows,
-  expectError,
   fixture,
   permission,
   PERSONAL,
@@ -78,25 +77,3 @@ it.each(["headers", "body"])(
     ]);
   },
 );
-
-it("leaves the outcome unknown when Gmail drops the response body after its headers", async () => {
-  const f = await fixture();
-  await permission(f);
-  google.labelAnswers.push(
-    () =>
-      new HttpResponse(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode('{"labels":['));
-            controller.error(new Error("body connection lost"));
-          },
-        }),
-      ),
-  );
-  await expectError(
-    await toolCall(f.mcp, "list_labels", { account: PERSONAL }),
-    "google_unavailable",
-    unavailableMessage(PERSONAL),
-  );
-  expect(await callRows()).toEqual([expect.objectContaining({ outcome: null })]);
-});

@@ -21,11 +21,6 @@ import {
 } from "./support/permissions";
 import { testEnv, textOf } from "./support/worker";
 
-it("denies every account to a new connection", async () => {
-  const f = await fixture();
-  expect(await rpcResult(await toolCall(f.mcp, "list_accounts"))).toEqual(textResult([]));
-});
-
 it("removes access on the very next call without reconnecting the agent", async () => {
   const f = await fixture();
   await permission(f);

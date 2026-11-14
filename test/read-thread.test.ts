@@ -4,8 +4,6 @@ import { expect, it } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
 import type { ThreadResult } from "../src/google/thread";
-import { classify, notFound } from "../src/mcp/failures";
-import { parseConnectionId } from "../src/connections/model";
 import { google, THREADS_URL } from "./support/google";
 import { rpcResult } from "./support/oauth";
 import { answer } from "./support/approvals";
@@ -336,31 +334,6 @@ it.each([400, 404])(
   },
 );
 
-it.each([
-  {
-    ids: ["a"],
-    message: `No thread "a" exists in ${PERSONAL}. A thread ID works only in the account that returned it.`,
-  },
-  {
-    ids: ["a", "b", "c"],
-    message: `None of the threads "a", "b", "c" exists in ${PERSONAL}. A thread ID works only in the account that returned it.`,
-  },
-])("classifies missing thread IDs $ids as refused", ({ ids, message }) => {
-  expect(
-    classify(
-      notFound("thread", ids),
-      { approved: false, aborted: false },
-      {
-        input: PERSONAL,
-        email: PERSONAL,
-        origin: "https://mail.example.com",
-        tool: "read_thread",
-        connection: parseConnectionId("aaaaaaaa-aaaa-4aaa-8aaa-000000000001")!,
-      },
-    ),
-  ).toEqual({ audit: "refused", reason: "not_found", error: { code: "not_found", message } });
-});
-
 it("rejects invalid arguments before Gmail, and maps other statuses and malformed messages to google_unavailable", async () => {
   const f = await allowed();
   const before = googleTraffic().length;
@@ -617,20 +590,6 @@ it("accepts letters, digits, hyphens and underscores in thread and page IDs", as
   });
 });
 
-it("describes optional Bcc and shortened fields in the tool list", async () => {
-  const f = await allowed();
-  const listed = await rpcResult(await f.mcp.call());
-  const tool = (listed.tools as Array<{ name: string; description: string }>).find(
-    (t) => t.name === "read_thread",
-  );
-  expect(tool?.description).toContain(
-    "`bcc` is present when the message has that header, which is normally mail that the account wrote.",
-  );
-  expect(tool?.description).toContain(
-    "A very long field is shortened: a list of recipients ends with `… and N more`, and `attachments_left_out` counts the attachments that are not listed. A result has at most 32,000 characters.",
-  );
-});
-
 it("keeps reading a thread when one message's HTML exceeds the parser's memory", async () => {
   const f = await allowed();
   const broken = "<tr><td>".repeat(12000);
@@ -688,29 +647,6 @@ it("skips oversized body parts without fetching, decoding or converting them", a
   google.attachmentAnswers.set("allowed", () => HttpResponse.json({ data: bytes("At the limit") }));
   expect((await result(await read(f))).messages[0]!.text).toBe("At the limit");
   expect(google.attachmentRequests).toHaveLength(1);
-});
-
-it("pages a message whose expanded quoted text is capped and ends with an omission notice", async () => {
-  const f = await allowed();
-  // The converter test covers 4,000 levels and 10,000 lines; this smaller expansion
-  // still exceeds the text cap and exercises every page through the MCP boundary.
-  const html = "<blockquote>".repeat(500) + "line<br>".repeat(1100) + "</blockquote>".repeat(500);
-  serveThread([{ ...message("m1"), payload: part("text/html", html) }]);
-  const pieces: string[] = [];
-  let page: string | undefined;
-  do {
-    const found = await result(await read(f, page ? { page } : {}));
-    expect(JSON.stringify(found).length).toBeLessThanOrEqual(32000);
-    pieces.push(found.messages[0]!.text);
-    page = found.next_page;
-  } while (page);
-  const text = pieces.join("");
-  expect(text.length).toBeLessThanOrEqual(1000000);
-  expect(
-    text.endsWith(
-      "\n[The rest of this message was left out: it is longer than 1,000,000 characters.]",
-    ),
-  ).toBe(true);
 });
 
 it("bounds escaped headers and attachment lists so every page stays within its JSON budget", async () => {

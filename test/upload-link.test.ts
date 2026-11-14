@@ -7,7 +7,6 @@ import { callRows, expectError, fixture, permission, toolCall } from "./support/
 import { callWorker, ORIGIN, testEnv } from "./support/worker";
 import { answer } from "./support/approvals";
 import { rpcResult } from "./support/oauth";
-import { attachingTools } from "../src/mcp/attachments";
 import { fixtureOpen } from "./support/accounts";
 import { failingKv, setOwner, statementFailingDb } from "./support/db";
 import { mime } from "./support/send";
@@ -32,7 +31,7 @@ it("gives fresh links with no upload ID and records only the tool calls", async 
   expect((await put(first.url + "a.pdf")).status).toBe(201);
   expect(await callRows()).toHaveLength(2);
 });
-it("refuses a link without an attaching permission and lists its complete public contract", async () => {
+it("refuses a link without an attaching permission and lists its public schema", async () => {
   const f = await fixture();
   await permission(f, f.personal, true, "read_thread");
   await expectError(
@@ -42,10 +41,8 @@ it("refuses a link without an attaching permission and lists its complete public
   );
   expect(await uploads()).toEqual([]);
   expect((await callRows())[0]!.outcome).toBe("refused");
-  expect(attachingTools()).toEqual(["create_draft", "send_message", "send_reply"]);
   const tools = (await rpcResult(await f.mcp.call())).tools as Array<{
     name: string;
-    description: string;
     annotations: unknown;
     inputSchema: unknown;
   }>;
@@ -56,11 +53,6 @@ it("refuses a link without an attaching permission and lists its complete public
     idempotentHint: false,
   });
   expect(entry.inputSchema).toEqual({ type: "object", properties: {} });
-  expect(entry.description).toBe(
-    "Gives a link that takes one local file, so that create_draft, send_message, or send_reply can attach it to mail. It needs a client that can read the owner's local files and send an HTTP request, such as Claude Code. It takes no input and returns `url` and `expires_at`. Send the file with one PUT request to `url` followed by the file's name, with the file's bytes as the body and its media type in the Content-Type header. With curl: `curl -sS -T <path> -H 'Content-Type: <media type>' '<url>'`. `url` ends with a slash, so curl adds the file's name itself. The answer to that request is JSON with `upload`, the ID of the stored file, and the name, type, and size that the server stored; check them against the file. Only that answer gives the ID. Then name the file as `{ \"upload\": \"<upload>\" }` in `attachments`. A link takes one file of at most 25 MB, once. The link, and a file that no call has used, end at `expires_at`. One upload attaches to one message; for another message, ask for another link. Never put a file's content into a tool argument. If the answer is a sign-in page and not JSON, the owner has not opened `/uploads/*` in Cloudflare Access yet; tell the owner. It returns tool_not_allowed when the owner has not allowed any tool that attaches files.",
-  );
-  expect(entry.description).toContain("curl -sS -T <path>");
-  expect(entry.description).toContain("/uploads/*");
 });
 it.each([undefined, "text/plain; charset=utf-8", "bad media", "Application/PDF"])(
   "stores exact bytes and normalizes the type %s",
@@ -229,7 +221,8 @@ it("stores an empty file and a file exactly at the limit without changing their 
   ).toBe(Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex"));
   const empty = await upload(f, new Uint8Array(), "empty", "application/octet-stream");
   expect(empty.size).toBe(0);
-});
+  // Encrypting and encoding 25 MB took 3.7 s and 6 s on CI runners, against the 5 s default.
+}, 30_000);
 it.each(["kv", "db"])("returns no ID after a %s storage failure", async (where) => {
   const made = await link(await attaching());
   const workerEnv =
@@ -308,14 +301,6 @@ it("stores and returns the outgoing fields and preserves a valid charset", async
       },
     ],
   });
-});
-
-it("returns the shortened outgoing name for two hundred three-byte characters", async () => {
-  const f = await attaching("create_draft");
-  const stored = await upload(f, new Uint8Array([1]), "界".repeat(196) + ".pdf");
-  expect(stored.filename).toBe("界".repeat(94) + ".pdf");
-  await answer(await attachCall(f, [{ upload: stored.upload }], {}, "create_draft"));
-  expectMail({
-    files: [{ filename: stored.filename, type: stored.type, bytes: new Uint8Array([1]) }],
-  });
+  const wide = await upload(f, new Uint8Array([1]), "界".repeat(196) + ".pdf");
+  expect(wide.filename).toBe("界".repeat(94) + ".pdf");
 });

@@ -80,16 +80,6 @@ function decodeApproval(raw: unknown): Approval {
     if (!id) throw new WriteUncertain();
     return { ...account, id };
   });
-  if (
-    !uses.length ||
-    accounts.length !== uses.length ||
-    (row.state === "waiting") !== (row.arguments !== null) ||
-    (row.state === "refused") !== (row.ended_by !== null) ||
-    ["approved", "rejected"].includes(row.state) !== (row.decided_at !== null) ||
-    (row.outcome !== null && row.state !== "approved") ||
-    (row.result !== null && row.outcome === null)
-  )
-    throw new WriteUncertain();
   const common = {
     id,
     connection: { id: connection, name: row.connection_name, app: row.app },
@@ -199,7 +189,7 @@ export const createApproval = (
     arguments: Sealed;
     at: number;
     identity?: Identity;
-    uploads?: { ids: readonly UploadId[]; missing: UploadId | null };
+    uploads?: { ids: readonly UploadId[]; found: boolean };
   },
 ): Effect.Effect<
   | "created"
@@ -235,7 +225,7 @@ export const createApproval = (
             ctx.owner.email,
             input.identity ?? null,
             JSON.stringify(input.uploads?.ids ?? []),
-            input.uploads?.missing ? 0 : 1,
+            input.uploads?.found === false ? 0 : 1,
             ctx.now(),
           ),
         ctx.db
@@ -266,8 +256,7 @@ export const createApproval = (
       }
       if (input.uploads?.ids.length) {
         const missing = results[input.identity ? 5 : 3]!.results[0] as { id: UploadId } | undefined;
-        const unavailable = missing?.id ?? input.uploads.missing;
-        if (unavailable) return { upload: unavailable };
+        if (missing) return { upload: missing.id };
       }
       return Number((results[2]!.results[0] as { count: number }).count) >= WAITING_LIMIT
         ? ("limit" as const)

@@ -50,6 +50,7 @@ import {
   type Send,
   type Sending,
   type Confirm,
+  type AccountTool,
   type Tool,
   type Sources,
   type Uploaded,
@@ -110,6 +111,44 @@ const notAllowed = (seen: unknown, about?: ToolFailure["about"]) =>
     ...(about ? { about } : {}),
   });
 type Allowed = { credential: Credential; status: AccountStatus };
+type Pair = { readonly account: string; readonly tool: string };
+/** A source account's refusal names it. The call's own account needs no such note. */
+const aboutPair = (pair: Pair, i: number): ToolFailure["about"] =>
+  i
+    ? { input: pair.account, email: normalizeEmail(pair.account) ?? pair.account, tool: pair.tool }
+    : undefined;
+/**
+ * Each pair's permitted row with its setting, or the refusal that names the pair. A pair with an
+ * address has two results, its permitted row and its seen row; a pair without one has none.
+ */
+const decodeChecks = (
+  pairs: ReadonlyArray<Pair>,
+  results: ReadonlyArray<D1Result>,
+): Array<{ row: unknown; ask: boolean } | { refused: ToolFailure }> => {
+  let next = 0;
+  return pairs.map((pair, i) => {
+    const [row, seen] = normalizeEmail(pair.account)
+      ? [results[next++]?.results[0], results[next++]?.results[0]]
+      : [];
+    return row
+      ? { row, ask: (row as { ask: unknown }).ask !== 0 }
+      : { refused: notAllowed(seen, aboutPair(pair, i)) };
+  });
+};
+/** The key under which identical calls of a creating tool are one call. */
+const callIdentity = (
+  ctx: CallContext,
+  tool: { readonly name: AccountTool; readonly defaults: Readonly<Record<string, unknown>> },
+  allowed: Allowed,
+  args: DecodedArgs,
+) =>
+  identityOf(ctx.config.tokenKey, {
+    connection: ctx.connection.connectionId,
+    account: allowed.credential.id,
+    tool: tool.name,
+    args: { ...args },
+    defaults: tool.defaults,
+  });
 export type Accounts = { own: Allowed; others: ReadonlyMap<string, Allowed> };
 /** Sources never let a tool write as another account. */
 export const sourceRead =
@@ -210,13 +249,7 @@ export async function executeAccount(
       if (Result.isFailure(result)) throw result.failure;
       return { kind: "ran", value: result.success };
     }
-    const identity = await identityOf(ctx.config.tokenKey, {
-      connection: ctx.connection.connectionId,
-      account: allowed.credential.id,
-      tool: tool.name,
-      args: { ...args },
-      defaults: tool.defaults,
-    });
+    const identity = await callIdentity(ctx, tool, allowed, args);
     const entered = await Effect.runPromise(Effect.result(take(ctx, identity, ctx.now())));
     if (Result.isFailure(entered)) throw new ToolFailure({ code: "server_unavailable" });
     if (entered.success.kind !== "run") return { kind: "repeat", repeat: entered.success };
@@ -239,7 +272,6 @@ export async function executeAccount(
           if (isSend(request)) {
             sends = true;
             seen.started = true;
-            seen.status = null;
           }
           return request;
         })
@@ -425,7 +457,7 @@ export async function runCall(
     const checks = () =>
       pairs.flatMap((pair) => {
         const email = normalizeEmail(pair.account);
-        // A missing address gets empty results too, without disclosing any account.
+        // A missing address is refused like an unknown one, without disclosing any account.
         return email
           ? [
               allowedAccountStatement(
@@ -435,7 +467,7 @@ export async function runCall(
               ),
               seenAccountStatement(ctx, email),
             ]
-          : [ctx.db.prepare("SELECT 1 WHERE 0"), ctx.db.prepare("SELECT 1 WHERE 0")];
+          : [];
       });
     const statements = [
       recordStatement(
@@ -453,7 +485,10 @@ export async function runCall(
     id = decodeCallId(batch[0]!);
     if (!id) throw new ToolFailure({ code: "server_unavailable" });
     if (oversized)
-      throw new ToolFailure({ code: "invalid_arguments", reason: "arguments_too_large" });
+      throw new ToolFailure({
+        code: "invalid_arguments",
+        said: `The arguments are too large. The limit is ${MAX_ARGUMENTS_BYTES / 1024} KB.`,
+      });
     if (!tool) {
       unknownTool = true;
       outcome = "refused";
@@ -479,24 +514,15 @@ export async function runCall(
           });
         }
         const checked: Allowed[] = [];
-        const ask = pairs.some((_, i) => {
-          const row = batch[1 + i * 2]?.results[0] as { ask: unknown } | undefined;
-          return row && row.ask !== 0;
-        });
-        for (const [i, pair] of pairs.entries()) {
-          const row = batch[1 + i * 2]?.results[0];
-          const about = i
-            ? {
-                input: pair.account,
-                email: normalizeEmail(pair.account) ?? pair.account,
-                tool: pair.tool,
-              }
-            : undefined;
-          if (!row) {
+        const granted = decodeChecks(pairs, batch.slice(1));
+        const ask = granted.some((check) => "row" in check && check.ask);
+        for (const [i, check] of granted.entries()) {
+          if ("refused" in check) {
             if (!i) email = account ?? "";
-            throw notAllowed(batch[2 + i * 2]?.results[0], about);
+            throw check.refused;
           }
-          const allowed = await decodeAllowedAccount(row, ctx.config.tokenKey);
+          const about = aboutPair(pairs[i]!, i);
+          const allowed = await decodeAllowedAccount(check.row, ctx.config.tokenKey);
           checked.push(allowed);
           if (!i) email = allowed.credential.email;
           if (
@@ -520,17 +546,11 @@ export async function runCall(
           const approval = crypto.randomUUID() as ApprovalId;
           const ids = (tool.uploads?.(decoded.value) ?? []).map((id) => parseUploadId(id)!);
           const identity = tool.create
-            ? await identityOf(ctx.config.tokenKey, {
-                connection: ctx.connection.connectionId,
-                account: allowed.credential.id,
-                tool: tool.name,
-                args: { ...decoded.value },
-                defaults: tool.defaults,
-              })
+            ? await callIdentity(ctx, tool, allowed, decoded.value)
             : null;
           const refs = await Effect.runPromise(readApprovalUploads(ctx, ids, identity));
-          const missing = ids.find((id) => !refs.has(id)) ?? null;
-          if (missing === null) {
+          const found = ids.every((id) => refs.has(id));
+          if (found) {
             const body = (decoded.value as DecodedArgs & { body?: string }).body ?? "";
             await Effect.runPromise(
               checkAttachedSize(
@@ -556,7 +576,7 @@ export async function runCall(
                   account: value.credential.id,
                   tool: pairs[i]!.tool as typeof tool.name,
                 })),
-                uploads: { ids, missing },
+                uploads: { ids, found },
                 arguments: argumentsSealed,
                 at,
                 ...(identity ? { identity } : {}),
@@ -590,13 +610,7 @@ export async function runCall(
             ? await Effect.runPromise(
                 waitingApproval(
                   ctx,
-                  await identityOf(ctx.config.tokenKey, {
-                    connection: ctx.connection.connectionId,
-                    account: allowed.credential.id,
-                    tool: tool.name,
-                    args: { ...decoded.value },
-                    defaults: tool.defaults,
-                  }),
+                  await callIdentity(ctx, tool, allowed, decoded.value),
                   ctx.now(),
                 ),
               )
@@ -615,21 +629,18 @@ export async function runCall(
                 try: () => ctx.db.batch(checks()),
                 catch: () => new ToolFailure({ code: "server_unavailable" }),
               }).pipe(
-                Effect.flatMap((checked) => {
-                  for (const [i, pair] of pairs.entries()) {
-                    const row = checked[i * 2]!.results[0];
-                    const about = i
-                      ? {
-                          input: pair.account,
-                          email: normalizeEmail(pair.account) ?? pair.account,
-                          tool: pair.tool,
-                        }
-                      : undefined;
-                    if (!row) return Effect.fail(notAllowed(checked[i * 2 + 1]!.results[0], about));
-                    if ((row as { ask: unknown }).ask !== 0)
-                      return Effect.fail(new ToolFailure({ code: "server_unavailable" }));
-                  }
-                  return Effect.void;
+                Effect.flatMap((results) => {
+                  // Every pair was allowed when execution started; any change since stops it.
+                  const changed = decodeChecks(pairs, results).find(
+                    (check) => "refused" in check || check.ask,
+                  );
+                  return changed === undefined
+                    ? Effect.void
+                    : Effect.fail(
+                        "refused" in changed
+                          ? changed.refused
+                          : new ToolFailure({ code: "server_unavailable" }),
+                      );
                 }),
               ),
             );
