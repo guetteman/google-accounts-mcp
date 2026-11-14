@@ -16,7 +16,7 @@ import { charsetOf, partBytes } from "./attachment";
 import { fileFields, type FilePart } from "./mail";
 
 export const MAX_FORWARD_BYTES = 25_000_000;
-/** Each attachment is one Gmail read; 100 reads fit the 25-second call deadline. */
+/** Each attachment is one Gmail read; 100 reads fit within a call deadline (CALL_DEADLINE, RUN_DEADLINE). */
 export const MAX_FORWARD_FILES = 100;
 export type ForwardPlan = {
   thread: string;

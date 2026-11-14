@@ -119,7 +119,7 @@ const changed = <A>(
 /**
  * The most threads or messages that one call which changes mail may name. Each item costs one
  * Gmail request when the call runs and one when the approval page shows it; at five requests at
- * a time, 100 items stay well inside Gmail's per-user rate and the 25-second call deadline.
+ * a time, 100 items stay well inside Gmail's per-user rate and the call deadlines (CALL_DEADLINE, RUN_DEADLINE).
  */
 export const MAX_ITEMS = 100;
 

@@ -10,7 +10,7 @@ import { parseUploadId } from "../uploads/store";
 import { messageTooLarge, ToolFailure, uploadNotAvailable } from "./failures";
 import { TOOLS, type Sources } from "./tools";
 
-/** Each copy is one Gmail read and each upload one KV read; 100 fit the 25-second call deadline. */
+/** Each copy is one Gmail read and each upload one KV read; 100 fit within a call deadline (CALL_DEADLINE, RUN_DEADLINE). */
 export const MAX_ATTACHMENTS = 100;
 const Copy = Schema.Struct({
   account: Schema.String,
