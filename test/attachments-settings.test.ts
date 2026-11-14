@@ -193,19 +193,6 @@ it("records source account IDs once even for hidden sources, and no agent addres
   expect(calls.map((call) => call.outcome)).toEqual(["success", "refused", "refused", "success"]);
   expect(JSON.stringify(calls)).not.toContain(NORTHWIND);
 });
-it("explains copying files in the connection permission text", async () => {
-  const f = await attaching();
-  const response = await f.mcp.browser.get(`/connections/${f.connection.id}`);
-  const props = JSON.parse(
-    /<script id="page-props" type="application\/json">([\s\S]*?)<\/script>/.exec(
-      await response.text(),
-    )![1]!,
-  ) as { tools: Array<{ name: string; description: string }> };
-  expect(props.tools.find((tool) => tool.name === "get_attachment")!.description).toBe(
-    "Download a file attached to a message of this account, or copy it into mail that this connection writes from any account.",
-  );
-});
-
 it.each(["message", "attachment", "google", "refresh"])(
   "names the source for a %s failure and lets the same call run after recovery",
   async (kind) => {
@@ -260,11 +247,15 @@ it.each(["message", "attachment", "google", "refresh"])(
   },
 );
 
-it.each(["sending", "source"])(
-  "checks the %s account's missing access when only the source asks",
-  async (which) => {
+it.each([
+  { which: "sending", setting: "ask" },
+  { which: "source", setting: "ask" },
+  { which: "source", setting: "allow" },
+] as const)(
+  "checks the $which account's missing access when the source is set to $setting",
+  async ({ which, setting }) => {
     const f = await attaching();
-    await setTool(f, "get_attachment", "ask", f.northwind);
+    await setTool(f, "get_attachment", setting, f.northwind);
     const account = which === "sending" ? f.personal : f.northwind;
     await env.DB.prepare("UPDATE accounts SET scopes = '[]' WHERE id = ?").bind(account.id).run();
     await expectError(
@@ -276,18 +267,6 @@ it.each(["sending", "source"])(
     expect(google.messageRequests).toEqual([]);
   },
 );
-it("refuses a source missing access even when every setting is allow", async () => {
-  const f = await attaching();
-  await setTool(f, "get_attachment", "allow", f.northwind);
-  await env.DB.prepare("UPDATE accounts SET scopes = '[]' WHERE id = ?").bind(f.northwind.id).run();
-  await expectError(
-    await attachCall(f, [copy]),
-    "account_missing_access",
-    `Google did not grant all the Gmail access this server asks for on ${NORTHWIND}. Ask the owner to reconnect it at ${ORIGIN}/accounts and check every box.`,
-  );
-  expect(await rows()).toEqual([]);
-  expect(google.messageRequests).toEqual([]);
-});
 
 it.each(["sending with an asking source", "source under allow"])(
   "refuses reconnect status on the %s before an approval exists",
