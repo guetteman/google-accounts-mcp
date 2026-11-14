@@ -103,7 +103,7 @@ const plan = (items: readonly Item[], sources: Sources): Effect.Effect<Planned[]
         if ("upload" in item) {
           const file = sources.uploads.get(item.upload);
           if (!file) return yield* Effect.fail(uploadNotAvailable(item.upload));
-          return { ...file, ...fileFields(file), source: { kind: "upload" as const } };
+          return { ...file, source: { kind: "upload" as const } };
         }
         const about = {
           input: item.account,

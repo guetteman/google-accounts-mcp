@@ -26,7 +26,7 @@ export const viewDigest = async (request: ApprovalRequest) => {
       joiner: request.tool.joiner,
       empty: request.tool.empty,
     },
-    ...((request.also?.length ?? 0) > 0 ? { also: request.also } : {}),
+    also: request.also ?? [],
     notes: request.notes.map(({ text, warning }) => ({ text, warning })),
     values: request.values.map(({ name, text, from }) => ({ name, text, from })),
   });

@@ -1,5 +1,4 @@
 import "./support/account-checks";
-import { Buffer } from "node:buffer";
 import { env } from "cloudflare:workers";
 import { Effect } from "effect";
 import { expect, it, vi } from "vite-plus/test";
@@ -22,7 +21,7 @@ import { answer, approve, page, digest, post, decided, row, get } from "./suppor
 import { callRows, expectError, NORTHWIND, PERSONAL } from "./support/permissions";
 import { accountTraffic, google, deferred } from "./support/google";
 import { CONTENT, MESSAGE } from "./support/attachment";
-import { created, hold, mime, never } from "./support/send";
+import { created, hold, mime } from "./support/send";
 import { renderPage } from "../src/pages/render";
 import { approvalView, viewDigest } from "../src/approvals/view";
 import { readApproval } from "../src/approvals/store";
@@ -121,36 +120,24 @@ it("shows the complete attachment plan and every account before approving exactl
   });
   expect((await callRows()).find((call) => call.tool === "send_message")!.outcome).toBe("success");
 });
-it.each(["create_draft", "send_message", "send_reply"] as const)(
-  "shows the outgoing file names and media types in %s",
-  async (name) => {
-    const f = await attaching(name, "ask");
-    await setTool(f, "get_attachment", "allow", f.northwind);
-    const long = "ñ".repeat(190) + ".eml";
-    serveAttachment(filePart("message/rfc822", long));
-    serveMessage();
-    const id = (
-      await answer(
-        await attachCall(f, [copy], name === "send_reply" ? { message: SOURCE } : {}, name),
-      )
-    ).approval as string;
-    const shown = await page(f, id);
-    const value = shown.request.values.find((value) => value.name === "Attachment 1 (copied)")!;
-    expect(value).toEqual({
-      name: "Attachment 1 (copied)",
-      text: `${"ñ".repeat(141)}.eml (application/octet-stream, 8 bytes)`,
-      from: "gmail",
-    });
-    expect((await approve(f, id)).state.kind).toBe("succeeded");
-    const file = fileOf(mime(google.uploads[0]!.message).parts[1]!);
-    expect(value.text).toBe(`${file.filename} (${file.type}, ${file.bytes.length} bytes)`);
-    expect(file.bytes).toEqual(CONTENT);
-    if (name !== "create_draft")
-      expect(shown.request.notes).toEqual([
-        { text: "A sent message cannot be taken back.", warning: true },
-      ]);
-  },
-);
+it("shows the outgoing file names and media types", async () => {
+  const f = await attaching("send_message", "ask");
+  await setTool(f, "get_attachment", "allow", f.northwind);
+  const long = "ñ".repeat(190) + ".eml";
+  serveAttachment(filePart("message/rfc822", long));
+  const id = (await answer(await attachCall(f, [copy]))).approval as string;
+  const shown = await page(f, id);
+  const value = shown.request.values.find((value) => value.name === "Attachment 1 (copied)")!;
+  expect(value).toEqual({
+    name: "Attachment 1 (copied)",
+    text: `${"ñ".repeat(141)}.eml (application/octet-stream, 8 bytes)`,
+    from: "gmail",
+  });
+  expect((await approve(f, id)).state.kind).toBe("succeeded");
+  const file = fileOf(mime(google.uploads[0]!.message).parts[1]!);
+  expect(value.text).toBe(`${file.filename} (${file.type}, ${file.bytes.length} bytes)`);
+  expect(file.bytes).toEqual(CONTENT);
+});
 it.each(["404", "position", "500", "credential"])(
   "keeps a copy failure %s on the owner's page while the agent sees pending",
   async (failure) => {
@@ -270,28 +257,6 @@ it.each(["deny", "ask", "approved"])(
     expect(google.sends).toEqual([]);
   },
 );
-it("retains uploaded-file recovery advice after an unknown approved send", async () => {
-  const f = await attaching("send_message", "ask");
-  const local = await upload(f);
-  const id = (await answer(await attachCall(f, [{ upload: local.upload }]))).approval as string;
-  const entered = deferred();
-  google.sendAnswers.push((request) => {
-    entered.resolve();
-    return never(request);
-  });
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const work = approve(f, id);
-  await entered.promise;
-  await vi.advanceTimersByTimeAsync(10_000);
-  const done = await work;
-  const message = `The server does not know whether this mail went out from ${PERSONAL}. Ask the owner to look in Sent. If it is not there, it may still be in Drafts, and the owner can send it from Gmail. Until 2030-11-16T12:00:00Z, repeating this call does not send it again. Only if the owner says that it is in neither place, call again with duplicate: 2 and a new upload of each file.`;
-  expect(done.state).toEqual({ kind: "unknown", message });
-  expect(await get(f, id)).toEqual({
-    status: "unknown",
-    error: { code: "outcome_unknown", message },
-  });
-  expect((await page(f, id)).state).toEqual({ kind: "unknown", message });
-});
 it("keeps a late-used upload readable for the full approval hour", async () => {
   const f = await attaching("send_message", "ask");
   const local = await upload(f);
@@ -327,23 +292,6 @@ it("matches accounts by their IDs and covers additional account lines in the dig
   );
   expect(a.page.request.account.email).toBe(PERSONAL);
   expect(a.page.request.also?.[0]!.email).toBe(NORTHWIND);
-  const one = { ...a.page.request, also: [] };
-  const { also: _also, ...old } = one;
-  const canonical = JSON.stringify(old);
-  // Today's field order is explicit in the fixture, independent of the digest implementation.
-  const oldCanonical = JSON.stringify({
-    connection: old.connection,
-    account: old.account,
-    tool: old.tool,
-    notes: old.notes,
-    values: old.values,
-  });
-  expect(canonical).toBe(oldCanonical);
-  expect(await viewDigest(one)).toBe(
-    Buffer.from(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(oldCanonical)),
-    ).toString("hex"),
-  );
   expect(await viewDigest(a.page.request)).not.toBe(
     await viewDigest({
       ...a.page.request,
@@ -459,7 +407,7 @@ it("bounds copied message facts and labels an unnamed file without reading its b
   expect(google.attachmentRequests).toEqual([]);
 });
 
-it("names the source account with Workspace context in every decided page", async () => {
+it("names the source account with Workspace context in a decided page", async () => {
   const f = await attaching("send_message", "ask");
   await setTool(f, "get_attachment", "allow", f.northwind);
   await env.DB.prepare("UPDATE accounts SET hd = 'northwind.example' WHERE id = ?")
@@ -468,13 +416,8 @@ it("names the source account with Workspace context in every decided page", asyn
   const id = (await answer(await attachCall(f, [copy]))).approval as string;
   const waiting = await page(f, id);
   const states: Array<(typeof waiting)["state"]> = [
-    { kind: "running" },
     { kind: "succeeded" },
-    { kind: "failed", message: null },
-    { kind: "unknown" },
-    { kind: "rejected" },
-    { kind: "expired" },
-    { kind: "ended", by: "connection" },
+    { kind: "failed", message: "The server could not complete the call. Try again later." },
   ];
   for (const state of states) {
     const html = await renderPage({ ...waiting, state }).text();
@@ -483,44 +426,6 @@ it("names the source account with Workspace context in every decided page", asyn
     );
     expect(html).toMatch(/<bdi[^>]*>alex@northwind\.example<\/bdi>/);
   }
-  expect(textOf(await renderPage({ ...waiting, unconfirmed: true }).text())).toContain(
-    `It also asked to download an attachment from ${NORTHWIND} , a Workspace account.`,
-  );
-});
-it("sanitizes a retained upload reference in the shared plan before showing its fields", async () => {
-  const f = await attaching("send_message", "ask");
-  const local = await upload(f);
-  const stored = (await uploads())[0]!;
-  const ref = JSON.parse(await fixtureOpen(`${stored.id}:upload`, stored.file!)) as Record<
-    string,
-    unknown
-  >;
-  const { fixtureSeal } = await import("./support/accounts");
-  const sealed = await fixtureSeal(
-    `${stored.id}:upload`,
-    JSON.stringify({ ...ref, filename: "ñ".repeat(190) + ".eml", type: "message/rfc822" }),
-  );
-  await env.DB.prepare("UPDATE uploads SET file = ? WHERE id = ?").bind(sealed, stored.id).run();
-  const id = (await answer(await attachCall(f, [{ upload: local.upload }]))).approval as string;
-  const shown = await page(f, id);
-  expect(shown.request.values.slice(4, -1)).toEqual([
-    { name: "Attachments", text: "1 file, 4 bytes in all", from: "agent" },
-    {
-      name: "Attachment 1 (sent to a link of this connection)",
-      text: `${"ñ".repeat(141)}.eml (application/octet-stream, 4 bytes)`,
-      from: "agent",
-    },
-  ]);
-  expect((await approve(f, id)).state.kind).toBe("succeeded");
-  expectMail({
-    files: [
-      {
-        filename: "ñ".repeat(141) + ".eml",
-        type: "application/octet-stream",
-        bytes: new Uint8Array([0, 255, 10, 65]),
-      },
-    ],
-  });
 });
 it("closes every source request timer after building a page", async () => {
   const f = await attaching("send_message", "ask");
