@@ -549,8 +549,8 @@ export async function runCall(
             ? await callIdentity(ctx, tool, allowed, decoded.value)
             : null;
           const refs = await Effect.runPromise(readApprovalUploads(ctx, ids, identity));
-          const missing = ids.find((id) => !refs.has(id)) ?? null;
-          if (missing === null) {
+          const found = ids.every((id) => refs.has(id));
+          if (found) {
             const body = (decoded.value as DecodedArgs & { body?: string }).body ?? "";
             await Effect.runPromise(
               checkAttachedSize(
@@ -576,7 +576,7 @@ export async function runCall(
                   account: value.credential.id,
                   tool: pairs[i]!.tool as typeof tool.name,
                 })),
-                uploads: { ids, missing },
+                uploads: { ids, found },
                 arguments: argumentsSealed,
                 at,
                 ...(identity ? { identity } : {}),
