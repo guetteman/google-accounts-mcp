@@ -29,12 +29,6 @@ export const createDraft = (
 export const uploadDraft = (
   send: Send,
   input: { message: Blob; thread?: string },
-  refused: (status: number) => ToolFailure = (status) =>
-    status === 413
-      ? messageTooLarge(null)
-      : status === 400
-        ? notSendable(null)
-        : new ToolFailure({ code: "google_unavailable" }),
 ): Effect.Effect<CreatedDraft, ToolFailure> => {
   const boundary = `related-${crypto.randomUUID()}`;
   const metadata = input.thread === undefined ? {} : { message: { threadId: input.thread } };
@@ -48,7 +42,12 @@ export const uploadDraft = (
     send,
     "drafts?uploadType=multipart",
     Draft,
-    refused,
+    (status) =>
+      status === 413
+        ? messageTooLarge(null)
+        : status === 400
+          ? notSendable(null)
+          : new ToolFailure({ code: "google_unavailable" }),
     body,
     `multipart/related; boundary=${boundary}`,
   ).pipe(
