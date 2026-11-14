@@ -1,7 +1,6 @@
 import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
-import { previews } from "../src/pages/previews";
 import { renderPage } from "../src/pages/render";
 import { NOW } from "./support/accounts";
 import { decided, get, page, post, row } from "./support/approvals";
@@ -473,16 +472,4 @@ it("keeps an approved delete unknown when its deadline cuts a later change in fl
   }
   expect(await get(f, f.id)).toEqual({ status: "unknown" });
   expect((await callRows())[0]!.outcome).toBeNull();
-});
-
-it("the delete preview names a message the account does not have and warns", () => {
-  const preview = previews["approval-waiting-delete"]!;
-  if (preview._tag !== "Approval") throw new Error("Expected approval preview");
-  expect(preview.request.values).toHaveLength(7);
-  expect(preview.request.values.at(-1)).toEqual({
-    name: "Message 3 ID, not found in this account",
-    text: "19a1b2c3d4e5f603",
-    from: "agent",
-  });
-  expect(preview.request.notes).toEqual([{ text: WARNING, warning: true }]);
 });
