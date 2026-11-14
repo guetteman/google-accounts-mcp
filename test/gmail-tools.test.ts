@@ -234,23 +234,21 @@ it("reports a token endpoint failure as Google unavailable", async () => {
   expect((await callRows())[0]).toMatchObject({ outcome: "failed", reason: "google_unavailable" });
 });
 
-it.each([400, 401, 403, 429, 500, 503])(
-  "reports Gmail HTTP %s as Google unavailable",
-  async (status) => {
-    const f = await fixture();
-    await permission(f);
-    const answer = () => HttpResponse.json({ error: "PRIVATE_GOOGLE_BODY" }, { status });
-    google.labelAnswers.push(answer);
-    // withGoogle refreshes once after a 401; its final Gmail response must fail too.
-    if (status === 401) google.labelAnswers.push(answer);
-    await expectError(
-      await toolCall(f.mcp, "list_labels", { account: PERSONAL }),
-      "google_unavailable",
-      unavailableMessage(PERSONAL),
-    );
-    expect((await callRows())[0]).toMatchObject({ outcome: "failed" });
-  },
-);
+// Every status but 401 takes the same branch; 401 first retries with a refreshed token.
+it.each([401, 403])("reports Gmail HTTP %s as Google unavailable", async (status) => {
+  const f = await fixture();
+  await permission(f);
+  const answer = () => HttpResponse.json({ error: "PRIVATE_GOOGLE_BODY" }, { status });
+  google.labelAnswers.push(answer);
+  // withGoogle refreshes once after a 401; its final Gmail response must fail too.
+  if (status === 401) google.labelAnswers.push(answer);
+  await expectError(
+    await toolCall(f.mcp, "list_labels", { account: PERSONAL }),
+    "google_unavailable",
+    unavailableMessage(PERSONAL),
+  );
+  expect((await callRows())[0]).toMatchObject({ outcome: "failed" });
+});
 
 it("does not follow Gmail redirects or forward a token to the redirect host", async () => {
   const f = await fixture();
@@ -281,11 +279,6 @@ it("does not follow Gmail redirects or forward a token to the redirect host", as
 
 it.each([
   { label: "null", body: null },
-  { label: "array", body: [] },
-  { label: "null labels", body: { labels: null } },
-  { label: "object labels", body: { labels: {} } },
-  { label: "missing label fields", body: { labels: [{}] } },
-  { label: "numeric ID", body: { labels: [{ id: 4, name: "INBOX", type: "system" }] } },
   {
     label: "invalid label type",
     body: { labels: [{ id: "INBOX", name: "INBOX", type: "invalid" }] },

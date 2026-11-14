@@ -45,7 +45,7 @@ export const AttachmentBytes = Schema.Struct({ data: Schema.String });
 /** One change as the account. Only a 4xx response confirms that Google refused it. */
 export const change = <A>(
   send: Send,
-  method: "POST" | "PUT" | "DELETE",
+  method: "POST" | "DELETE",
   path: string,
   schema: Schema.Codec<A, unknown> | null,
   refused: (status: number) => ToolFailure,
