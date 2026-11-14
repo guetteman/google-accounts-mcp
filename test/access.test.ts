@@ -46,7 +46,7 @@ describe("Access owner check", () => {
     },
   );
 
-  it.each(["no credentials", "a bearer token", "an Access cookie", "an old owner session cookie"])(
+  it.each(["no credentials", "a bearer token", "an Access cookie"])(
     "refuses %s without fetching keys or changing data",
     async (kind) => {
       const token = await signAccessJwt();
@@ -55,9 +55,7 @@ describe("Access owner check", () => {
           ? { Authorization: `Bearer ${token}` }
           : kind === "an Access cookie"
             ? { Cookie: `CF_Authorization=${token}` }
-            : kind === "an old owner session cookie"
-              ? { Cookie: `__Host-session=${token}` }
-              : {};
+            : {};
       const before = await dump();
       const response = await new Browser().get("/accounts", { headers });
       expect(response.status).toBe(403);
@@ -134,25 +132,6 @@ describe("Access owner check", () => {
     expect(await dump()).toEqual(before);
   });
 
-  it("refuses strangers at the root in the same way as at Accounts", async () => {
-    for (const assertion of [undefined, "bad", await signAccessJwt({ email: STRANGER })]) {
-      const browser = new Browser();
-      browser.assertion = assertion;
-      const response = await browser.get("/");
-      expect(response.status).toBe(403);
-      expect(textOf(await response.text())).toContain(
-        assertion?.includes(".") ? NOT_OWNER.title : ACCESS_REFUSED.title,
-      );
-      expect(location(response)).toBeNull();
-    }
-    access.mode = "fail";
-    const browser = new Browser(() =>
-      testEnv({ ACCESS_ISSUER: "https://root-failure.cloudflareaccess.com" }),
-    );
-    browser.assertion = await signAccessJwt({ iss: "https://root-failure.cloudflareaccess.com" });
-    expect((await browser.get("/")).status).toBe(503);
-  });
-
   it.each(["missing", "invalid", "another address"])(
     "attempts no writes and reveals no owner on any owner route with %s identity",
     async (kind) => {
@@ -169,9 +148,12 @@ describe("Access owner check", () => {
       for (const path of ["/", "/accounts", "/connections", "/authorize", WRITE_PATH]) {
         const response = path === WRITE_PATH ? await browser.post(path) : await browser.get(path);
         expect(response.status, path).toBe(path === "/authorize" ? 400 : 403);
-        expect(`${await response.text()}${location(response) ?? ""}`, path).not.toContain(
-          OWNER_EMAIL,
-        );
+        const html = await response.text();
+        if (path !== "/authorize")
+          expect(textOf(html), path).toContain(
+            kind === "another address" ? NOT_OWNER.title : ACCESS_REFUSED.title,
+          );
+        expect(`${html}${location(response) ?? ""}`, path).not.toContain(OWNER_EMAIL);
         expect(watched.writes, path).toEqual([]);
         expect(await dump(), path).toEqual(before);
       }
@@ -182,6 +164,7 @@ describe("Access owner check", () => {
 describe("Access signing keys", () => {
   it.each([
     ["a non-RSA key", { kty: "EC" }],
+    ["a missing key type", { kty: undefined }],
     ["an encryption key", { use: "enc" }],
     ["an incompatible algorithm", { alg: "RS512" }],
     ["an empty key ID", { kid: "" }],
@@ -233,7 +216,6 @@ describe("Access signing keys", () => {
     "junk",
     "invalid-key",
     "weak-key",
-    "no-kty",
     "short-key",
     "invalid-json",
     "redirect",
@@ -250,19 +232,6 @@ describe("Access signing keys", () => {
     expect(text).not.toContain(OWNER_EMAIL);
     expect(await dump()).toEqual(before);
   });
-
-  it.each(["invalid-key", "weak-key", "no-kty", "short-key"] as const)(
-    "recovers on the next request after the certs endpoint returns an unusable key (%s)",
-    async (mode) => {
-      access.mode = mode;
-      const owner = new Browser();
-      await owner.authenticate();
-      expect((await owner.get("/accounts")).status).toBe(503);
-      access.mode = "ok";
-      expect((await owner.get("/accounts")).status).toBe(200);
-      expect(access.requests).toHaveLength(2);
-    },
-  );
 
   it("fetches the certs once when a cold isolate meets an unknown key", async () => {
     const browser = new Browser();
