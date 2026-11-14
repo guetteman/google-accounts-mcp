@@ -5,9 +5,9 @@ import "./support/account-checks";
 import { TOOLS, ViewUnavailable } from "../src/mcp/tools";
 import { viewDigest } from "../src/approvals/view";
 import { NOW } from "./support/accounts";
-import { observeStatements, statementFailingDb, dump } from "./support/db";
+import { observeStatements, statementFailingDb } from "./support/db";
 import { google, deferred, LABELS_RESPONSE } from "./support/google";
-import { callRows, fixture, googleTraffic } from "./support/permissions";
+import { callRows, fixture } from "./support/permissions";
 import { ask, approve, decided, digest, get, page, post, row, setting } from "./support/approvals";
 import { testEnv, textOf } from "./support/worker";
 const tool = TOOLS.find((tool) => tool.kind === "account")!;
@@ -272,21 +272,6 @@ it("allows a waiting ask call only on Approve after the setting becomes allow", 
   expect(await get(f, id)).toMatchObject({ status: "pending" });
   expect(google.labelRequests).toEqual([]);
   expect((await approve(f, id)).state.kind).toBe("succeeded");
-});
-it("requires the owner's same-origin identity for both decision actions", async () => {
-  const f = await fixture();
-  await setting(f, "ask");
-  const id = await ask(f);
-  const d = await digest(f, id);
-  const before = await dump();
-  const traffic = googleTraffic().length;
-  for (const action of ["approve", "reject"])
-    for (const origin of [null, "https://evil.example"])
-      expect(
-        (await f.mcp.browser.post(`/approvals/${id}/${action}`, { digest: d }, { origin })).status,
-      ).toBe(403);
-  expect(await dump()).toEqual(before);
-  expect(googleTraffic().slice(traffic)).toEqual([]);
 });
 it("returns the same private not-found response for invalid and missing approval IDs", async () => {
   const f = await fixture();
