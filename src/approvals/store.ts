@@ -80,16 +80,6 @@ function decodeApproval(raw: unknown): Approval {
     if (!id) throw new WriteUncertain();
     return { ...account, id };
   });
-  if (
-    !uses.length ||
-    accounts.length !== uses.length ||
-    (row.state === "waiting") !== (row.arguments !== null) ||
-    (row.state === "refused") !== (row.ended_by !== null) ||
-    ["approved", "rejected"].includes(row.state) !== (row.decided_at !== null) ||
-    (row.outcome !== null && row.state !== "approved") ||
-    (row.result !== null && row.outcome === null)
-  )
-    throw new WriteUncertain();
   const common = {
     id,
     connection: { id: connection, name: row.connection_name, app: row.app },
