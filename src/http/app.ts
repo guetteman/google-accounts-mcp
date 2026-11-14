@@ -29,10 +29,8 @@ app.use(
   }),
 );
 app.use("*", async (c, next) => {
-  const config = readConfig(c.env);
-  if (Result.isFailure(config))
-    return renderPage({ _tag: "SetupIncomplete", names: config.failure.names }, { status: 503 });
-  c.set("config", config.success);
+  // withOwnerGate has already refused every request whose configuration is incomplete.
+  c.set("config", Result.getOrThrow(readConfig(c.env)));
   await next();
 });
 app.route("/", consentRoutes);
