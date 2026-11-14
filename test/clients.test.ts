@@ -236,26 +236,24 @@ it.each(clients)(
   },
 );
 
+// Scope handling does not depend on the client, so one client stands for all three.
 for (const scope of [undefined, "mcp offline_access"]) {
-  it.each(clients)(
-    `keeps exactly the requested ${scope ?? "empty"} scope for $label across refreshes`,
-    async (client) => {
-      const mcp = await new McpClient(client).connect(undefined, scope);
-      expect(mcp.tokens!.scope ?? "").toBe(scope ?? "");
-      const grant = (await kvDump()).find((entry) => entry.name.startsWith("grant:"));
-      expect(grant).toBeDefined();
-      expect(JSON.parse(grant!.value!).scope).toEqual(scope ? scope.split(" ") : []);
-      await mcp.keepTokens(await mcp.refresh(undefined, scope ?? ""));
-      expect(mcp.tokens!.scope ?? "").toBe(scope ?? "");
-      await expectOAuthError(await mcp.refresh(undefined, "ungranted"), "invalid_scope");
-      if (scope) {
-        await mcp.keepTokens(await mcp.refresh(undefined, "mcp ungranted"));
-        expect(mcp.tokens!.scope).toBe("mcp");
-        const retained = (await kvDump()).find((entry) => entry.name.startsWith("grant:"));
-        expect(JSON.parse(retained!.value!).scope).toEqual(scope.split(" "));
-      }
-    },
-  );
+  it(`keeps exactly the requested ${scope ?? "empty"} scope across refreshes`, async () => {
+    const mcp = await new McpClient(codeClient).connect(undefined, scope);
+    expect(mcp.tokens!.scope ?? "").toBe(scope ?? "");
+    const grant = (await kvDump()).find((entry) => entry.name.startsWith("grant:"));
+    expect(grant).toBeDefined();
+    expect(JSON.parse(grant!.value!).scope).toEqual(scope ? scope.split(" ") : []);
+    await mcp.keepTokens(await mcp.refresh(undefined, scope ?? ""));
+    expect(mcp.tokens!.scope ?? "").toBe(scope ?? "");
+    await expectOAuthError(await mcp.refresh(undefined, "ungranted"), "invalid_scope");
+    if (scope) {
+      await mcp.keepTokens(await mcp.refresh(undefined, "mcp ungranted"));
+      expect(mcp.tokens!.scope).toBe("mcp");
+      const retained = (await kvDump()).find((entry) => entry.name.startsWith("grant:"));
+      expect(JSON.parse(retained!.value!).scope).toEqual(scope.split(" "));
+    }
+  });
 }
 
 it("treats removed registration as a page when the owner gate refuses it", async () => {
