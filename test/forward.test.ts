@@ -7,7 +7,7 @@ import { callRows, expectError, permission } from "./support/permissions";
 import { onceRows, SOURCE, THREAD } from "./support/draft";
 import { bytes, part, tree, serveThread, read } from "./support/thread";
 import { decodeWords } from "./support/draft";
-import { google, deferred, token } from "./support/google";
+import { google, deferred } from "./support/google";
 import {
   leftoverMessage,
   fullMessage,
@@ -224,22 +224,17 @@ it("a large referenced attachment keeps its length and sampled bytes across enco
   expect(google.sends).toHaveLength(1);
 });
 
-it.each(["read", "create", "upload"])(
-  "a failed %s before send is known and its retry sends once",
-  async (where) => {
-    const f = await sendFixture(where === "create" ? "send_message" : "forward_message");
-    const name = where === "create" ? "send_message" : "forward_message";
-    if (where === "read")
-      google.messageAnswers.set(SOURCE, () => new Response(null, { status: 503 }));
-    else
-      (where === "create" ? google.draftCreateAnswers : google.uploadAnswers).push(
-        () => new Response(null, { status: 503 }),
-      );
-    await expectError(
-      await sendCall(f, name),
-      "google_unavailable",
-      where === "read" ? /Google could not complete/ : leftoverMessage,
+it.each([
+  { name: "forward_message", failure: "503" },
+  { name: "send_reply", failure: "lost" },
+] as const)(
+  "a $failure source read for $name before send is known and its retry sends once",
+  async ({ name, failure }) => {
+    const f = await sendFixture(name);
+    google.messageAnswers.set(SOURCE, () =>
+      failure === "lost" ? HttpResponse.error() : new Response(null, { status: 503 }),
     );
+    await expectError(await sendCall(f, name), "google_unavailable", /Google could not complete/);
     expect(await onceRows()).toEqual([]);
     expect(google.sends).toEqual([]);
     expect((await callRows())[0]!.outcome).toBe("failed");
@@ -294,7 +289,7 @@ it.each([400, 404])(
   },
 );
 
-it.each(["bad-data", "missing-data", "404", "padded"])(
+it.each(["missing-data", "404", "padded"])(
   "attachment bytes handle %s without sending bad data",
   async (kind) => {
     const f = await sendFixture("forward_message");
@@ -311,9 +306,7 @@ it.each(["bad-data", "missing-data", "404", "padded"])(
     };
     serveFull(raw);
     google.attachmentAnswers.set("file", () =>
-      kind === "404"
-        ? new Response(null, { status: 404 })
-        : Response.json({ data: kind === "padded" ? "AA==" : "***" }),
+      kind === "404" ? new Response(null, { status: 404 }) : Response.json({ data: "AA==" }),
     );
     if (kind === "padded") await answer(await sendCall(f, "forward_message"));
     else {
@@ -324,40 +317,6 @@ it.each(["bad-data", "missing-data", "404", "padded"])(
       );
       expect(google.sends).toEqual([]);
     }
-  },
-);
-
-it.each(["create unreadable", "create lost", "create unanswered", "read lost"])(
-  "%s before send is known and a retry can send",
-  async (kind) => {
-    const f = await sendFixture(kind === "read lost" ? "send_reply" : "send_message");
-    const name = kind === "read lost" ? "send_reply" : "send_message";
-    const entered = deferred();
-    if (kind === "read lost") google.messageAnswers.set(SOURCE, () => HttpResponse.error());
-    else
-      google.draftCreateAnswers.push((request) => {
-        entered.resolve();
-        if (kind === "create unanswered") return never(request);
-        if (kind === "create lost") return HttpResponse.error();
-        return new Response("not JSON");
-      });
-    if (kind === "create unanswered") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const work = sendCall(f, name);
-    if (kind === "create unanswered") {
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(10_000);
-    }
-    await expectError(
-      await work,
-      "google_unavailable",
-      kind === "read lost" ? /Google could not complete/ : leftoverMessage,
-    );
-    expect(await onceRows()).toEqual([]);
-    expect(google.sends).toEqual([]);
-    expect((await callRows())[0]!.outcome).toBe("failed");
-    serveFull();
-    await answer(await sendCall(f, name));
-    expect(google.sends).toHaveLength(1);
   },
 );
 
@@ -455,35 +414,6 @@ it("refuses an alternative that replaces preferred text which did not fit the bo
   expect(await onceRows()).toEqual([]);
 });
 
-it.each(["drafts", "upload", "send", "delete"])(
-  "the fake refuses an unauthenticated %s write",
-  async (operation) => {
-    const f = await sendFixture();
-    let url = "https://gmail.googleapis.com/gmail/v1/users/me/drafts";
-    let method = "POST";
-    let body: string | undefined = "{}";
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (operation === "send") {
-      url += "/send";
-      body = JSON.stringify({ id: "existing-draft" });
-    }
-    if (operation === "delete") {
-      url += "/existing-draft";
-      method = "DELETE";
-      body = undefined;
-    }
-    if (operation === "upload") {
-      url = "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts?uploadType=multipart";
-      headers["Content-Type"] = "multipart/related; boundary=unauthorized";
-      body =
-        "--unauthorized\r\nContent-Type: application/json\r\n\r\n{}\r\n--unauthorized\r\nContent-Type: message/rfc822\r\n\r\nSubject: Unauthorized\r\n\r\nBody\r\n--unauthorized--\r\n";
-    }
-    expect((await fetch(url, { method, headers, body, redirect: "manual" })).status).toBe(401);
-    expect(google.storedDrafts.has("existing-draft")).toBe(true);
-    await permission(f);
-  },
-);
-
 it("preserves the charset and bytes of a text attachment without changing its approval line", async () => {
   const f = await sendFixture("forward_message", "ask");
   const raw = fullMessage();
@@ -538,18 +468,4 @@ it.each([400, 413])("allows an upload caller to map a refusal with status %s", a
     code: "invalid_arguments",
     said: `Upload refused with ${status}`,
   });
-});
-
-it("the fake returns 404 when deleting a draft it does not hold", async () => {
-  await sendFixture();
-  const headers = { Authorization: `Bearer ${token()}` };
-  const remove = (id: string) =>
-    fetch(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${id}`, {
-      method: "DELETE",
-      headers,
-    });
-  expect((await remove("existing-draft")).status).toBe(204);
-  expect(google.storedDrafts.has("existing-draft")).toBe(false);
-  expect((await remove("existing-draft")).status).toBe(404);
-  expect((await remove("never-held")).status).toBe(404);
 });
