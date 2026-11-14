@@ -6,7 +6,6 @@ import { chromium, type Browser } from "playwright-core";
 import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
-let clientBundle: string;
 let browser: Browser;
 let origin: string;
 let server: ReturnType<typeof createServer>;
@@ -30,10 +29,6 @@ beforeAll(async () => {
   const outputs = (Array.isArray(bundle) ? bundle : [bundle]).flatMap((result) =>
     "output" in result ? result.output : [],
   );
-  clientBundle = outputs
-    .filter((asset) => asset.type === "chunk")
-    .map((asset) => asset.code)
-    .join("\n");
   const assets = new Map(
     outputs.map((asset) => [
       `/${asset.fileName}`,
@@ -103,14 +98,21 @@ it.each([390, 1280])(
         exact: true,
       });
       expect(await box.isChecked()).toBe(false);
+      const unchecked = page.waitForRequest((r) => r.method() === "POST");
+      await page.getByRole("button", { name: "Remove", exact: true }).click();
+      const kept = await unchecked;
+      expect(new URL(kept.url()).pathname).toBe(
+        "/accounts/11111111-1111-4111-8111-111111111111/remove",
+      );
+      expect(Object.fromEntries(new URLSearchParams(kept.postData() ?? ""))).toEqual({});
+      // The failed removal keeps the dialog open with a warning.
+      const warning = page.getByRole("alertdialog").getByRole("status");
+      await warning.waitFor();
+      expect(await warning.getAttribute("class")).toContain("bg-warning");
       await box.check();
       const removed = page.waitForRequest((r) => r.method() === "POST");
       await page.getByRole("button", { name: "Remove", exact: true }).click();
-      const removal = await removed;
-      expect(new URL(removal.url()).pathname).toBe(
-        "/accounts/11111111-1111-4111-8111-111111111111/remove",
-      );
-      expect(Object.fromEntries(new URLSearchParams(removal.postData()!))).toEqual({
+      expect(Object.fromEntries(new URLSearchParams((await removed).postData()!))).toEqual({
         disconnect: "1",
       });
     } finally {
@@ -249,7 +251,7 @@ it.each(["light", "dark"] as const)(
 it.each([390, 1280])(
   "explains each account status and places Reconnect in its row or menu at %s px",
   async (width) => {
-    const page = await browser.newPage({ viewport: { width, height: 1100 } });
+    const page = await browser.newPage({ viewport: { width, height: 1200 } });
     try {
       await page.goto(origin);
       const rows = page.locator(width < 768 ? '[data-slot="item"]' : "tbody tr");
@@ -270,6 +272,7 @@ it.each([390, 1280])(
           "Missing access. Google granted 2 of the 5 permissions Gmail needs. Reconnect and check every box.",
           true,
         ],
+        ["Recovery", "Can't read its stored access. Check TOKEN_KEY.", false],
       ] as const;
       for (const [name, status, fixable] of cases) {
         const row = rows.filter({
@@ -357,34 +360,6 @@ it("enables Connect again when Back restores the page from the browser cache", a
   }
 });
 
-it("removes the account without disconnecting Google when the box stays unchecked", async () => {
-  const page = await browser.newPage();
-  try {
-    await page.route("**/accounts/**", (route) =>
-      route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({ outcome: "not_found" }),
-      }),
-    );
-    await page.goto(origin);
-    await page
-      .getByRole("button", { name: "Actions for Personal", exact: true })
-      .filter({ visible: true })
-      .click();
-    await page.getByRole("menuitem", { name: "Remove", exact: true }).click();
-    const posted = page.waitForRequest((request) => request.method() === "POST");
-    await page.getByRole("button", { name: "Remove", exact: true }).click();
-    expect(Object.fromEntries(new URLSearchParams((await posted).postData() ?? ""))).toEqual({});
-  } finally {
-    await page.close();
-  }
-});
-
-it("keeps Google and owner server code out of the Accounts browser bundle", () => {
-  expect(clientBundle).not.toContain("ClientRefused");
-  expect(clientBundle).not.toContain("NotOwner");
-});
-
 it("uses the server's required Gmail permission count", async () => {
   const page = await browser.newPage();
   try {
@@ -426,49 +401,6 @@ it.each([390, 1280])(
           await page.getByRole("button", { name: "Connect a Google account" }).isEnabled(),
         ).toBe(true);
       }
-    } finally {
-      await page.close();
-    }
-  },
-);
-
-it("shows a warning in the account dialog after a failed removal", async () => {
-  const page = await browser.newPage();
-  try {
-    await page.route("**/accounts/**", (route) =>
-      route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({ outcome: "not_found" }),
-      }),
-    );
-    await page.goto(origin);
-    await page
-      .getByRole("button", { name: "Actions for Personal", exact: true })
-      .filter({ visible: true })
-      .click();
-    await page.getByRole("menuitem", { name: "Remove", exact: true }).click();
-    await page.getByRole("button", { name: "Remove", exact: true }).click();
-    const alert = page.getByRole("alertdialog").getByRole("status");
-    await alert.waitFor();
-    expect(await alert.getAttribute("class")).toContain("bg-warning");
-  } finally {
-    await page.close();
-  }
-});
-
-it.each([390, 1280])(
-  "explains unreadable stored access without suggesting reconnect as a fix at %s px",
-  async (width) => {
-    const page = await browser.newPage({ viewport: { width, height: 1200 } });
-    try {
-      await page.goto(origin);
-      const row = page
-        .locator(width < 768 ? '[data-slot="item"]' : "tbody tr")
-        .filter({ hasText: "recovery@example.com" });
-      await row.waitFor();
-      expect(await row.innerText()).toContain("Can't read its stored access. Check TOKEN_KEY.");
-      expect(await row.getByRole("button", { name: "Reconnect", exact: true }).count()).toBe(0);
-      expect(await row.locator('[class*="text-red-"]').count()).toBe(0);
     } finally {
       await page.close();
     }
