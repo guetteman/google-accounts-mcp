@@ -166,10 +166,16 @@ it.each([
     const text = textOf(html).replace(/\s+([.,])/g, "$1");
     expect(text).toContain(detail);
     expect(text).toContain("a Workspace account");
+    // A decided request offers no decision.
+    expect(html).not.toContain(">Approve</button>");
+    expect(html).not.toContain(">Reject</button>");
+    if (state === "succeeded") expect(text).toContain("This page does not show the result.");
     if (state === "failed")
       expect(text).toContain(
         `Google could not complete the request for ${f.northwind.email}. Try again later.`,
       );
+    if (state === "tool") expect(html).toContain(`href="/connections/${f.connection.id}"`);
+    if (state === "account") expect(html).toContain('href="/accounts"');
   },
 );
 
@@ -181,8 +187,12 @@ it("explains an unconfirmed decision without claiming its answer was lost", asyn
   await setting(f, "ask");
   const id = await ask(f);
   const props = await page(f, id);
-  const text = textOf(await renderPage({ ...props, unconfirmed: true }).text());
+  const html = await renderPage({ ...props, unconfirmed: true }).text();
+  const text = textOf(html);
   expect(text).toContain("Couldn't confirm your decision. Reload this page.");
+  expect(html).toContain(">Reload</a>");
+  expect(html).not.toContain(">Approve</button>");
+  expect(html).not.toContain(">Reject</button>");
   expect(text).toContain(
     "This page could not confirm whether your decision counted. Check what the server recorded before deciding again.",
   );
