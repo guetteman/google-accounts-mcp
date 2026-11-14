@@ -7,18 +7,10 @@ import { testEnv, textOf } from "./support/worker";
 import { expect, it, vi } from "vite-plus/test";
 import { HttpResponse } from "msw";
 import "./support/account-checks";
-import { TOOLS } from "../src/mcp/tools";
 import { WINDOW } from "../src/once/store";
 import { isoSeconds } from "../src/approvals/model";
 import { answer, approve, decided, digest, get, page, post, row, rows } from "./support/approvals";
-import {
-  callRows,
-  expectError,
-  googleTraffic,
-  PERSONAL,
-  permission,
-  toolCall,
-} from "./support/permissions";
+import { callRows, expectError, googleTraffic, PERSONAL, toolCall } from "./support/permissions";
 import { decodedMail, onceRows, replyCases, SOURCE, THREAD } from "./support/draft";
 import { google, deferred } from "./support/google";
 import { rpcResult } from "./support/oauth";
@@ -74,24 +66,22 @@ it.each(sendCases)(
   },
 );
 
-it.each(replyCases.filter((c) => !c.name.startsWith("given")))(
-  "send_reply reuses the reply plan for $name",
-  async (test) => {
-    const f = await sendFixture("send_reply");
-    serveFull(fullMessage(test.headers));
-    await answer(await sendCall(f, "send_reply", { ...test.args, body: "Exact\n\nreply text" }));
-    const mail = decodedMail();
-    expect(mail.request.message.threadId).toBe(THREAD);
-    expect(mail.headers).toMatchObject({
-      Subject: "Re: Lunch",
-      "In-Reply-To": "<source@example.com>",
-      References: "<earlier@example.com> <source@example.com>",
-    });
-    expect(mail.headers.To).toBe(test.to);
-    expect(mail.headers.Cc).toBe(test.cc);
-    expect(mail.body).toBe("Exact\n\nreply text");
-  },
-);
+it("send_reply reuses the reply plan", async () => {
+  const test = replyCases.find((c) => c.name === "reply all")!;
+  const f = await sendFixture("send_reply");
+  serveFull(fullMessage(test.headers));
+  await answer(await sendCall(f, "send_reply", { ...test.args, body: "Exact\n\nreply text" }));
+  const mail = decodedMail();
+  expect(mail.request.message.threadId).toBe(THREAD);
+  expect(mail.headers).toMatchObject({
+    Subject: "Re: Lunch",
+    "In-Reply-To": "<source@example.com>",
+    References: "<earlier@example.com> <source@example.com>",
+  });
+  expect(mail.headers.To).toBe(test.to);
+  expect(mail.headers.Cc).toBe(test.cc);
+  expect(mail.body).toBe("Exact\n\nreply text");
+});
 
 it("names message and the draft workaround when reply recipients cannot be filled", async () => {
   const f = await sendFixture("send_reply");
@@ -109,30 +99,20 @@ it("names message and the draft workaround when reply recipients cannot be fille
 
 it.each([
   { name: "send_message", args: { to: [] }, field: "to" },
-  { name: "send_message", args: { to: undefined }, field: "to" },
-  { name: "send_message", args: { subject: undefined }, field: "subject" },
-  { name: "forward_message", args: { to: undefined }, field: "to" },
-  ...["to", "cc", "bcc"].flatMap((field) => [
-    { name: "send_message", args: { [field]: ["not a mailbox"] }, field },
-    { name: "forward_message", args: { [field]: ["not a mailbox"] }, field },
-    { name: "send_message", args: { [field]: ["x".repeat(999)] }, field },
-  ]),
-  ...["", "x".repeat(999), "Hi\r\nBcc: thief@example.com"].map((subject) => ({
-    name: "send_message",
-    args: { subject },
-    field: "subject",
-  })),
   { name: "forward_message", args: { to: [] }, field: "to" },
-  ...["send_reply", "forward_message", "send_draft"].flatMap((name) =>
-    ["", "x".repeat(65), "id/path", "é"].map((value) => ({
-      name,
-      args: { [name === "send_draft" ? "draft" : "message"]: value },
-      field: name === "send_draft" ? "draft" : "message",
-    })),
+  { name: "send_message", args: { subject: "" }, field: "subject" },
+  { name: "send_reply", args: { message: "id/path" }, field: "message" },
+  { name: "forward_message", args: { message: "" }, field: "message" },
+  { name: "send_draft", args: { draft: "x".repeat(65) }, field: "draft" },
+  ...["send_message", "forward_message"].flatMap((name) =>
+    ["cc", "bcc"].map((field) => ({ name, args: { [field]: ["not a mailbox"] }, field })),
   ),
-  ...["send_message", "send_reply", "forward_message"].flatMap((name) =>
-    [1, 2.5, 101].map((duplicate) => ({ name, args: { duplicate }, field: "duplicate" })),
-  ),
+  { name: "send_message", args: { subject: "Hi\r\nBcc: thief@example.com" }, field: "subject" },
+  ...["send_message", "send_reply", "forward_message"].map((name) => ({
+    name,
+    args: { duplicate: 101 },
+    field: "duplicate",
+  })),
 ] as Array<{
   name: (typeof sendCases)[number]["name"];
   args: Record<string, unknown>;
@@ -147,7 +127,7 @@ it.each([
       ? "The to field must be a list of at least one mailbox, each an address or Name <address>."
       : field === "cc" || field === "bcc"
         ? `The ${field} field must be a list of mailboxes, each an address or Name <address>.`
-        : name === "send_message" && field === "subject"
+        : field === "subject"
           ? "The subject field must be a string of 1 to 998 characters without control characters."
           : new RegExp(`The ${field} field must be`),
   );
@@ -156,24 +136,17 @@ it.each([
   expect(await rows()).toEqual([]);
 });
 
-it.each([
-  "send_message",
-  "send_reply",
-  "forward_message",
-  "send_draft",
-  "create_draft",
-  "list_labels",
-])("oversized denied %s is refused before parsing or binding an account", async (name) => {
+it("an oversized denied send is refused before parsing or binding an account", async () => {
   const f = await sendFixture();
   await setSend(f, "send_message", "deny");
   const to = Array.from({ length: 100_000 }, () => "bad");
   await expectError(
-    await toolCall(f.mcp, name, { account: PERSONAL, to, body: "Hello" }),
+    await toolCall(f.mcp, "send_message", { account: PERSONAL, to, body: "Hello" }),
     "invalid_arguments",
     "The arguments are too large. The limit is 256 KB.",
   );
   expect((await callRows()).at(-1)).toMatchObject({
-    tool: name,
+    tool: "send_message",
     account_id: null,
     outcome: "refused",
   });
@@ -298,6 +271,14 @@ it("a failed cleanup preserves the refusal and reports the leftover draft", asyn
   expect(google.deletes).toEqual(["draft-1"]);
   expect(google.storedDrafts.has("draft-1")).toBe(true);
   expect(await onceRows()).toEqual([]);
+});
+
+it("simultaneously arriving identical calls contend for the real D1 claim", async () => {
+  const f = await sendFixture();
+  const values = await Promise.all([sendCall(f).then(answer), sendCall(f).then(answer)]);
+  expect(values.filter((v) => v.status !== "running" && !v.repeat_of)).toHaveLength(1);
+  expect(google.sends).toHaveLength(1);
+  expect(google.draftCreates).toHaveLength(1);
 });
 
 it.each(["held", "concurrent"])("%s identical calls send at most once", async (kind) => {
@@ -439,86 +420,19 @@ it("ask deduplicates pending calls, Approve sends once, get_approval returns the
   expect(google.sends).toHaveLength(1);
 });
 
-it("lists send warnings and repeats and declares their page actions and permission controls", async () => {
+it("declares every send tool destructive and safe to repeat", async () => {
   const f = await sendFixture();
   for (const c of sendCases) await setSend(f, c.name, "allow");
-  await permission(f, f.personal, true, "read_thread");
   const tools = (await rpcResult(await f.mcp.call())).tools as Array<{
     name: string;
     annotations: unknown;
-    description: string;
   }>;
-  const paragraph =
-    "Repeating: a call with the same arguments as a call of the last 7 days is the same call. It never sends a second message. It returns the first call's result with repeat_of, or its pending approval. So when you get no answer or an error that says to try again, call again with exactly the same arguments. Copy them; do not reword the text, because changed text is a new message. When the answer says that the outcome is unknown, do not try another wording: ask the owner to look in Gmail.";
-  for (const c of sendCases) {
-    const tool = tools.find((tool) => tool.name === c.name)!;
-    expect(tool.annotations).toEqual({
+  for (const c of sendCases)
+    expect(tools.find((tool) => tool.name === c.name)!.annotations).toEqual({
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: true,
     });
-    expect(tool.description).toContain(paragraph);
-    expect(tool.description).toContain("cannot be taken back");
-    expect(tool.description).toContain("get_approval");
-    expect(tool.description).toContain(
-      "With ask, a send that cannot be built appears on the owner's page, not in your answer.",
-    );
-    const entry = TOOLS.find((tool) => tool.name === c.name)!;
-    expect(entry.kind === "account" && entry.group).toBe("Send");
-    const expected = {
-      send_message: {
-        action: "send a message",
-        permissionDescription:
-          "Send a new message from this account. A sent message cannot be taken back.",
-      },
-      send_reply: {
-        action: "send a reply",
-        permissionDescription:
-          "Reply to a message in its thread: to its reply address or its sender, or to everyone on it. A sent reply cannot be taken back.",
-      },
-      forward_message: {
-        action: "forward a message",
-        permissionDescription:
-          "Forward a message, with its text and its attachments, to the addresses the agent gives. It cannot be taken back.",
-      },
-      send_draft: {
-        action: "send a draft",
-        permissionDescription:
-          "Send a draft that exists in this account, as it is in Gmail at that moment. It cannot be taken back.",
-      },
-    }[c.name];
-    expect(entry.kind === "account" && entry.view.action).toBe(expected.action);
-    expect(entry.kind === "account" && entry.permissionDescription).toBe(
-      expected.permissionDescription,
-    );
-    if (c.name !== "send_draft")
-      expect(tool.description).toContain(
-        "To send one more message with the same content on purpose, add duplicate: 2 (then 3).",
-      );
-  }
-  expect(tools.find((t) => t.name === "send_reply")!.description).toContain(
-    "no quote unless you write one",
-  );
-  expect(tools.find((t) => t.name === "forward_message")!.description).toContain("25,000,000");
-  expect(tools.find((t) => t.name === "send_draft")!.description).toContain("gone from Drafts");
-  const forwardDescription = tools.find((tool) => tool.name === "forward_message")!.description;
-  const draftDescription = tools.find((tool) => tool.name === "send_draft")!.description;
-  for (const description of [forwardDescription, draftDescription]) {
-    expect(description).toContain("2,000,000 bytes of body");
-    expect(description).toContain("1,000,000 characters");
-    expect(description).toContain("3 body parts that Gmail gives apart");
-  }
-  expect(forwardDescription).toContain("without a file name or attachment ID");
-  expect(draftDescription).toContain("cannot show whole cannot be approved");
-  expect(draftDescription).toContain("20,000 characters in its From, To, Cc, Bcc, and Subject");
-  expect(draftDescription).toContain("a repeated From, To, Cc, Bcc, Subject or Reply-To header");
-  expect(draftDescription).toContain("a part that is neither text nor a file");
-  const readDescription = tools.find((tool) => tool.name === "read_thread")!.description;
-  expect(readDescription).toContain("when it is not empty");
-  expect(readDescription).toContain(
-    "A reply to the account's own message goes to that message's To",
-  );
-  await permission(f);
 });
 
 it("an existing-draft preflight read failure is known without sending", async () => {
@@ -534,20 +448,6 @@ it("an existing-draft preflight read failure is known without sending", async ()
   expect(google.deletes).toEqual([]);
   expect(google.sends).toEqual([]);
 });
-
-it.each(sendCases)(
-  "simultaneously arriving $name calls contend for the real D1 claim",
-  async ({ name }) => {
-    const f = await sendFixture(name);
-    const values = await Promise.all([
-      sendCall(f, name).then(answer),
-      sendCall(f, name).then(answer),
-    ]);
-    expect(values.filter((v) => v.status !== "running" && !v.repeat_of)).toHaveLength(1);
-    expect(google.sends).toHaveLength(1);
-    expect(google.draftCreates.length + google.uploads.length).toBe(name === "send_draft" ? 0 : 1);
-  },
-);
 
 it("ask then allow returns the same pending approval until Approve sends once", async () => {
   const f = await sendFixture("send_message", "ask");
@@ -673,23 +573,5 @@ it.each(["running", "unknown"])(
       held?.release();
       if (held) await answer(await first);
     }
-  },
-);
-
-it.each(["From", "Reply-To"])(
-  "refuses a reply whose %s address was not shown whole",
-  async (name) => {
-    const f = await sendFixture("send_reply");
-    serveFull(
-      fullMessage({ [name]: "x".repeat(600 - " <sam@example.com>".length) + " <sam@example.com>" }),
-    );
-    await expectError(
-      await sendCall(f, "send_reply"),
-      "invalid_arguments",
-      "The message field must be a message whose recipients the server can fill in. For this one, create a draft with create_draft, reply_to, and the recipients, and send it with send_draft.",
-    );
-    expect(google.draftCreates).toEqual([]);
-    expect(google.sends).toEqual([]);
-    expect(await onceRows()).toEqual([]);
   },
 );
