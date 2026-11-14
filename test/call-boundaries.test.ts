@@ -57,7 +57,7 @@ it("writes no call record when the credential read in its batch fails", async ()
 async function beginReset() {
   const row = await ownerRow();
   expect(row).not.toBeNull();
-  const plan = resetPlan({ ...row!, instance: await ownerInstance() }, NOW);
+  const plan = resetPlan({ ...row!, instance: await ownerInstance() });
   await env.DB.prepare(plan.statements[0]!).run();
   expect((await ownerRow())?.state).toBe("resetting");
 }

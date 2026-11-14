@@ -185,7 +185,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const plan = resetPlan(read.row, Date.now());
+  const plan = resetPlan(read.row);
   const results = execute(plan.statements.join("; "));
   switch (resetOutcome(plan, results)) {
     case "overtaken":

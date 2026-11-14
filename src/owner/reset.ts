@@ -8,15 +8,16 @@ export interface ResetPlan {
 
 export type ResetOutcome = "done" | "overtaken" | "unknown";
 
-export const RESET_CLEANUP: ReadonlyArray<(c: { guard: string; now: number }) => string> = [
-  ({ guard }) => `DELETE FROM connections WHERE ${guard}`,
-  ({ guard }) => `DELETE FROM accounts WHERE ${guard}`,
-  ({ guard }) => `DELETE FROM permissions WHERE ${guard}`,
-  ({ guard }) => `DELETE FROM calls WHERE ${guard}`,
-  ({ guard }) => `DELETE FROM call_accounts WHERE ${guard}`,
-  ({ guard }) => `DELETE FROM approvals WHERE ${guard}`,
-  ({ guard }) => `DELETE FROM once WHERE ${guard}`,
-  ({ guard }) => `DELETE FROM uploads WHERE ${guard}`,
+/** Every table that holds the previous owner's data. */
+const OWNER_TABLES = [
+  "connections",
+  "accounts",
+  "permissions",
+  "calls",
+  "call_accounts",
+  "approvals",
+  "once",
+  "uploads",
 ];
 
 /**
@@ -24,26 +25,17 @@ export const RESET_CLEANUP: ReadonlyArray<(c: { guard: string; now: number }) =>
  * is guarded on that database's `instance` and on the reset's generation, so statements that
  * reach another database, a newer reset, or a finished one change nothing.
  */
-export const resetPlan = (
-  row: { state: OwnerState; generation: number; instance: number },
-  now: number,
-): ResetPlan => {
-  if (
-    !Number.isSafeInteger(row.generation) ||
-    row.generation < 1 ||
-    !Number.isSafeInteger(row.instance) ||
-    row.instance < 1 ||
-    !Number.isSafeInteger(now)
-  ) {
-    throw new Error(
-      "Reset generation, instance, and time must be safe integers; generation and instance must be positive.",
-    );
-  }
+export const resetPlan = (row: {
+  state: OwnerState;
+  generation: number;
+  instance: number;
+}): ResetPlan => {
   const resuming = row.state === "resetting";
   const generation = row.generation + (resuming ? 0 : 1);
-  if (!Number.isSafeInteger(generation))
-    throw new Error("Reset generation exceeds the safe integer range.");
   const { instance } = row;
+  // These numbers are written into the SQL text below.
+  if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(instance))
+    throw new Error("Reset generation and instance must be safe integers.");
   const guard = `EXISTS (SELECT 1 FROM owner WHERE id = 1 AND instance = ${instance} AND state = 'resetting' AND generation = ${generation})`;
   return {
     generation,
@@ -54,7 +46,7 @@ export const resetPlan = (
         : [
             `UPDATE owner SET state = 'resetting', generation = ${generation} WHERE id = 1 AND instance = ${instance} AND generation = ${row.generation} AND state <> 'resetting' RETURNING generation`,
           ]),
-      ...RESET_CLEANUP.map((cleanup) => cleanup({ guard, now })),
+      ...OWNER_TABLES.map((table) => `DELETE FROM ${table} WHERE ${guard}`),
       `UPDATE owner SET state = 'unpinned', email = NULL WHERE id = 1 AND instance = ${instance} AND state = 'resetting' AND generation = ${generation} RETURNING generation`,
     ],
   };

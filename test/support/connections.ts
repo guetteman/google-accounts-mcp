@@ -65,6 +65,6 @@ export const pinOwner = () => setOwner({ state: "pinned", generation: 1, email: 
 export async function resetOwner() {
   const row = await ownerRow();
   expect(row).not.toBeNull();
-  const plan = resetPlan({ ...row!, instance: await ownerInstance() }, Date.now());
+  const plan = resetPlan({ ...row!, instance: await ownerInstance() });
   await env.DB.batch(plan.statements.map((sql) => env.DB.prepare(sql)));
 }
