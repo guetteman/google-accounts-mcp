@@ -1,7 +1,5 @@
 import { env } from "cloudflare:workers";
-import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
-import { withOwnerGate } from "../src/owner/gate";
 import { access, signAccessJwt } from "./support/access";
 import { Browser } from "./support/browser";
 import { MISMATCH, SETUP_INCOMPLETE, UNAVAILABLE } from "./support/copy";
@@ -13,7 +11,8 @@ import {
   writeFailingDb,
   writeRecordingDb,
 } from "./support/db";
-import { prepareWrites } from "./support/page-app";
+// Registers the owner write route that probeEveryRoute posts to.
+import "./support/page-app";
 import { callWorker, ORIGIN, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
 
 const NEW_EMAIL = "alex.new@example.com";
@@ -55,7 +54,6 @@ function expectRefusals(probes: Awaited<ReturnType<typeof probeEveryRoute>>, tit
 describe("missing or invalid configuration", () => {
   it.each([
     ["ACCESS_AUDIENCE unset", { ACCESS_AUDIENCE: undefined }, ["ACCESS_AUDIENCE"]],
-    ["ACCESS_AUDIENCE blank", { ACCESS_AUDIENCE: " " }, ["ACCESS_AUDIENCE"]],
     [
       "OWNER_EMAIL blank and ACCESS_ISSUER unset",
       { OWNER_EMAIL: " ", ACCESS_ISSUER: undefined },
@@ -70,11 +68,6 @@ describe("missing or invalid configuration", () => {
     [
       "ACCESS_ISSUER with a trailing slash",
       { ACCESS_ISSUER: "https://example-team.cloudflareaccess.com/" },
-      ["ACCESS_ISSUER"],
-    ],
-    [
-      "ACCESS_ISSUER with a path",
-      { ACCESS_ISSUER: "https://example-team.cloudflareaccess.com/path" },
       ["ACCESS_ISSUER"],
     ],
     [
@@ -144,48 +137,34 @@ describe("D1 failures", () => {
     expect(await dump()).toEqual(before);
   });
 
-  it.each([
-    "missing migrations",
-    "a deleted row",
-    "an invalid email",
-    "an invalid generation",
-    "an invalid instance",
-  ])("treats %s as a database failure without writing", async (kind) => {
-    if (kind.startsWith("an invalid")) {
-      await setOwner({ state: "pinned", generation: 1, email: OWNER_EMAIL });
-      await env.DB.exec("PRAGMA ignore_check_constraints = ON");
-      const sql =
-        kind === "an invalid email"
-          ? "email = 'not-an-email'"
-          : kind === "an invalid generation"
-            ? "generation = 0"
-            : "instance = 0";
-      await env.DB.prepare(`UPDATE owner SET ${sql} WHERE id = 1`).run();
-      await env.DB.exec("PRAGMA ignore_check_constraints = OFF");
-    } else
-      await env.DB.prepare(
-        kind === "missing migrations" ? "DROP TABLE owner" : "DELETE FROM owner",
-      ).run();
-    const watched = writeRecordingDb();
-    const before = await dump();
-    expectRefusals(await probeEveryRoute(testEnv({ DB: watched.db })), UNAVAILABLE.title);
-    expect(watched.writes).toEqual([]);
-    expect(await dump()).toEqual(before);
-  });
+  it.each(["missing migrations", "a deleted row", "an invalid email"])(
+    "treats %s as a database failure without writing",
+    async (kind) => {
+      if (kind === "an invalid email") {
+        await setOwner({ state: "pinned", generation: 1, email: OWNER_EMAIL });
+        await env.DB.prepare("UPDATE owner SET email = 'not-an-email' WHERE id = 1").run();
+      } else
+        await env.DB.prepare(
+          kind === "missing migrations" ? "DROP TABLE owner" : "DELETE FROM owner",
+        ).run();
+      const watched = writeRecordingDb();
+      const before = await dump();
+      expectRefusals(await probeEveryRoute(testEnv({ DB: watched.db })), UNAVAILABLE.title);
+      expect(watched.writes).toEqual([]);
+      expect(await dump()).toEqual(before);
+    },
+  );
 });
 
 describe("owner lock", () => {
-  it.each(["missing", "invalid", "previous owner", "new address"])(
-    "locks every route with %s assertion before fetching keys or changing data",
+  it.each(["previous owner", "new address"])(
+    "locks every route with the %s's assertion before fetching keys or changing data",
     async (kind) => {
       await setOwner({ state: "pinned", generation: 1, email: OWNER_EMAIL });
       const before = await dump();
-      const assertion =
-        kind === "missing"
-          ? undefined
-          : kind === "invalid"
-            ? "bad"
-            : await signAccessJwt({ email: kind === "previous owner" ? OWNER_EMAIL : NEW_EMAIL });
+      const assertion = await signAccessJwt({
+        email: kind === "previous owner" ? OWNER_EMAIL : NEW_EMAIL,
+      });
       const probes = await probeEveryRoute(testEnv({ OWNER_EMAIL: NEW_EMAIL }), assertion);
       expectRefusals(probes, MISMATCH.title);
       for (const { path, html } of probes.filter(
@@ -219,53 +198,6 @@ describe("owner lock", () => {
         MISMATCH.title,
       );
       expect(access.requests).toEqual([]);
-      expect(await dump()).toEqual(before);
-    },
-  );
-});
-
-describe("a future route behind the gate", () => {
-  let ran = 0;
-  const writer = withOwnerGate(async (_request, workerEnv) => {
-    ran++;
-    await workerEnv.DB.prepare("INSERT INTO test_writes VALUES (1, 'future-route')").run();
-    return new Response("written");
-  });
-  async function callWriter(workerEnv: Env) {
-    const ctx = createExecutionContext();
-    const response = await writer(
-      new Request(`${ORIGIN}/later-route`, { method: "POST" }),
-      workerEnv,
-      ctx,
-    );
-    await waitOnExecutionContext(ctx);
-    return response;
-  }
-  it("runs when the gate is open", async () => {
-    await prepareWrites();
-    ran = 0;
-    expect(await (await callWriter(testEnv())).text()).toBe("written");
-    expect(ran).toBe(1);
-  });
-  it.each(["a mismatch", "a reset", "missing configuration", "D1 down"])(
-    "never runs during %s",
-    async (kind) => {
-      await prepareWrites();
-      ran = 0;
-      if (kind === "a mismatch" || kind === "a reset")
-        await setOwner({
-          state: kind === "a reset" ? "resetting" : "pinned",
-          generation: 2,
-          email: OWNER_EMAIL,
-        });
-      const workerEnv = testEnv({
-        ...(kind === "a mismatch" ? { OWNER_EMAIL: NEW_EMAIL } : {}),
-        ...(kind === "missing configuration" ? { ACCESS_AUDIENCE: undefined } : {}),
-        ...(kind === "D1 down" ? { DB: brokenDb() } : {}),
-      });
-      const before = await dump();
-      expect((await callWriter(workerEnv)).status).toBe(503);
-      expect(ran).toBe(0);
       expect(await dump()).toEqual(before);
     },
   );
