@@ -2,7 +2,7 @@
 
 An MCP server that lets your AI agents use several Google accounts at once: personal gmail.com accounts and Google Workspace accounts from any organization. You decide what each agent connection can do in each account, and every tool call is recorded.
 
-You deploy it to your own Cloudflare account, with your own Google Cloud OAuth client. Gmail comes first; other Google services follow. Planned work is in the [issues](../../issues).
+You deploy it to your own Cloudflare account on the Workers Paid plan, with your own Google Cloud OAuth client. Gmail comes first; other Google services follow. Planned work is in the [issues](../../issues).
 
 ## What you control
 

@@ -149,7 +149,6 @@ it("all allowed long-named attachments survive without read_thread's list bound"
   serveFull(raw);
   await answer(await sendCall(f, "forward_message"));
   const mail = mime(google.uploads[0]!.message);
-  expect(MAX_FORWARD_FILES).toBe(20);
   expect(mail.parts).toHaveLength(MAX_FORWARD_FILES + 1);
   for (const [i, file] of files.entries()) {
     expect(new TextDecoder().decode(mail.parts[i + 1]!.data)).toBe(`file-${i}`);

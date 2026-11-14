@@ -117,12 +117,11 @@ const changed = <A>(
   });
 
 /**
- * The most threads or messages that one call which changes mail may name. Approving a call of
- * 15 makes about 34 requests to Google and Cloudflare Access (rebuilding the view, running,
- * one token refresh, Access's keys on a cold Worker) plus about 8 D1 queries: about 42, inside
- * the 50 subrequests of the Workers Free plan however D1 is counted.
+ * The most threads or messages that one call which changes mail may name. Each item costs one
+ * Gmail request when the call runs and one when the approval page shows it; at five requests at
+ * a time, 100 items stay well inside Gmail's per-user rate and the 25-second call deadline.
  */
-export const MAX_ITEMS = 15;
+export const MAX_ITEMS = 100;
 
 /**
  * Send the first item alone so a session without a token acquires it once, and a failure other

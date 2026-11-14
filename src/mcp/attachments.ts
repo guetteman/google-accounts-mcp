@@ -10,9 +10,8 @@ import { parseUploadId } from "../uploads/store";
 import { messageTooLarge, ToolFailure, uploadNotAvailable } from "./failures";
 import { TOOLS, type Sources } from "./tools";
 
-// An approved reply with six refreshed source accounts uses 46 requests:
-// 29 outside requests, 17 D1 operations, and no KV reads or writes.
-export const MAX_ATTACHMENTS = 6;
+/** Each copy is one Gmail read and each upload one KV read; 100 fit the 25-second call deadline. */
+export const MAX_ATTACHMENTS = 100;
 const Copy = Schema.Struct({
   account: Schema.String,
   message: GmailId,
@@ -193,7 +192,5 @@ export const attachedFiles = (
     );
     return parts;
   });
-export const attachmentsDescription =
-  "`attachments` is an optional list of at most 6 files. An item is `{ account, message, attachment }`, which copies an attachment that read_thread listed for a message, from any account you can use; the file goes from Gmail into this mail and never appears in a result. It needs the owner's setting for get_attachment on that account. Or an item is `{ upload }`, which names a local file by the `upload` ID that the link of create_upload_link answered. An upload goes into one message: repeating this call with the same arguments is safe, and once the mail exists any other call needs a new upload. The attachments and the text together can have at most 25 MB.";
-export const attachmentsExpect =
-  "a list of at most 6 files, each { account, message, attachment } or { upload }, with no repeated upload";
+export const attachmentsDescription = `\`attachments\` is an optional list of at most ${MAX_ATTACHMENTS} files. An item is \`{ account, message, attachment }\`, which copies an attachment that read_thread listed for a message, from any account you can use; the file goes from Gmail into this mail and never appears in a result. It needs the owner's setting for get_attachment on that account. Or an item is \`{ upload }\`, which names a local file by the \`upload\` ID that the link of create_upload_link answered. An upload goes into one message: repeating this call with the same arguments is safe, and once the mail exists any other call needs a new upload. The attachments and the text together can have at most 25 MB.`;
+export const attachmentsExpect = `a list of at most ${MAX_ATTACHMENTS} files, each { account, message, attachment } or { upload }, with no repeated upload`;

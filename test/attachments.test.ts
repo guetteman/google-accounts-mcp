@@ -2,6 +2,7 @@ import { testEnv } from "./support/worker";
 import "./support/account-checks";
 import { Buffer } from "node:buffer";
 import { Effect, Result } from "effect";
+import { MAX_ATTACHMENTS } from "../src/mcp/attachments";
 import { expect, it, vi } from "vite-plus/test";
 import {
   attaching,
@@ -116,7 +117,7 @@ it.each(["create_draft", "send_message", "send_reply"] as const)(
   },
 );
 it.each([
-  ["too many files", Array.from({ length: 7 }, () => copy)],
+  ["too many files", Array.from({ length: MAX_ATTACHMENTS + 1 }, () => copy)],
   ["mixed item shapes", [{ ...copy, upload: crypto.randomUUID() }]],
   ["extra property", [{ ...copy, extra: true }]],
   ["invalid upload ID", [{ upload: "not-a-uuid" }]],
@@ -291,7 +292,7 @@ it("advertises the attachments schema of every attaching tool", async () => {
   }>;
   for (const name of ["create_draft", "send_message", "send_reply"]) {
     const entry = listed.find((entry) => entry.name === name)!;
-    expect(entry.inputSchema.properties.attachments).toHaveProperty("maxItems", 6);
+    expect(entry.inputSchema.properties.attachments).toHaveProperty("maxItems", 100);
     const items = entry.inputSchema.properties.attachments!.items!;
     const shapes = items.anyOf ?? items.oneOf;
     expect(shapes).toHaveLength(2);

@@ -3,6 +3,7 @@ import { HttpResponse } from "msw";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
 import { answer } from "./support/approvals";
+import { MAX_ITEMS } from "../src/google/gmail";
 import { google, LABELS_URL, THREADS_URL, deferred } from "./support/google";
 import { rpcResult } from "./support/oauth";
 import {
@@ -34,7 +35,7 @@ import {
 it.each(
   [
     [],
-    Array.from({ length: 16 }, (_, i) => `id_${i}`),
+    Array.from({ length: MAX_ITEMS + 1 }, (_, i) => `id_${i}`),
     [FIRST, FIRST],
     ["a/b"],
     "thread",
@@ -48,15 +49,19 @@ it.each(
   await expectError(
     await labelCall(f, { ...CHANGE, threads }),
     "invalid_arguments",
-    "The threads field must be a list of 1 to 15 different thread IDs that search_threads returned.",
+    "The threads field must be a list of 1 to 100 different thread IDs that search_threads returned.",
   );
   expect(googleTraffic()).toEqual([]);
   expect(await env.DB.prepare("SELECT count(*) AS n FROM approvals").first()).toEqual({ n: 0 });
 });
 
-it("accepts fifteen distinct IDs including the syntax boundaries", async () => {
+it("accepts the most distinct IDs one call allows, including the syntax boundaries", async () => {
   const f = await allowed();
-  const ids = ["a", "b".repeat(64), ...Array.from({ length: 13 }, (_, i) => `id_${i}-ok`)];
+  const ids = [
+    "a",
+    "b".repeat(64),
+    ...Array.from({ length: MAX_ITEMS - 2 }, (_, i) => `id_${i}-ok`),
+  ];
   for (const id of ids)
     google.modifyAnswers.set(id, () =>
       HttpResponse.json({ id, messages: [{ id: `m_${id}`, threadId: id }] }),
@@ -66,7 +71,7 @@ it("accepts fifteen distinct IDs including the syntax boundaries", async () => {
     account: PERSONAL,
     threads: ids.map((thread) => ({ thread, labels: [] })),
   });
-  expect(google.modifyRequests).toHaveLength(15);
+  expect(google.modifyRequests).toHaveLength(MAX_ITEMS);
 });
 
 it.each(["add", "remove"] as const)(

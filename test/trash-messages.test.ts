@@ -8,6 +8,7 @@ import { requests } from "./support/network";
 import { rpcResult } from "./support/oauth";
 import { callRows, expectError, fixture, permission, PERSONAL } from "./support/permissions";
 import { allowed, call, changed, ids15, operations, serveMessages } from "./support/trash";
+import { MAX_ITEMS } from "../src/google/gmail";
 import { textOf } from "./support/worker";
 
 // The three tools share one input schema, so one tool proves it.
@@ -15,7 +16,7 @@ it("rejects invalid message lists before any outbound request", async () => {
   const f = await allowed("trash_messages");
   for (const messages of [
     [],
-    [...ids15, "m16"],
+    Array.from({ length: MAX_ITEMS + 1 }, (_, i) => `m${i + 1}`),
     ["m1", "m1"],
     ["m1", "m2", "m1"],
     [""],
@@ -35,17 +36,20 @@ it("rejects invalid message lists before any outbound request", async () => {
     await expectError(
       await call(f, "trash_messages", messages),
       "invalid_arguments",
-      "The messages field must be a list of 1 to 15 different message IDs that read_thread returned.",
+      "The messages field must be a list of 1 to 100 different message IDs that read_thread returned.",
     );
     expect(requests.slice(before)).toEqual([]);
   }
-  const ids = [...ids15.slice(0, -1), "aZ0_-".repeat(12) + "abcd"];
+  const ids = [
+    ...Array.from({ length: MAX_ITEMS - 1 }, (_, i) => `m${i + 1}`),
+    "aZ0_-".repeat(12) + "abcd",
+  ];
   serveMessages(ids);
   expect(await answer(await call(f, "trash_messages", ids))).toEqual({
     account: PERSONAL,
     messages: changed("trash_messages", ids),
   });
-  expect(google.trashRequests).toHaveLength(15);
+  expect(google.trashRequests).toHaveLength(MAX_ITEMS);
 });
 
 it.each(operations)(
@@ -322,7 +326,7 @@ it("tools/list publishes the message schemas and annotations", async () => {
     expect(tool.inputSchema.properties.messages).toEqual({
       type: "array",
       minItems: 1,
-      maxItems: 15,
+      maxItems: 100,
       uniqueItems: true,
       items: { type: "string", minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" },
     });

@@ -16,11 +16,8 @@ import { charsetOf, partBytes } from "./attachment";
 import { fileFields, type FilePart } from "./mail";
 
 export const MAX_FORWARD_BYTES = 25_000_000;
-/**
- * Two original reads + up to 2 × 3 body parts + 20 attachments + one upload + one send +
- * one cleanup + one token refresh + 11 D1 round trips = 43, within the Workers Free limit of 50.
- */
-export const MAX_FORWARD_FILES = 20;
+/** Each attachment is one Gmail read; 100 reads fit the 25-second call deadline. */
+export const MAX_FORWARD_FILES = 100;
 export type ForwardPlan = {
   thread: string;
   subject: string;

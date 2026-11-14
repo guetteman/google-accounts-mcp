@@ -2,7 +2,7 @@
 
 This server lets one person's AI agents use several Google accounts at once: personal gmail.com accounts and Google Workspace accounts from any organization. The official connectors allow one account per client, and that is the gap we fill. Gmail comes first; other Google services follow, so do not design anything that only works for Gmail when it is as easy to keep it general.
 
-Each deploy has one owner, who runs it on their own Cloudflare account with their own Google Cloud OAuth client. The repository is public so that anyone can deploy it, and a new owner must be able to deploy without editing code.
+Each deploy has one owner, who runs it on their own Cloudflare account with their own Google Cloud OAuth client. The repository is public so that anyone can deploy it, and a new owner must be able to deploy without editing code. Deploys require the Workers Paid plan, so size limits to its limits.
 
 The server holds access to private mailboxes, so the owner's control comes before agent convenience. Each connection gets only the accounts and actions the owner granted, and every agent action is recorded in an audit log the owner can read. When two designs are both valid, choose the one that grants less by default and fails closed.
 
