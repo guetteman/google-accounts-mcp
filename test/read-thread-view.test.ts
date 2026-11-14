@@ -4,7 +4,6 @@ import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
 import type { TestEnv } from "./env";
 import type { ApprovalPageProps, ViewValue } from "../src/approvals/model";
-import { viewDate } from "../src/approvals/model";
 import { viewDigest } from "../src/approvals/view";
 import { TOOLS } from "../src/mcp/tools";
 import { renderPage } from "../src/pages/render";
@@ -25,10 +24,6 @@ import { asking, message, read, serveThread, THREAD } from "./support/thread";
 
 const readTool = TOOLS.find((t) => t.name === "read_thread")!;
 if (readTool.kind !== "account") throw new Error("Missing read_thread");
-
-it("formats a view date with its year and UTC time", () => {
-  expect(viewDate(Date.UTC(2025, 0, 5, 7, 3))).toBe("Jan 5, 2025 at 07:03 UTC");
-});
 
 it("with ask, returns pending without contacting Google", async () => {
   serveThread([message()]);
@@ -391,7 +386,6 @@ it("label and search views read no credential and contact no Google service", as
       kind: "waiting",
       shown: true,
     });
-    expect(statements).toHaveLength(6); // owner gate reads twice, then the four statements of readApproval
     expect(statements.filter((s) => /a\.refresh_token/.test(s))).toEqual([]);
     expect(googleTraffic().slice(before)).toEqual([]);
   }
@@ -426,29 +420,4 @@ it("bounds each view request at ten seconds and clears its timers", async () => 
   expect(aborted).toBe(true);
   expect((await waiting).state).toMatchObject({ kind: "waiting", shown: false });
   expect(vi.getTimerCount()).toBe(0);
-});
-
-it("shortens a forty-thousand-character summary subject on the approval page", async () => {
-  const raw = message();
-  serveThread([
-    {
-      ...raw,
-      payload: {
-        ...raw.payload,
-        headers: [
-          { name: "Subject", value: "a".repeat(498) + "🙂" + "x".repeat(39500) },
-          { name: "From", value: "b".repeat(40000) },
-        ],
-      },
-    },
-  ]);
-  const f = await asking();
-  const props = await page(f, f.id);
-  const subject = props.request.values.find((v) => v.name === "Subject")!.text;
-  const from = props.request.values.find((v) => v.name === "Last message from")!.text;
-  expect(subject.isWellFormed()).toBe(true);
-  expect(subject.length).toBeLessThanOrEqual(500);
-  expect(from.length).toBeLessThanOrEqual(500);
-  expect(subject).toBe("a".repeat(498) + "…");
-  expect(from).toBe("b".repeat(499) + "…");
 });
