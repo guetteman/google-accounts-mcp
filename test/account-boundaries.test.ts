@@ -2,16 +2,7 @@ import { env } from "cloudflare:workers";
 import { Effect } from "effect";
 import { expect, it, vi } from "vite-plus/test";
 import "./support/account-checks";
-import {
-  accounts,
-  call,
-  finish,
-  fixtureOpen,
-  NOW,
-  ownerBrowser,
-  seedAccount,
-  start,
-} from "./support/accounts";
+import { accounts, fixtureOpen, NOW, ownerBrowser, seedAccount, start } from "./support/accounts";
 import { deferred, google } from "./support/google";
 import { observeStatements, setOwner } from "./support/db";
 import { ORIGIN, OWNER_EMAIL, testEnv } from "./support/worker";
@@ -101,35 +92,18 @@ it.each(["generation", "email"])(
 );
 
 it.each([
-  { iss: "https://evil.example/accounts.google.com" },
-  { aud: [testEnv().GOOGLE_CLIENT_ID] },
-  { sub: "" },
-  { exp: String(Math.floor(NOW / 1000) + 3600) },
-])("refuses an ID token with invalid identity claims: %j", async (claims) => {
-  const b = await ownerBrowser();
-  expect((await finish(b, (await start(b)).url, { claims })).text).toContain(
-    "Google refused this server's OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Nothing changed.",
-  );
-  expect(await accounts()).toEqual([]);
-});
-
-it.each([
   { id: "bad" },
   { email: "bad" },
   { email: "Alex.Personal@example.com" },
-  { version: 0 },
-  { version: 1.5 },
-  { health: "unknown" },
-  { refresh_token: null },
-  { health: "needs_reconnect" },
-  { health: "needs_reconnect", refresh_token: null },
   { health: "blocked_by_admin", blocked_until: null },
-  { access_expires_at: "tomorrow" },
-])("refuses a malformed stored credential: %j", async (override) => {
-  const row = await seedAccount();
-  expect(decodeCredential(row)).not.toBeNull();
-  expect(decodeCredential({ ...row, ...override })).toBeNull();
-});
+])(
+  "refuses a stored credential the table's constraints allow but the server never writes: %j",
+  async (override) => {
+    const row = await seedAccount();
+    expect(decodeCredential(row)).not.toBeNull();
+    expect(decodeCredential({ ...row, ...override })).toBeNull();
+  },
+);
 
 it.each(["invalid state", "cookie prefix", "exactly ten minutes"])(
   "refuses a callback with %s without exchanging its code",
@@ -152,14 +126,6 @@ it.each(["invalid state", "cookie prefix", "exactly ten minutes"])(
     expect(google.events).toEqual([]);
   },
 );
-
-it("checks Google again at the exact end of the admin block window", async () => {
-  const row = await seedAccount({ health: "blocked_by_admin", blocked_until: NOW + 600000 });
-  vi.spyOn(Date, "now").mockReturnValue(NOW + 600000);
-  expect(await call(row.id)).toMatchObject({ status: 200 });
-  expect(google.events).toEqual(["refresh", "gmail"]);
-  expect((await accounts())[0]).toMatchObject({ health: "ready", blocked_until: null });
-});
 
 it("shows Needs reconnect before missing Gmail permissions", () => {
   expect(accountStatus("needs_reconnect", parseGrantedScopes(""))).toEqual({

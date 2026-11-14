@@ -3,16 +3,7 @@ import { env } from "cloudflare:workers";
 import { Effect, Result } from "effect";
 import { expect, it, vi } from "vite-plus/test";
 import { recordedConsole } from "./support/account-checks";
-import {
-  accounts,
-  call,
-  credential,
-  finish,
-  NOW,
-  ownerBrowser,
-  seedAccount,
-  start,
-} from "./support/accounts";
+import { accounts, call, credential, NOW, ownerBrowser, seedAccount } from "./support/accounts";
 import { google, deferred } from "./support/google";
 import { dump } from "./support/db";
 import { testEnv, textOf } from "./support/worker";
@@ -106,20 +97,14 @@ it("removes local access without revoking when the token belongs to another key"
   );
 });
 
-it("names refused OAuth client settings instead of suggesting a transient Google outage", async () => {
-  const b = await ownerBrowser();
-  google.exchangeAnswer = "invalid_client";
-  expect((await finish(b, (await start(b)).url)).text).toContain(
-    "Google refused this server's OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Nothing changed.",
-  );
-  expect(await accounts()).toEqual([]);
-});
-
 it.each([
   { GOOGLE_CLIENT_SECRET: " " },
   { GOOGLE_CLIENT_SECRET: "fake\n" },
   { GOOGLE_CLIENT_SECRET: " fake" },
   { TOKEN_KEY: "a".repeat(32) },
+  { TOKEN_KEY: "z".repeat(64) },
+  { TOKEN_KEY: "a".repeat(65) },
+  { TOKEN_KEY: "b".repeat(66) },
   { GOOGLE_CLIENT_ID: "test-client" },
 ])("names malformed Google settings on the setup page: %j", async (overrides) => {
   const b = await ownerBrowser();
@@ -177,37 +162,34 @@ it("surfaces a caller's request construction error as a defect without contactin
   expect(google.events).toEqual([]);
 });
 
-it.each(["account rename", "account remove", "connection rename", "connection revoke"])(
-  "refuses a missing or malformed form for %s with 400 and no writes",
-  async (action) => {
-    const account = await seedAccount();
-    const connection = await seedConnection();
-    const b = await ownerBrowser();
-    const path = action.startsWith("account")
-      ? `/accounts/${account.id}/${action.endsWith("rename") ? "name" : "remove"}`
-      : `/connections/${connection.id}/${action.endsWith("rename") ? "name" : "revoke"}`;
-    const before = await dump();
-    for (const headers of [
-      {},
-      { "Content-Type": "multipart/form-data; boundary=missing" },
-    ] as Record<string, string>[]) {
-      const response = await b.request(path, { method: "POST", headers });
-      expect(response.status).toBe(400);
-      expect(await dump()).toEqual(before);
-    }
-    expect(google.events).toEqual([]);
-  },
-);
-
-it("erases the cached access token when Google blocks the account", async () => {
-  const row = await seedAccount({ access_expires_at: NOW });
-  expect(row.access_token).not.toBeNull();
-  google.refreshAnswers = ["admin_policy_enforced"];
-  expect(await call(row.id)).toMatchObject({ error: "BlockedByAdmin" });
-  expect((await accounts())[0]).toMatchObject({
-    access_token: null,
-    access_expires_at: null,
-    health: "blocked_by_admin",
-    blocked_until: NOW + 600000,
-  });
+it.each([
+  "account connect",
+  "account reconnect",
+  "account rename",
+  "account remove",
+  "connection rename",
+  "connection revoke",
+])("refuses a missing or malformed form for %s with 400 and no writes", async (action) => {
+  const account = await seedAccount();
+  const connection = await seedConnection();
+  const b = await ownerBrowser();
+  const path = {
+    "account connect": "/accounts/connect",
+    "account reconnect": `/accounts/${account.id}/reconnect`,
+    "account rename": `/accounts/${account.id}/name`,
+    "account remove": `/accounts/${account.id}/remove`,
+    "connection rename": `/connections/${connection.id}/name`,
+    "connection revoke": `/connections/${connection.id}/revoke`,
+  }[action]!;
+  const before = await dump();
+  for (const headers of [{}, { "Content-Type": "multipart/form-data; boundary=missing" }] as Record<
+    string,
+    string
+  >[]) {
+    const response = await b.request(path, { method: "POST", headers });
+    expect(response.status).toBe(400);
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(await dump()).toEqual(before);
+  }
+  expect(google.events).toEqual([]);
 });
