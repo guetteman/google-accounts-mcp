@@ -1,8 +1,8 @@
 import { Effect, Schema } from "effect";
 import { viewDate, type ViewValue } from "../approvals/model";
-import { notFound, ToolFailure } from "../mcp/failures";
+import { ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
-import { change, changeEach, messageSummary, REQUESTS_AT_ONCE } from "./gmail";
+import { change, changeEach, messageSummary, notFoundOr, REQUESTS_AT_ONCE } from "./gmail";
 
 type Input = { account: string; messages: readonly string[] };
 type Changes<A> = {
@@ -15,10 +15,6 @@ const Message = Schema.Struct({
   id: Schema.String,
   labelIds: Schema.optionalKey(Schema.Array(Schema.String)),
 });
-const refused = (id: string) => (status: number) =>
-  status === 404 || status === 400
-    ? notFound("message", id)
-    : new ToolFailure({ code: "google_unavailable" });
 const result = <A>(
   account: string,
   changes: { changed: A[]; not_found: string[]; unconfirmed: string[] },
@@ -30,18 +26,26 @@ const result = <A>(
 });
 const move = (send: Send, input: Input, action: "trash" | "untrash") =>
   changeEach("message", input.messages, (id) =>
-    change(send, "POST", `messages/${encodeURIComponent(id)}/${action}`, Message, refused(id)).pipe(
-      Effect.map((message) => ({ message: id, labels: message.labelIds ?? [] })),
-    ),
+    change(
+      send,
+      "POST",
+      `messages/${encodeURIComponent(id)}/${action}`,
+      Message,
+      notFoundOr("message", id),
+    ).pipe(Effect.map((message) => ({ message: id, labels: message.labelIds ?? [] }))),
   ).pipe(Effect.map((changes) => result(input.account, changes)));
 
 export const trashMessages = (send: Send, input: Input) => move(send, input, "trash");
 export const restoreMessages = (send: Send, input: Input) => move(send, input, "untrash");
 export const deleteMessages = (send: Send, input: Input) =>
   changeEach("message", input.messages, (id) =>
-    change(send, "DELETE", `messages/${encodeURIComponent(id)}`, null, refused(id)).pipe(
-      Effect.map(() => id),
-    ),
+    change(
+      send,
+      "DELETE",
+      `messages/${encodeURIComponent(id)}`,
+      null,
+      notFoundOr("message", id),
+    ).pipe(Effect.map(() => id)),
   ).pipe(Effect.map((changes) => result(input.account, changes)));
 
 /** The first metadata read goes alone; later reads run at most five at a time, in input order. */

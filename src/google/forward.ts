@@ -1,8 +1,8 @@
 import { Effect, Schema } from "effect";
-import { messageTooLarge, notFound, ToolFailure } from "../mcp/failures";
+import { messageTooLarge, ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
 import { shorten, unfold } from "./bounds";
-import { get } from "./gmail";
+import { get, notFoundOr } from "./gmail";
 import {
   attachmentParts,
   header,
@@ -35,10 +35,7 @@ export const forwardPlan = (send: Send, message: string): Effect.Effect<ForwardP
       send,
       `messages/${message}?format=full`,
       Schema.Struct({ ...RawMessage.fields, threadId: Schema.String }),
-      (status) =>
-        status === 404 || status === 400
-          ? notFound("message", message)
-          : new ToolFailure({ code: "google_unavailable" }),
+      notFoundOr("message", message),
     );
     const parsed = yield* Effect.try({
       try: () => readMessage(raw),

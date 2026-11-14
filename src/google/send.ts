@@ -3,7 +3,7 @@ import { creating, messageTooLarge, notFound, notSendable, ToolFailure } from ".
 import type { Confirm } from "../mcp/tools";
 import type { Created } from "../once/store";
 import type { CreatedDraft } from "./draft";
-import { change, get } from "./gmail";
+import { change, get, notFoundOr } from "./gmail";
 
 const Sent = Schema.Struct({ id: Schema.String, threadId: Schema.String });
 const unavailable = () => new ToolFailure({ code: "google_unavailable" });
@@ -81,7 +81,7 @@ export const sendExisting = (
       confirm.late,
       `drafts/${draft}?format=minimal`,
       Schema.Struct({ id: Schema.String }),
-      (status) => (status === 404 || status === 400 ? notFound("draft", draft) : unavailable()),
+      notFoundOr("draft", draft),
     );
     return yield* sendOne(confirm, draft, (status) =>
       status === 400

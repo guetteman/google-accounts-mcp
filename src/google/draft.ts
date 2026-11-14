@@ -1,9 +1,9 @@
 import { Effect, Schema } from "effect";
 import type { Send } from "../mcp/tools";
-import { messageTooLarge, notFound, notSendable, ToolFailure } from "../mcp/failures";
+import { messageTooLarge, notSendable, ToolFailure } from "../mcp/failures";
 import type { Created } from "../once/store";
 import { RawMessage } from "./message";
-import { change, get, upload } from "./gmail";
+import { change, get, notFoundOr, upload } from "./gmail";
 
 export type CreatedDraft = Created & { draft: string };
 
@@ -60,8 +60,9 @@ export const uploadDraft = (
   );
 };
 export const readDraft = (send: Send, draft: string): Effect.Effect<RawMessage, ToolFailure> =>
-  get(send, `drafts/${draft}?format=full`, Schema.Struct({ message: RawMessage }), (status) =>
-    status === 404 || status === 400
-      ? notFound("draft", draft)
-      : new ToolFailure({ code: "google_unavailable" }),
+  get(
+    send,
+    `drafts/${draft}?format=full`,
+    Schema.Struct({ message: RawMessage }),
+    notFoundOr("draft", draft),
   ).pipe(Effect.map((draft) => draft.message));

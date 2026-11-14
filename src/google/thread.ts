@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { notFound, ToolFailure } from "../mcp/failures";
+import { ToolFailure } from "../mcp/failures";
 import type { Send } from "../mcp/tools";
 import {
   boundedAttachments,
@@ -12,7 +12,7 @@ import {
   PAGE_BODY_BYTES,
   shorten,
 } from "./bounds";
-import { AttachmentBytes, get } from "./gmail";
+import { AttachmentBytes, get, notFoundOr } from "./gmail";
 import { htmlToText, referencedContentIds } from "./html";
 import {
   decodeBody,
@@ -296,10 +296,7 @@ export const readThread = (
       send,
       `threads/${encodeURIComponent(input.thread)}?format=full`,
       FullThread,
-      (status) =>
-        status === 404 || status === 400
-          ? notFound("thread", input.thread)
-          : new ToolFailure({ code: "google_unavailable" }),
+      notFoundOr("thread", input.thread),
     );
     const place = input.page === undefined ? null : placeOf(input.page);
     const start = place ? thread.messages.findIndex((m) => m.id === place.message) : 0;

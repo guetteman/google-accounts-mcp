@@ -8,6 +8,9 @@ import { shorten } from "./bounds";
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const unavailable = () => new ToolFailure({ code: "google_unavailable" });
+/** Gmail answers 404 or 400 for an ID the account does not have; any other refusal is unavailable. */
+export const notFoundOr = (kind: Missing, id: string) => (status: number) =>
+  status === 404 || status === 400 ? notFound(kind, id) : unavailable();
 /** One GET as the account. Any status outside 200 to 299 goes to refused, with its status. */
 export const get = <A>(
   send: Send,
@@ -193,7 +196,7 @@ export const threadSummary = (
     send,
     `threads/${encodeURIComponent(thread)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`,
     Thread,
-    (status) => (status === 404 || status === 400 ? notFound("thread", thread) : unavailable()),
+    notFoundOr("thread", thread),
   ).pipe(
     Effect.flatMap((value) =>
       Effect.gen(function* () {
@@ -229,7 +232,7 @@ export const messageSummary = (
       internalDate: InternalDate,
       payload: Schema.optionalKey(Schema.Struct({ headers: Schema.optionalKey(Headers) })),
     }),
-    (status) => (status === 404 || status === 400 ? notFound("message", message) : unavailable()),
+    notFoundOr("message", message),
   ).pipe(
     Effect.map((value) => ({
       from: shorten(header(value.payload?.headers, "From"), 500),
