@@ -65,12 +65,25 @@ it.each([390, 1280])(
   async (width) => {
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     try {
-      await page.route("**/connections/*/*", (route) =>
-        route.fulfill({
+      // Each answer the dialog cannot confirm keeps it open with its message.
+      const answers = [
+        [200, { outcome: "already_ended" }, "Work laptop already ended. Nothing changed."],
+        [
+          503,
+          { outcome: "unavailable" },
+          "Couldn't reach the database. Nothing changed. Try again in a minute.",
+        ],
+        [200, {}, "Couldn't confirm the change. Reload the page to see whether it happened."],
+      ] as const;
+      let answer = 0;
+      await page.route("**/connections/*/*", (route) => {
+        const [status, body] = answers[Math.min(answer++, answers.length - 1)]!;
+        return route.fulfill({
+          status,
           contentType: "application/json",
-          body: JSON.stringify({ outcome: "already_ended" }),
-        }),
-      );
+          body: JSON.stringify(body),
+        });
+      });
       await page.goto(origin);
       await expect
         .poll(
@@ -93,10 +106,10 @@ it.each([390, 1280])(
       expect(Object.fromEntries(new URLSearchParams(rename.postData()!))).toEqual({
         name: "Personal laptop",
       });
-      await page.getByRole("status").waitFor();
-      expect(await page.getByRole("status").innerText()).toBe(
-        "Work laptop already ended. Nothing changed.",
-      );
+      for (const [index, [, , message]] of answers.entries()) {
+        if (index > 0) await page.getByRole("button", { name: "Save", exact: true }).click();
+        await expect.poll(() => page.getByRole("status").innerText()).toBe(message);
+      }
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
       await menu.click();
       await page.getByRole("menuitem", { name: "Revoke", exact: true }).click();

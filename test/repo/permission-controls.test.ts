@@ -243,7 +243,7 @@ it.each([390, 1280].flatMap((width) => ["tool", "account"].map((scope) => ({ wid
   },
 );
 
-it.each(["unavailable", "503 HTML", "unknown", "lost response"])(
+it.each(["unavailable", "503 HTML", "unknown", "unreadable JSON", "lost response"])(
   "shows the correct stored-state certainty after %s and keeps its notice until dismissed",
   async (outcome) => {
     const page = await open(390);
@@ -255,6 +255,8 @@ it.each(["unavailable", "503 HTML", "unknown", "lost response"])(
       await segment(group, "Not allowed").click();
       await sent;
       if (outcome === "lost response") await routes[0]!.abort("failed");
+      else if (outcome === "unreadable JSON")
+        await routes[0]!.fulfill({ contentType: "application/json", body: "{" });
       else if (outcome === "503 HTML")
         await routes[0]!.fulfill({
           status: 503,
