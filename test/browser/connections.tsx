@@ -1,15 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { ConsentPage } from "../../src/pages/consent";
 import { acceptAuthorize } from "../../src/oauth/clients";
-import type { ComponentType } from "react";
+import { ConnectionPage } from "../../src/pages/connection";
 import { connectionPage } from "../support/connection-page";
-const modules = import.meta.glob<{ ConnectionPage: ComponentType<typeof connectionPage> }>(
-  "../../src/pages/connection.tsx",
-);
-const load = modules["../../src/pages/connection.tsx"];
-const ConnectionPage = load
-  ? (await load()).ConnectionPage
-  : () => <p>The accepted ConnectionPage component is not implemented.</p>;
 import "../../src/styles.css";
 
 createRoot(document.getElementById("root")!).render(

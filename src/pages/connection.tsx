@@ -431,9 +431,7 @@ export function ConnectionPage(props: Props) {
                         </div>
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                           <p className="text-sm font-medium @3xl:w-44 @3xl:shrink-0">
-                            {props.tools.length === 2
-                              ? "Both tools"
-                              : `All ${props.tools.length} tools`}
+                            {`All ${props.tools.length} tools`}
                           </p>
                           <p
                             className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-muted-foreground"
