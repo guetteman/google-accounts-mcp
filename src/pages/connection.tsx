@@ -149,7 +149,7 @@ export function ConnectionPage(props: Props) {
   const [closed, setClosed] = useState(
     () => new Set(groups.length > 1 ? props.accounts.slice(1).map((account) => account.id) : []),
   );
-  const [message, setMessage] = useState<string | null>(props.permissionNotice ?? null);
+  const [message, setMessage] = useState<string | null>(null);
   const active = connection.status.kind === "active";
   const visible = props.accounts.filter((a) =>
     props.tools.some((t) => {

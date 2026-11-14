@@ -23,7 +23,6 @@ export type FramePage =
     }
   | {
       readonly _tag: "Connection";
-      readonly permissionNotice?: string;
       readonly frame: Frame;
       readonly connection: ConnectionView;
       readonly accounts: ReadonlyArray<AccountView>;
