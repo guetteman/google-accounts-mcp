@@ -98,22 +98,15 @@ export function observeStatements(
       get(target, key) {
         if (key === "bind") return (...values: unknown[]) => wrap(target.bind(...values), sql);
         const value: unknown = Reflect.get(target, key);
-        if (key === "run" || key === "all" || key === "first" || key === "raw") {
+        if (key === "run" || key === "all" || key === "first") {
           return async (...args: unknown[]) => {
             await before(sql);
-            if (onResult && (key === "first" || key === "raw")) {
+            if (onResult && key === "first") {
               const result = await target.all();
               onResult(sql, result);
               after(sql);
-              if (key === "first") {
-                const row = result.results[0] ?? null;
-                return typeof args[0] === "string" && row !== null ? row[args[0]] : row;
-              }
-              const columns = Object.keys(result.results[0] ?? {});
-              const rows = result.results.map((row) => columns.map((column) => row[column]));
-              return (args[0] as { columnNames?: boolean } | undefined)?.columnNames
-                ? [columns, ...rows]
-                : rows;
+              const row = result.results[0] ?? null;
+              return typeof args[0] === "string" && row !== null ? row[args[0]] : row;
             }
             const result = await Reflect.apply(
               value as (...args: unknown[]) => unknown,
@@ -151,12 +144,6 @@ export function observeStatements(
             after(sql);
           });
           return results;
-        };
-      }
-      if (key === "exec") {
-        return async (sql: string) => {
-          for (const statement of sql.split(/[;\n]/)) await before(statement);
-          return target.exec(sql);
         };
       }
       const value: unknown = Reflect.get(target, key);
