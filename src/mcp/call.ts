@@ -272,7 +272,6 @@ export async function executeAccount(
           if (isSend(request)) {
             sends = true;
             seen.started = true;
-            seen.status = null;
           }
           return request;
         })
