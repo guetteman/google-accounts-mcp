@@ -11,7 +11,6 @@ interface StoredOwner {
   readonly state: OwnerState;
   readonly generation: number;
   readonly email: string | null;
-  readonly instance: number;
 }
 interface D1BindingConfig {
   readonly binding: string;
@@ -89,8 +88,7 @@ async function main() {
   }
 
   function readOwner(): StoredOwner {
-    const row = execute("SELECT state, generation, email, instance FROM owner WHERE id = 1")[0]
-      ?.results[0];
+    const row = execute("SELECT state, generation, email FROM owner WHERE id = 1")[0]?.results[0];
     if (
       !row ||
       typeof row !== "object" ||
@@ -100,8 +98,6 @@ async function main() {
       !["pinned", "unpinned", "resetting"].includes(String(row.state)) ||
       typeof row.generation !== "number" ||
       row.generation < 1 ||
-      !("instance" in row) ||
-      typeof row.instance !== "number" ||
       (row.email !== null && typeof row.email !== "string")
     )
       throw new Error("The stored owner row is missing or invalid.");

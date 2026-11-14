@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { expect } from "vite-plus/test";
 import { resetPlan } from "../../src/owner/reset";
-import { ownerInstance, ownerRow, setOwner } from "./db";
+import { ownerRow, setOwner } from "./db";
 import { OWNER_EMAIL } from "./worker";
 
 export const DAY = 24 * 60 * 60 * 1000;
@@ -65,6 +65,6 @@ export const pinOwner = () => setOwner({ state: "pinned", generation: 1, email: 
 export async function resetOwner() {
   const row = await ownerRow();
   expect(row).not.toBeNull();
-  const plan = resetPlan({ ...row!, instance: await ownerInstance() });
+  const plan = resetPlan(row!);
   await env.DB.batch(plan.statements.map((sql) => env.DB.prepare(sql)));
 }

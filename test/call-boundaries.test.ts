@@ -3,7 +3,7 @@ import { resetPlan } from "../src/owner/reset";
 import { expect, it } from "vite-plus/test";
 import "./support/account-checks";
 import { NOW } from "./support/accounts";
-import { observeStatements, ownerInstance, ownerRow, statementFailingDb } from "./support/db";
+import { observeStatements, ownerRow, statementFailingDb } from "./support/db";
 import { google } from "./support/google";
 import {
   callRows,
@@ -57,7 +57,7 @@ it("writes no call record when the credential read in its batch fails", async ()
 async function beginReset() {
   const row = await ownerRow();
   expect(row).not.toBeNull();
-  const plan = resetPlan({ ...row!, instance: await ownerInstance() });
+  const plan = resetPlan(row!);
   await env.DB.prepare(plan.statements[0]!).run();
   expect((await ownerRow())?.state).toBe("resetting");
 }

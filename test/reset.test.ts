@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { resetOutcome, resetPlan } from "../src/owner/reset";
 import { seedConnection } from "./support/connections";
 import { Browser } from "./support/browser";
-import { dump, ownerInstance, ownerRow, setOwner } from "./support/db";
+import { dump, ownerRow, setOwner } from "./support/db";
 import { OWNER_EMAIL } from "./support/worker";
 
 const NOW = 1_800_000_000_000;
@@ -12,7 +12,7 @@ const NOW = 1_800_000_000_000;
 async function readForPlan() {
   const row = await ownerRow();
   if (row === null) throw new Error("no owner row");
-  return { state: row.state, generation: row.generation, instance: await ownerInstance() };
+  return { state: row.state, generation: row.generation };
 }
 
 /** The reset's statements sent in one call, as `wrangler d1 execute --command` sends them. */
@@ -154,27 +154,6 @@ describe("a reset that is interrupted, repeated, raced, or delayed", () => {
 
     expect(await dump()).toEqual(before);
   });
-
-  it("changes nothing in a database other than the one it read", async () => {
-    await pinnedOwner(2);
-    const row = await readForPlan();
-    const before = await dump();
-
-    const elsewhere = resetPlan({ ...row, instance: row.instance === 1 ? 2 : row.instance - 1 });
-    const results = await runEach(elsewhere.statements);
-
-    expect(resetOutcome(elsewhere, results)).toBe("overtaken");
-    expect(await dump()).toEqual(before);
-
-    await runEach(resetPlan(row).statements.slice(0, 1));
-    const resetting = await dump();
-    const resumedElsewhere = resetPlan({
-      ...(await readForPlan()),
-      instance: row.instance === 1 ? 2 : row.instance - 1,
-    });
-    await runEach(resumedElsewhere.statements);
-    expect(await dump()).toEqual(resetting);
-  });
 });
 
 describe("two owner requests racing to pin", () => {
@@ -201,7 +180,7 @@ const OWNER_TABLES = [
 const tableRows = async (table: string) =>
   (await env.DB.prepare(`SELECT * FROM ${table}`).all()).results;
 
-it("deletes the previous owner's rows only under its own database, state, and generation", async () => {
+it("deletes the previous owner's rows only under its own state and generation", async () => {
   await pinnedOwner(2);
   await seedConnection({ generation: 1 });
   await seedConnection({ generation: 2, state: "revoked", revoked_at: NOW });
@@ -229,12 +208,6 @@ it("deletes the previous owner's rows only under its own database, state, and ge
   // The first run stops right after it begins.
   const plan = resetPlan(await readForPlan());
   await runEach(plan.statements.slice(0, 1));
-  const begun = await dump();
-  const row = await readForPlan();
-  await runEach(
-    resetPlan({ ...row, instance: row.instance === 1 ? 2 : row.instance - 1 }).statements,
-  );
-  expect(await dump()).toEqual(begun);
 
   const resumed = resetPlan(await readForPlan());
   expect(resumed.resuming).toBe(true);

@@ -4,7 +4,7 @@ import { resetPlan } from "../src/owner/reset";
 import { access } from "./support/access";
 import { Browser } from "./support/browser";
 import { MISMATCH } from "./support/copy";
-import { dump, ownerInstance, ownerRow, setOwner, writeRecordingDb } from "./support/db";
+import { dump, ownerRow, setOwner, writeRecordingDb } from "./support/db";
 import { prepareWrites, WRITE_PATH } from "./support/page-app";
 import { ORIGIN, OWNER_EMAIL, testEnv, textOf } from "./support/worker";
 
@@ -70,7 +70,7 @@ describe("owner page actions", () => {
       const pending = owner.post(WRITE_PATH);
       await vi.waitFor(() => expect(access.requests).toHaveLength(1));
 
-      const plan = resetPlan({ state: "pinned", generation: 7, instance: await ownerInstance() });
+      const plan = resetPlan({ state: "pinned", generation: 7 });
       await env.DB.batch(plan.statements.map((sql) => env.DB.prepare(sql)));
       expect(await ownerRow()).toEqual({ state: "unpinned", generation: 8, email: null });
       if (repinned) {
